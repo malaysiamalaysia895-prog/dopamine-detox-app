@@ -28,14 +28,17 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
-      - name: Fix Android Folder aur Kotlin Version
+      - name: Fix Android Folder (100% Force Kotlin & SDK 34)
         run: |
           rm -rf android
           flutter create --platforms android --project-name dopamine_detox .
-          sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.22"/g' android/build.gradle || true
-          sed -i 's/version "1.7.10"/version "1.9.22"/g' android/settings.gradle || true
-          sed -i 's/version "1.8.22"/version "1.9.22"/g' android/settings.gradle || true
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 34/g' android/app/build.gradle || true
+          # Force Kotlin 1.9.24 in new Flutter setup
+          sed -i -E 's/id "org.jetbrains.kotlin.android" version "[^"]+"/id "org.jetbrains.kotlin.android" version "1.9.24"/g' android/settings.gradle || true
+          # Force Kotlin 1.9.24 in old Flutter setup
+          sed -i -E 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.24"/g' android/build.gradle || true
+          # Force Android SDK 34 to avoid Android 35 errors
+          sed -i 's/flutter.compileSdkVersion/34/g' android/app/build.gradle || true
+          sed -i 's/flutter.targetSdkVersion/34/g' android/app/build.gradle || true
       
       - name: Install Packages
         run: flutter pub get
