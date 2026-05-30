@@ -41,6 +41,7 @@ jobs:
       - name: Get Flutter packages
         
         run: flutter pub get
+      working-directory: .
 
       # ── 6. Decode & write keystore from GitHub Secret ─────────────────────
       #
@@ -97,11 +98,13 @@ jobs:
       - name: Build release APK
         
         run: flutter build apk --release --no-shrink
+      working-directory: .
 
       # ── 9. Build release AAB (Play Store) ─────────────────────────────────
       - name: Build release AAB
         
         run: flutter build appbundle --release
+      working-directory: .
 
       # ── 10. Rename outputs with version + date for clarity ────────────────
       - name: Rename build outputs
