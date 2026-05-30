@@ -39,7 +39,7 @@ jobs:
 
       # ── 5. Install dependencies ────────────────────────────────────────────
       - name: Get Flutter packages
-        .
+        
         run: flutter pub get
 
       # ── 6. Decode & write keystore from GitHub Secret ─────────────────────
