@@ -9,7 +9,7 @@ environment:
 
 dependencies:
   flutter:
-  sdk: ">=3.0.0 <4.0.0
+  sdk: flutter
 
   # State management
   provider: ^6.1.2
@@ -46,7 +46,7 @@ dependencies:
 
 dev_dependencies:
   flutter_test:
-  sdk: ">=3.0.0 <4.0.0
+  sdk: flutter
   flutter_lints: ^4.0.0
 
 flutter:
