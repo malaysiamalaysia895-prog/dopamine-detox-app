@@ -39,7 +39,7 @@ jobs:
 
       # ── 5. Install dependencies ────────────────────────────────────────────
       - name: Get Flutter packages
-        working-directory: flutter_dopamine_detox
+        .
         run: flutter pub get
 
       # ── 6. Decode & write keystore from GitHub Secret ─────────────────────
@@ -61,7 +61,7 @@ jobs:
       # build time. The file never exists in your repo.
 
       - name: Decode keystore
-        working-directory: flutter_dopamine_detox
+        
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
@@ -75,7 +75,7 @@ jobs:
 
       # ── 7. Write key.properties from secrets ──────────────────────────────
       - name: Write key.properties
-        working-directory: flutter_dopamine_detox
+        
         env:
           KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
@@ -95,17 +95,17 @@ jobs:
 
       # ── 8. Build release APK ───────────────────────────────────────────────
       - name: Build release APK
-        working-directory: flutter_dopamine_detox
+        
         run: flutter build apk --release --no-shrink
 
       # ── 9. Build release AAB (Play Store) ─────────────────────────────────
       - name: Build release AAB
-        working-directory: flutter_dopamine_detox
+        
         run: flutter build appbundle --release
 
       # ── 10. Rename outputs with version + date for clarity ────────────────
       - name: Rename build outputs
-        working-directory: flutter_dopamine_detox
+        
         run: |
           DATE=$(date +'%Y%m%d_%H%M')
           mkdir -p release_output
