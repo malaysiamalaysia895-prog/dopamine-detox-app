@@ -28,19 +28,31 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
-      - name: Install Android SDK 35 (Pedometer ke liye)
-        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-35"
+      - name: Install Android SDK 35 aur Naye Build Tools
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Fix Android Folder (Force SDK 35 & Kotlin 1.9.24)
+      - name: Fix Android Folder (Master Override)
         run: |
           rm -rf android
           flutter create --platforms android --project-name dopamine_detox .
-          # Upgrade Kotlin version to match new packages
+          # Kotlin Version Upgrade
           sed -i -E 's/id "org.jetbrains.kotlin.android" version "[^"]+"/id "org.jetbrains.kotlin.android" version "1.9.24"/g' android/settings.gradle || true
           sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.24"/g' android/build.gradle || true
-          # Force SDK 35 for pedometer
-          sed -i 's/flutter.compileSdkVersion/35/g' android/app/build.gradle || true
-          sed -i 's/flutter.targetSdkVersion/35/g' android/app/build.gradle || true
+          
+          # Master Override: Sabhi plugins ko naya SDK aur Tool use karne par majboor karna
+          cat <<EOF >> android/build.gradle
+          
+          subprojects {
+              afterEvaluate { project ->
+                  if (project.hasProperty('android')) {
+                      project.android {
+                          compileSdkVersion 35
+                          buildToolsVersion '35.0.0'
+                      }
+                  }
+              }
+          }
+          EOF
       
       - name: Install Packages
         run: flutter pub get
