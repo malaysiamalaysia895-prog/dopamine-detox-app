@@ -28,27 +28,18 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
-      - name: Install Android SDK 35 (Android 15 files)
-        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-35"
-
-      - name: Fix Android Folder
+      - name: Fix Android Folder (Clean Setup)
         run: |
           rm -rf android
           flutter create --platforms android --project-name dopamine_detox .
-          # Kotlin Version Fix
-          sed -i -E 's/id "org.jetbrains.kotlin.android" version "[^"]+"/id "org.jetbrains.kotlin.android" version "1.9.24"/g' android/settings.gradle || true
-          sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.24"/g' android/build.gradle || true
-          # Force SDK 35 safely
-          sed -i 's/flutter.compileSdkVersion/35/g' android/app/build.gradle || true
-          sed -i 's/flutter.targetSdkVersion/35/g' android/app/build.gradle || true
       
       - name: Install Packages
         run: flutter pub get
 
-      - name: Build APK (Mobile ke liye)
+      - name: Build APK
         run: flutter build apk --release
 
-      - name: Build AAB (Play Store ke liye)
+      - name: Build AAB
         run: flutter build appbundle --release
 
       - name: Upload APK File
