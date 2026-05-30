@@ -31,7 +31,7 @@ jobs:
       - name: Fix Android Folder (Naya banayein)
         run: |
           rm -rf android
-          flutter create --platforms android .
+          flutter create --platforms android --project-name dopamine_detox .
       
       - name: Install Packages
         run: flutter pub get
