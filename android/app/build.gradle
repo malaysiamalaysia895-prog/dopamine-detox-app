@@ -1,0 +1,142 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// android/app/build.gradle  —  Dopamine Detox (Production Release Config)
+// ─────────────────────────────────────────────────────────────────────────────
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader('UTF-8') { reader ->
+        localProperties.load(reader)
+    }
+}
+
+def flutterRoot = localProperties.getProperty('flutter.sdk')
+if (flutterRoot == null) {
+    throw new GradleException("Flutter SDK not found. Define location with flutter.sdk in the local.properties file.")
+}
+
+def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
+if (flutterVersionCode == null) { flutterVersionCode = '1' }
+
+def flutterVersionName = localProperties.getProperty('flutter.versionName')
+if (flutterVersionName == null) { flutterVersionName = '1.0' }
+
+// ─── Keystore config ──────────────────────────────────────────────────────────
+// Create a file named `key.properties` in android/ (NEVER commit this file to git)
+// with the following four lines:
+//
+//   storePassword=YOUR_KEYSTORE_PASSWORD
+//   keyPassword=YOUR_KEY_PASSWORD
+//   keyAlias=upload
+//   storeFile=../keystore/upload-keystore.jks
+//
+// Generate your keystore ONCE with:
+//   keytool -genkey -v \
+//     -keystore android/keystore/upload-keystore.jks \
+//     -storetype JKS \
+//     -keyalg RSA \
+//     -keysize 2048 \
+//     -validity 10000 \
+//     -alias upload \
+//     -dname "CN=Dopamine Detox, OU=Mobile, O=YourCompany, L=Delhi, S=Delhi, C=IN"
+//
+// Add android/keystore/ and android/key.properties to your .gitignore IMMEDIATELY.
+
+def keystorePropertiesFile = rootProject.file("key.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
+apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
+
+android {
+    compileSdkVersion 34
+    ndkVersion flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+    }
+
+    defaultConfig {
+        applicationId "com.example.dopamine_detox"
+        // Change to your real Play Console package name, e.g.:
+        // applicationId "com.yourname.dopaminedetox"
+        minSdkVersion 21          // Android 5.0+  (flutter_overlay_window requires 21+)
+        targetSdkVersion 34
+        versionCode flutterVersionCode.toInteger()
+        versionName flutterVersionName
+        multiDexEnabled true
+    }
+
+    // ─── Signing configs ──────────────────────────────────────────────────────
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+            }
+        }
+    }
+
+    // ─── Build types ──────────────────────────────────────────────────────────
+    buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            debuggable true
+            minifyEnabled false
+            shrinkResources false
+        }
+
+        release {
+            // Sign with upload keystore (falls back to debug if key.properties missing)
+            signingConfig keystorePropertiesFile.exists()
+                ? signingConfigs.release
+                : signingConfigs.debug
+
+            // R8 / ProGuard: obfuscate + shrink dead code + shrink resources
+            minifyEnabled true
+            shrinkResources true
+
+            proguardFiles(
+                getDefaultProguardFile('proguard-android-optimize.txt'),
+                'proguard-rules.pro'
+            )
+
+            // Remove debug logs from release binary
+            debuggable false
+
+            // Enable resource shrinking (removes unused drawables, layouts, strings)
+            // Already covered by shrinkResources true above, but explicitly noted:
+            // This works in tandem with minifyEnabled true.
+        }
+    }
+}
+
+flutter {
+    source '../..'
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+    implementation 'androidx.multidex:multidex:2.0.1'
+
+    // Required for in_app_purchase
+    implementation 'com.android.billingclient:billing:6.1.0'
+
+    // Required for flutter_overlay_window foreground service
+    implementation 'androidx.core:core-ktx:1.12.0'
+}
