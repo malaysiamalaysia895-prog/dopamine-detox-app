@@ -31,8 +31,8 @@ dependencies:
   # Onboarding page indicator
   smooth_page_indicator: ^1.1.0
 
-  # Pedometer for step tracking
-  pedometer: ^3.0.0
+  # Pedometer for step tracking (Updated version)
+  pedometer: any
 
   # Lottie animations
   lottie: ^3.1.2
