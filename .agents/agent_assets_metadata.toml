@@ -6,3 +6,9 @@ id = "aPVHX-IB8KvFu861-8U1F"
 uri = "file://flutter_dopamine_detox.tar.gz"
 type = "unspecified"
 title = "Dopamine Detox Flutter Project"
+
+[[outputs]]
+id = "xxwyztC4-vPsFxVuLrerz"
+uri = "file://flutter_dopamine_detox_FINAL.tar.gz"
+type = "unspecified"
+title = "Dopamine Detox — FINAL Production Build"
