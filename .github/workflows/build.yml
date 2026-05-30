@@ -125,7 +125,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APK_NAME }}
-          path: flutter_dopamine_detox/release_output/*.apk
+          path: release_output/*.apk
           retention-days: 30      # artifact stays downloadable for 30 days
 
       # ── 12. Upload AAB as downloadable artifact ────────────────────────────
@@ -133,7 +133,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.AAB_NAME }}
-          path: flutter_dopamine_detox/release_output/*.aab
+          path: release_output/*.aab
           retention-days: 30
 
       # ── 13. Print download reminder in logs ───────────────────────────────
