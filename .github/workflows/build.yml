@@ -1,4 +1,4 @@
-name: Flutter Build APK
+name: Flutter Build APK & AAB
 
 on:
   push:
@@ -31,11 +31,20 @@ jobs:
       - name: Install Packages
         run: flutter pub get
 
-      - name: Build APK
+      - name: Build APK (Mobile ke liye)
         run: flutter build apk --release
+
+      - name: Build AAB (Play Store ke liye)
+        run: flutter build appbundle --release
 
       - name: Upload APK File
         uses: actions/upload-artifact@v4
         with:
-          name: dopaminedetox-app.apk
+          name: dopamine-detox-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload AAB File
+        uses: actions/upload-artifact@v4
+        with:
+          name: dopamine-detox-aab
+          path: build/app/outputs/bundle/release/app-release.aab
