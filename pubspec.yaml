@@ -4,12 +4,12 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
-  flutter: '>=3.10.0'
+  sdk: ">=2.13.0 <4.0.0"
+  flutter: '>=2.0.0'
 
 dependencies:
   flutter:
-    sdk: flutter
+  sdk: ">=2.13.0 <4.0.0"
 
   # State management
   provider: ^6.1.2
@@ -46,7 +46,7 @@ dependencies:
 
 dev_dependencies:
   flutter_test:
-    sdk: flutter
+  sdk: ">=2.13.0 <4.0.0"
   flutter_lints: ^4.0.0
 
 flutter:
