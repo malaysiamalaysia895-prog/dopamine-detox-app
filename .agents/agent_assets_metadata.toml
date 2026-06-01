@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "sxVne6bRSFmTVyg0uPhFC"
+uri = "file://flutter_export/tech_tycoon_merge_flutter.md"
+type = "text"
+title = "Tech Tycoon Merge — All 5 Flutter Dart Files"
