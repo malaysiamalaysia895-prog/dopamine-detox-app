@@ -38,10 +38,16 @@ dependencies:
   # Lottie animations
   lottie: ^3.1.2
 
-  # HTTP for network images (fallback)
+  # Network image caching
   cached_network_image: ^3.3.1
 
-  # UUID for unique IDs
+  # Internet connectivity check
+  connectivity_plus: ^6.0.3
+
+  # Android Intent (for opening Usage Access settings)
+  android_intent_plus: ^5.0.2
+
+  # UUID
   uuid: ^4.4.0
 
 dev_dependencies:

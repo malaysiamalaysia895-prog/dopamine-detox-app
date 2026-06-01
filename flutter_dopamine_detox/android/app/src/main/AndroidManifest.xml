@@ -1,32 +1,35 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     package="com.example.dopamine_detox">
 
-    <!-- Internet -->
+    <!-- Internet & Network state (required for connectivity_plus + billing) -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
 
-    <!-- Overlay / App Lock -->
+    <!-- Overlay / App Lock (Draw over other apps) -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 
-    <!-- App usage stats (to detect foreground app) -->
+    <!-- App usage stats — needed to detect which app is in foreground -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions"/>
 
-    <!-- Query installed packages -->
+    <!-- Query ALL installed packages (required for device_apps to list every app) -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission"/>
 
     <!-- Google Play Billing -->
     <uses-permission android:name="com.android.vending.BILLING"/>
 
-    <!-- Pedometer / Step counter (activity recognition) -->
+    <!-- Pedometer / Step counter -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION"/>
     <uses-permission android:name="android.permission.BODY_SENSORS"/>
 
-    <!-- Foreground service for overlay lock -->
+    <!-- Foreground service (keeps overlay alive) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
-    <!-- Wake lock (keep overlay alive on screen) -->
+    <!-- Wake lock -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
 
     <application
@@ -59,7 +62,7 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice"/>
 
-        <!-- Boot receiver to re-enable lock after reboot -->
+        <!-- Boot receiver -->
         <receiver
             android:name=".BootReceiver"
             android:exported="true"
@@ -69,15 +72,21 @@
             </intent-filter>
         </receiver>
 
+        <!-- Flutter v2 embedding -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
     </application>
 
+    <!-- Required so device_apps can see ALL installed apps on Android 11+ -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN"/>
             <category android:name="android.intent.category.LAUNCHER"/>
         </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+        </intent>
     </queries>
+
 </manifest>

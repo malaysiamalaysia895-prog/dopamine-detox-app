@@ -18,3 +18,9 @@ id = "bDuyFHi0g1AK5BLduuJPl"
 uri = "file://flutter_dopamine_detox_WITH_GITHUB_ACTIONS.tar.gz"
 type = "unspecified"
 title = "Dopamine Detox — Complete Project + GitHub Actions"
+
+[[outputs]]
+id = "xnIZqygy-9GF9aQerETmH"
+uri = "file://flutter_dopamine_detox_v2.tar.gz"
+type = "unspecified"
+title = "Dopamine Detox v2 — All 5 Features Updated"
