@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:android_intent_plus/android_intent.dart';
-import 'package:device_apps/device_apps.dart';
+import 'package:installed_apps/installed_apps.dart';
+import 'package:installed_apps/app_info.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -19,7 +20,7 @@ class StudyFocusScreen extends StatefulWidget {
 }
 
 class _StudyFocusScreenState extends State<StudyFocusScreen> {
-  List<Application> _installedApps = [];
+  List<AppInfo> _installedApps = [];
   final Set<String> _selectedPackages = {};
   Duration _selectedDuration = const Duration(hours: 1);
   bool _loadingApps = true;
@@ -67,14 +68,10 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
   /// Checks PACKAGE_USAGE_STATS via AppOps (best available in Flutter).
   Future<bool> _checkUsageStatsGranted() async {
     // permission_handler does not directly expose PACKAGE_USAGE_STATS.
-    // We attempt to read usage stats; if it throws, permission is not granted.
+    // We attempt to read installed apps; if it throws, permission is not granted.
     // On Android 5+ this is a special permission in Settings.
     try {
-      final apps = await DeviceApps.getInstalledApplications(
-        includeAppIcons: false,
-        includeSystemApps: false,
-        onlyAppsWithLaunchIntent: true,
-      );
+      final apps = await InstalledApps.getInstalledApps(true, true);
       return apps.isNotEmpty;
     } catch (_) {
       return false;
@@ -93,22 +90,13 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
   Future<void> _loadApps() async {
     setState(() => _loadingApps = true);
     try {
-      // includeSystemApps: true + onlyAppsWithLaunchIntent: true gives ALL
-      // user-launchable apps. QUERY_ALL_PACKAGES in the manifest ensures
-      // Android 11+ returns the full list.
-      final apps = await DeviceApps.getInstalledApplications(
-        includeAppIcons: true,
-        includeSystemApps: true,        // ← key fix: was false before
-        onlyAppsWithLaunchIntent: true, // filters to only launchable apps
-      );
+      // includeSystemApps: true gives ALL user-launchable apps.
+      // QUERY_ALL_PACKAGES in the manifest ensures Android 11+ returns the full list.
+      final apps = await InstalledApps.getInstalledApps(true, true);
 
-      // Sort: user-installed apps first, then system, all alphabetical
-      apps.sort((a, b) {
-        if (a.systemApp != b.systemApp) {
-          return a.systemApp ? 1 : -1; // user apps first
-        }
-        return a.appName.toLowerCase().compareTo(b.appName.toLowerCase());
-      });
+      // Sort alphabetically by app name
+      apps.sort((a, b) =>
+          a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
       setState(() {
         _installedApps = apps;
@@ -560,7 +548,7 @@ class _DurationSection extends StatelessWidget {
 
 // ─── App Tile ─────────────────────────────────────────────────────────────────
 class _AppTile extends StatelessWidget {
-  final Application app;
+  final AppInfo app;
   final bool isSelected;
   final VoidCallback onTap;
 
@@ -569,9 +557,6 @@ class _AppTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final appWithIcon =
-        app is ApplicationWithIcon ? app as ApplicationWithIcon : null;
-
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -592,8 +577,8 @@ class _AppTile extends StatelessWidget {
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: appWithIcon != null
-                  ? Image.memory(appWithIcon.icon,
+              child: app.icon != null
+                  ? Image.memory(app.icon!,
                       width: 44, height: 44, fit: BoxFit.cover)
                   : Container(
                       width: 44,
@@ -607,7 +592,7 @@ class _AppTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(app.appName,
+                  Text(app.name,
                       style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w600,
