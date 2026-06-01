@@ -14,7 +14,7 @@
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions"/>
 
-    <!-- Query ALL installed packages (required for installed_apps to list every app) -->
+    <!-- Query ALL installed packages (required for installed_apps on Android 11+) -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission"/>
 
@@ -25,8 +25,10 @@
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION"/>
     <uses-permission android:name="android.permission.BODY_SENSORS"/>
 
-    <!-- Foreground service (keeps overlay alive) -->
+    <!-- Foreground services (overlay + app monitor) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <!-- Required on Android 14+ for dataSync foreground service type -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <!-- Wake lock -->
@@ -61,6 +63,12 @@
             android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice"/>
+
+        <!-- AppMonitorService: polls UsageStatsManager to detect blocked apps -->
+        <service
+            android:name=".AppMonitorService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"/>
 
         <!-- Boot receiver -->
         <receiver

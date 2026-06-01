@@ -12,7 +12,6 @@ import 'screens/lock_overlay_screen.dart';
 import 'services/billing_service.dart';
 
 /// Overlay entry-point — runs in a SEPARATE Flutter isolate.
-/// Must stay minimal — no Provider, no shared state.
 @pragma('vm:entry-point')
 void overlayMain() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -59,11 +58,18 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
   bool _hasInternet = true;
   late StreamSubscription<List<ConnectivityResult>> _connectivitySub;
 
-  // ── Overlay bridge ────────────────────────────────────────────────────────
-  // The main app is the single source of truth for timer state.
-  // It broadcasts to the overlay every second and handles all overlay messages.
+  // ── Native app-monitor channel ────────────────────────────────────────────
+  // Talks to AppMonitorService.kt — starts/stops background polling and
+  // receives callbacks when a blocked app enters the foreground.
+  static const _kMonitorChannel =
+      MethodChannel('com.example.dopamine_detox/app_monitor');
+
+  // ── Overlay bridge state ──────────────────────────────────────────────────
   StreamSubscription<dynamic>? _overlayMsgSub;
   Timer? _overlayBroadcastTimer;
+
+  // Kept so we can removeListener in dispose()
+  AppStateProvider? _provider;
 
   @override
   void initState() {
@@ -79,25 +85,22 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
       if (mounted) setState(() => _hasInternet = ok);
     });
 
-    // Overlay bridge must start after the first frame so Provider context is ready.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _initOverlayBridge());
+    // Bridge needs Provider context — defer to first frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initBridge());
   }
 
-  // ── Overlay bridge ─────────────────────────────────────────────────────────
+  // ── Bridge init ────────────────────────────────────────────────────────────
 
-  void _initOverlayBridge() {
-    final provider = context.read<AppStateProvider>();
+  void _initBridge() {
+    _provider = context.read<AppStateProvider>();
     final billing = context.read<BillingService>();
 
-    // ── Global billing success handler ─────────────────────────────────────
-    // Covers billing triggered from both the overlay AND individual screens.
-    // Individual screens that previously set onPurchaseSuccess can still
-    // override this, but this acts as a safe fallback.
+    // ── Billing success (covers overlay-triggered and in-screen billing) ───
     billing.onPurchaseSuccess = () {
-      provider.unlockAll();
-      // Tell overlay to close; also close it forcefully in case message drops.
+      _provider!.unlockAll();
       FlutterOverlayWindow.shareData({'type': 'unlock'});
       FlutterOverlayWindow.closeOverlay();
+      _stopMonitor();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('✅ Penalty paid — lock removed.')),
@@ -105,60 +108,111 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
       }
     };
 
-    // ── Listen to messages FROM the overlay ────────────────────────────────
+    // ── Overlay → main app messages ────────────────────────────────────────
     _overlayMsgSub =
-        FlutterOverlayWindow.overlayListener.listen(_handleOverlayMessage);
+        FlutterOverlayWindow.overlayListener.listen(_handleOverlayMsg);
 
-    // ── Broadcast timer state TO the overlay every second ─────────────────
-    // Without this, the overlay always shows "--:--:--".
+    // ── Native monitor → Flutter callback ─────────────────────────────────
+    // AppMonitorService calls these methods on us when a blocked app is
+    // detected or when the user navigates away from a blocked app.
+    _kMonitorChannel.setMethodCallHandler((call) async {
+      switch (call.method) {
+        case 'onBlockedAppDetected':
+          if (_provider!.isLocked && !_provider!.emergencyUnlockActive) {
+            await _showOverlayWindow();
+          }
+          break;
+        case 'onBlockedAppLeft':
+          // Optionally close overlay when user leaves blocked app.
+          // We leave this as a no-op; the overlay stays until
+          // emergency/penalty/timer-end so the user can't sneak back.
+          break;
+      }
+    });
+
+    // ── Provider listener: start/stop monitor on challenge changes ─────────
+    _provider!.addListener(_onProviderChanged);
+
+    // Sync initial state (app might have been killed mid-session)
+    _syncMonitor();
+
+    // ── Timer broadcast to overlay every second ────────────────────────────
     _overlayBroadcastTimer =
         Timer.periodic(const Duration(seconds: 1), (_) {
-      _broadcastTimerState(provider);
+      _broadcastTimerState();
     });
   }
 
-  /// Receives messages sent by the overlay widget via FlutterOverlayWindow.shareData().
-  void _handleOverlayMessage(dynamic data) {
+  // ── Provider-change handler ────────────────────────────────────────────────
+
+  void _onProviderChanged() {
+    _syncMonitor();
+    _broadcastTimerState();
+  }
+
+  /// Starts the native monitor when study focus is active,
+  /// stops it when any challenge ends.
+  void _syncMonitor() {
+    final p = _provider;
+    if (p == null) return;
+
+    if (p.activeChallenge == ChallengeType.studyFocus &&
+        p.lockedPackages.isNotEmpty) {
+      _startMonitor(p.lockedPackages);
+    } else if (!p.isLocked) {
+      _stopMonitor();
+    }
+    // MobileLock: overlay is shown immediately by StudyFocusScreen/HomeScreen;
+    // no per-app monitoring needed — the overlay persists unconditionally.
+  }
+
+  void _startMonitor(List<String> packages) {
+    _kMonitorChannel
+        .invokeMethod('startMonitoring', {'packages': packages})
+        .catchError((e) => debugPrint('[Monitor] start error: $e'));
+  }
+
+  void _stopMonitor() {
+    _kMonitorChannel
+        .invokeMethod('stopMonitoring')
+        .catchError((e) => debugPrint('[Monitor] stop error: $e'));
+  }
+
+  // ── Overlay message handler ────────────────────────────────────────────────
+
+  void _handleOverlayMsg(dynamic data) {
     if (data is! Map) return;
     final type = data['type'] as String? ?? '';
-    final provider = context.read<AppStateProvider>();
     final billing = context.read<BillingService>();
 
     switch (type) {
-      // User long-pressed the emergency unlock button in the overlay.
       case 'emergency_unlock_requested':
-        final activated = provider.activateEmergencyUnlock();
-        if (activated) {
-          // Main app re-shows the overlay after the 2-min emergency window.
-          // We do this here (not in the overlay isolate) because the overlay
-          // widget is disposed when the overlay closes — its timers die with it.
+        final ok = _provider!.activateEmergencyUnlock();
+        if (ok) {
           Future.delayed(const Duration(minutes: 2), () async {
-            if (provider.isLocked && !provider.emergencyUnlockActive) {
+            if (_provider!.isLocked && !_provider!.emergencyUnlockActive) {
               await _showOverlayWindow();
             }
           });
         }
         break;
-
-      // User tapped "Pay ₹99" on the overlay — trigger Google Play billing.
       case 'open_billing':
         billing.buyPenalty().catchError((e) {
-          debugPrint('[OverlayBridge] billing error: $e');
+          debugPrint('[Bridge] billing error: $e');
         });
         break;
-
-      // Overlay requesting current state (e.g. after re-open).
       case 'request_state':
-        _broadcastTimerState(provider);
+        _broadcastTimerState();
         break;
     }
   }
 
-  /// Sends the current timer/challenge state to the overlay.
-  /// Called every second by _overlayBroadcastTimer.
-  void _broadcastTimerState(AppStateProvider provider) {
-    if (!provider.isLocked) return;
-    final r = provider.remainingTime;
+  // ── Overlay helpers ────────────────────────────────────────────────────────
+
+  void _broadcastTimerState() {
+    final p = _provider;
+    if (p == null || !p.isLocked) return;
+    final r = p.remainingTime;
     final h = r.inHours.toString().padLeft(2, '0');
     final m = (r.inMinutes % 60).toString().padLeft(2, '0');
     final s = (r.inSeconds % 60).toString().padLeft(2, '0');
@@ -166,17 +220,14 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
     FlutterOverlayWindow.shareData({
       'type': 'timer_update',
       'time': '$h:$m:$s',
-      'emergencyUsesLeft': provider.emergencyUsesLeft,
-      'isMobileLock':
-          provider.activeChallenge == ChallengeType.mobileLock,
-      'progress': provider.progressFraction,
-      'emergencyActive': provider.emergencyUnlockActive,
-      'emergencyRemainingSeconds':
-          provider.emergencyRemaining.inSeconds,
+      'emergencyUsesLeft': p.emergencyUsesLeft,
+      'isMobileLock': p.activeChallenge == ChallengeType.mobileLock,
+      'progress': p.progressFraction,
+      'emergencyActive': p.emergencyUnlockActive,
+      'emergencyRemainingSeconds': p.emergencyRemaining.inSeconds,
     });
   }
 
-  /// Shows the full-screen overlay window.
   static Future<void> _showOverlayWindow() async {
     try {
       await FlutterOverlayWindow.showOverlay(
@@ -191,7 +242,7 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
         width: WindowSize.fullCover,
       );
     } catch (e) {
-      debugPrint('[OverlayBridge] showOverlay error: $e');
+      debugPrint('[Bridge] showOverlay error: $e');
     }
   }
 
@@ -208,6 +259,7 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
 
   @override
   void dispose() {
+    _provider?.removeListener(_onProviderChanged);
     _connectivitySub.cancel();
     _overlayMsgSub?.cancel();
     _overlayBroadcastTimer?.cancel();
@@ -230,7 +282,7 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
   }
 }
 
-// ─── No-Internet Blocking Overlay ─────────────────────────────────────────────
+// ─── No-Internet Banner ────────────────────────────────────────────────────────
 class _NoInternetOverlay extends StatelessWidget {
   const _NoInternetOverlay();
 
@@ -272,9 +324,7 @@ class _NoInternetOverlay extends StatelessWidget {
                     'and security features. Please reconnect.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                        color: Color(0xFF8888AA),
-                        fontSize: 14,
-                        height: 1.6),
+                        color: Color(0xFF8888AA), fontSize: 14, height: 1.6),
                   ),
                 ),
                 const SizedBox(height: 32),
@@ -302,7 +352,7 @@ class _NoInternetOverlay extends StatelessWidget {
   }
 }
 
-/// Overlay window mini-app (separate isolate).
+/// Overlay window mini-app (separate Flutter isolate).
 class OverlayApp extends StatelessWidget {
   const OverlayApp({super.key});
 
@@ -346,10 +396,8 @@ class AppTheme {
             fontSize: 24, fontWeight: FontWeight.w700, color: Colors.white),
         titleLarge: TextStyle(
             fontSize: 20, fontWeight: FontWeight.w600, color: Colors.white),
-        bodyLarge:
-            TextStyle(fontSize: 16, color: Color(0xFFCCCCDD)),
-        bodyMedium:
-            TextStyle(fontSize: 14, color: Color(0xFF9999BB)),
+        bodyLarge: TextStyle(fontSize: 16, color: Color(0xFFCCCCDD)),
+        bodyMedium: TextStyle(fontSize: 14, color: Color(0xFF9999BB)),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(

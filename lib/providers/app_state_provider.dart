@@ -143,6 +143,8 @@ class AppStateProvider extends ChangeNotifier {
     required List<String> packages,
     required Duration duration,
   }) {
+    // Guard: prevent overwriting an already-running session.
+    if (_activeChallenge != ChallengeType.none) return;
     _lockedPackages = packages;
     _activeChallenge = ChallengeType.studyFocus;
     _challengeDuration = duration;

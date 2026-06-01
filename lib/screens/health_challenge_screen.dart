@@ -81,8 +81,11 @@ class _HealthChallengeScreenState extends State<HealthChallengeScreen> {
   // ── Permission ─────────────────────────────────────────────────────────────
 
   Future<void> _requestActivityPermission() async {
-    // Explicitly request ACTIVITY_RECOGNITION at runtime
+    // Request both permissions: activityRecognition (Android 10+) and
+    // sensors (Android <= 9). Both must be granted for pedometer to work.
+    await Permission.sensors.request();
     final status = await Permission.activityRecognition.request();
+
     setState(() {
       _permissionStatus = status;
       _permissionChecked = true;
@@ -596,18 +599,29 @@ class _PermissionWarning extends StatelessWidget {
                 const TextStyle(color: Colors.white54, fontSize: 13),
           ),
           const SizedBox(height: 12),
-          GestureDetector(
-            onTap: isPermanentlyDenied
-                ? () => openAppSettings()
-                : onRequest,
-            child: Text(
-              isPermanentlyDenied
-                  ? 'Open App Settings →'
-                  : 'Grant Permission →',
-              style: const TextStyle(
-                  color: Color(0xFF00E5FF),
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00E5FF).withOpacity(0.15),
+                foregroundColor: const Color(0xFF00E5FF),
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: const BorderSide(
+                      color: Color(0xFF00E5FF), width: 1),
+                ),
+              ),
+              onPressed:
+                  isPermanentlyDenied ? () => openAppSettings() : onRequest,
+              child: Text(
+                isPermanentlyDenied
+                    ? 'Open App Settings'
+                    : 'Grant Activity Permission',
+                style: const TextStyle(
+                    fontWeight: FontWeight.w700, fontSize: 14),
+              ),
             ),
           ),
         ],
