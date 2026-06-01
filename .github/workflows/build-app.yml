@@ -22,14 +22,20 @@ jobs:
         with:
           channel: 'stable'
           
-      - name: Install Dependencies
-        run: flutter pub get
-        
-      - name: Build APK
-        run: flutter build apk --release
+      - name: Auto-Find Project and Build
+        run: |
+          echo "Dhoondh raha hoon pubspec.yaml kahan hai..."
+          PUBSPEC=$(find . -name "pubspec.yaml" | head -n 1)
+          DIR=$(dirname "$PUBSPEC")
+          echo "Folder mil gaya yahan: $DIR"
+          cd "$DIR"
+          flutter pub get
+          flutter build apk --release
+          mkdir -p $GITHUB_WORKSPACE/output
+          find build -name "*.apk" -exec cp {} $GITHUB_WORKSPACE/output/ \;
         
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Mera-Game-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: output/*.apk
