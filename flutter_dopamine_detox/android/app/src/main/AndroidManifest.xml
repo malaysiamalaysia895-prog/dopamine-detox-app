@@ -2,34 +2,36 @@
     xmlns:tools="http://schemas.android.com/tools"
     package="com.example.dopamine_detox">
 
-    <!-- Internet & Network state (required for connectivity_plus + billing) -->
+    <!-- ── Network ─────────────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
 
-    <!-- Overlay / App Lock (Draw over other apps) -->
+    <!-- ── Overlay (Display over other apps) ──────────────────────────────── -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 
-    <!-- App usage stats — needed to detect which app is in foreground -->
+    <!-- ── UsageStats — foreground app detection ──────────────────────────── -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions"/>
 
-    <!-- Query ALL installed packages (required for device_apps to list every app) -->
+    <!-- ── Query all packages — device_apps full list on Android 11+ ─────── -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission"/>
 
-    <!-- Google Play Billing -->
+    <!-- ── Google Play Billing ─────────────────────────────────────────────── -->
     <uses-permission android:name="com.android.vending.BILLING"/>
 
-    <!-- Pedometer / Step counter -->
+    <!-- ── Pedometer ───────────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION"/>
     <uses-permission android:name="android.permission.BODY_SENSORS"/>
 
-    <!-- Foreground service (keeps overlay alive) -->
+    <!-- ── Foreground services ─────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- Android 14: must declare specific foreground service type -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
 
-    <!-- Wake lock -->
+    <!-- ── Boot / wake ─────────────────────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
 
     <application
@@ -39,6 +41,7 @@
         android:usesCleartextTraffic="true"
         android:requestLegacyExternalStorage="true">
 
+        <!-- ── Main activity ──────────────────────────────────────────────── -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -56,29 +59,31 @@
             </intent-filter>
         </activity>
 
-        <!-- flutter_overlay_window service -->
+        <!-- ── Foreground Monitor Service (app-specific blocking) ─────────── -->
+        <service
+            android:name=".ForegroundMonitorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false">
+            <!-- specialUse metadata required for Android 14 -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="foreground app monitor for study focus"/>
+        </service>
+
+        <!-- ── flutter_overlay_window service ─────────────────────────────── -->
         <service
             android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice"/>
 
-        <!-- Boot receiver -->
-        <receiver
-            android:name=".BootReceiver"
-            android:exported="true"
-            android:enabled="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED"/>
-            </intent-filter>
-        </receiver>
-
-        <!-- Flutter v2 embedding -->
+        <!-- ── Flutter v2 embedding ───────────────────────────────────────── -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
     </application>
 
-    <!-- Required so device_apps can see ALL installed apps on Android 11+ -->
+    <!-- ── Package visibility (Android 11+) ─────────────────────────────── -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN"/>

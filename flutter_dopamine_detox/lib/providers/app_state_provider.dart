@@ -7,21 +7,20 @@ enum ChallengeType { none, studyFocus, mobileLock, healthChallenge }
 /// ─────────────────────────────────────────────────────────────────────────────
 /// AppStateProvider
 ///
-/// TIMER PERSISTENCE STRATEGY (survives process kill):
-///   • On challenge start  → save `challengeStartEpochMs` + `durationSecs`
-///   • On restore          → remaining = duration − (now − savedStartEpoch)
-///   • Old `remainingSecs` approach breaks when the process is killed because
-///     the countdown timer stops; wall-clock approach never loses time.
+/// TIMER: Wall-clock based (survives process kill).
+///   Start epoch + duration stored → remaining = duration − elapsed(now).
 ///
-/// EMERGENCY USES:
-///   • Max 10 uses per calendar day (resets at midnight).
-///   • Stored as `emergencyUsesDate` (yyyy-MM-dd) + `emergencyUsesToday`.
+/// EMERGENCY USES: 10 per calendar day, reset at midnight.
+///   consumeEmergencyUse() is called by HomeScreen when overlay reports bypass.
+///
+/// BLOCKING: lockedPackages list persisted to SharedPreferences.
+///   isPackageLocked() is the single source of truth for HomeScreen.
 /// ─────────────────────────────────────────────────────────────────────────────
 class AppStateProvider extends ChangeNotifier {
   final SharedPreferences _prefs;
 
   AppStateProvider(this._prefs) {
-    _loadPersistedState();
+    _loadState();
   }
 
   // ── Active challenge ───────────────────────────────────────────────────────
@@ -29,47 +28,35 @@ class AppStateProvider extends ChangeNotifier {
   ChallengeType get activeChallenge => _activeChallenge;
   bool get isLocked => _activeChallenge != ChallengeType.none;
 
-  // ── Locked packages (Study Focus) ─────────────────────────────────────────
+  // ── Blocked packages ───────────────────────────────────────────────────────
   List<String> _lockedPackages = [];
   List<String> get lockedPackages => List.unmodifiable(_lockedPackages);
 
   // ── Wall-clock timer ───────────────────────────────────────────────────────
-  // We persist the START time + total duration so that even if the process
-  // is killed and restarted, remaining time is recalculated from the wall clock.
-  DateTime? _challengeStartTime;
+  DateTime? _startTime;
   Duration _challengeDuration = Duration.zero;
   Duration _remainingTime = Duration.zero;
   Duration get remainingTime => _remainingTime;
   Duration get challengeDuration => _challengeDuration;
-  Timer? _countdownTimer;
+  Timer? _ticker;
 
   double get progressFraction {
-    if (_challengeDuration.inSeconds == 0) return 0.0;
-    final elapsed = DateTime.now().difference(_challengeStartTime!);
-    final fraction = elapsed.inSeconds / _challengeDuration.inSeconds;
-    return fraction.clamp(0.0, 1.0);
+    if (_challengeDuration.inSeconds == 0 || _startTime == null) return 0.0;
+    final elapsed = DateTime.now().difference(_startTime!);
+    return (elapsed.inSeconds / _challengeDuration.inSeconds).clamp(0.0, 1.0);
   }
 
-  // ── Emergency unlock — 10 uses per day ────────────────────────────────────
-  static const int maxEmergencyUsesPerDay = 10;
-
+  // ── Emergency uses ─────────────────────────────────────────────────────────
+  static const int _maxEmergency = 10;
   int _emergencyUsesToday = 0;
-  int get emergencyUsesToday => _emergencyUsesToday;
   int get emergencyUsesLeft =>
-      (maxEmergencyUsesPerDay - _emergencyUsesToday).clamp(0, maxEmergencyUsesPerDay);
+      (_maxEmergency - _emergencyUsesToday).clamp(0, _maxEmergency);
 
-  bool _emergencyUnlockActive = false;
-  bool get emergencyUnlockActive => _emergencyUnlockActive;
+  // ── Billing ────────────────────────────────────────────────────────────────
+  bool _penaltyUnlocked = false;
+  bool get isPenaltyUnlocked => _penaltyUnlocked;
 
-  Timer? _emergencyTimer;
-  Duration _emergencyRemaining = const Duration(minutes: 2);
-  Duration get emergencyRemaining => _emergencyRemaining;
-
-  // ── Billing unlock ─────────────────────────────────────────────────────────
-  bool _isPenaltyUnlocked = false;
-  bool get isPenaltyUnlocked => _isPenaltyUnlocked;
-
-  // ── Health challenge ───────────────────────────────────────────────────────
+  // ── Health ─────────────────────────────────────────────────────────────────
   int _targetSteps = 1500;
   int get targetSteps => _targetSteps;
   int _currentSteps = 0;
@@ -77,64 +64,56 @@ class AppStateProvider extends ChangeNotifier {
   bool _healthCompleted = false;
   bool get healthCompleted => _healthCompleted;
 
-  // ── Load persisted state ───────────────────────────────────────────────────
-  void _loadPersistedState() {
-    // Emergency uses — reset if date changed
-    final today = _todayString();
-    final savedDate = _prefs.getString('emergencyUsesDate') ?? '';
-    if (savedDate == today) {
-      _emergencyUsesToday = _prefs.getInt('emergencyUsesToday') ?? 0;
+  // ── Persist / Load ─────────────────────────────────────────────────────────
+
+  void _loadState() {
+    // Emergency uses (daily reset)
+    final today = _today();
+    if (_prefs.getString('emergencyDate') == today) {
+      _emergencyUsesToday = _prefs.getInt('emergencyToday') ?? 0;
     } else {
-      // New day → reset counter
       _emergencyUsesToday = 0;
-      _prefs.setString('emergencyUsesDate', today);
-      _prefs.setInt('emergencyUsesToday', 0);
+      _prefs.setString('emergencyDate', today);
+      _prefs.setInt('emergencyToday', 0);
     }
 
-    // Active challenge
-    final challengeIndex = _prefs.getInt('activeChallenge') ?? 0;
-    _activeChallenge = ChallengeType.values[challengeIndex];
+    final idx = _prefs.getInt('activeChallenge') ?? 0;
+    _activeChallenge = ChallengeType.values[idx];
 
     if (_activeChallenge != ChallengeType.none) {
       _lockedPackages = _prefs.getStringList('lockedPackages') ?? [];
-      final durationSecs = _prefs.getInt('durationSecs') ?? 0;
-      final startEpochMs = _prefs.getInt('challengeStartEpochMs') ?? 0;
       _targetSteps = _prefs.getInt('targetSteps') ?? 1500;
+      final dur = _prefs.getInt('durationSecs') ?? 0;
+      final startMs = _prefs.getInt('startEpochMs') ?? 0;
+      _challengeDuration = Duration(seconds: dur);
+      _startTime = DateTime.fromMillisecondsSinceEpoch(startMs);
 
-      _challengeDuration = Duration(seconds: durationSecs);
-      _challengeStartTime =
-          DateTime.fromMillisecondsSinceEpoch(startEpochMs);
-
-      // Recalculate remaining from wall clock — survives process kill
-      final elapsed = DateTime.now().difference(_challengeStartTime!);
+      final elapsed = DateTime.now().difference(_startTime!);
       _remainingTime = _challengeDuration - elapsed;
 
       if (_remainingTime.isNegative || _remainingTime == Duration.zero) {
-        // Challenge already expired while app was closed
-        _onChallengeComplete(notify: false);
+        _completeChallenge(notify: false);
       } else {
-        _startCountdown();
+        _startTicker();
       }
     }
   }
 
-  void _persistState() {
+  void _save() {
     _prefs.setInt('activeChallenge', _activeChallenge.index);
     _prefs.setStringList('lockedPackages', _lockedPackages);
     _prefs.setInt('durationSecs', _challengeDuration.inSeconds);
     _prefs.setInt('targetSteps', _targetSteps);
-    if (_challengeStartTime != null) {
-      _prefs.setInt('challengeStartEpochMs',
-          _challengeStartTime!.millisecondsSinceEpoch);
+    if (_startTime != null) {
+      _prefs.setInt('startEpochMs', _startTime!.millisecondsSinceEpoch);
     }
-    // Emergency
-    _prefs.setString('emergencyUsesDate', _todayString());
-    _prefs.setInt('emergencyUsesToday', _emergencyUsesToday);
+    _prefs.setString('emergencyDate', _today());
+    _prefs.setInt('emergencyToday', _emergencyUsesToday);
   }
 
-  String _todayString() {
-    final now = DateTime.now();
-    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+  String _today() {
+    final n = DateTime.now();
+    return '${n.year}-${n.month.toString().padLeft(2,'0')}-${n.day.toString().padLeft(2,'0')}';
   }
 
   // ── Start challenges ───────────────────────────────────────────────────────
@@ -146,11 +125,11 @@ class AppStateProvider extends ChangeNotifier {
     _lockedPackages = packages;
     _activeChallenge = ChallengeType.studyFocus;
     _challengeDuration = duration;
-    _challengeStartTime = DateTime.now();
+    _startTime = DateTime.now();
     _remainingTime = duration;
-    _isPenaltyUnlocked = false;
-    _persistState();
-    _startCountdown();
+    _penaltyUnlocked = false;
+    _save();
+    _startTicker();
     notifyListeners();
   }
 
@@ -158,131 +137,86 @@ class AppStateProvider extends ChangeNotifier {
     _lockedPackages = [];
     _activeChallenge = ChallengeType.mobileLock;
     _challengeDuration = duration;
-    _challengeStartTime = DateTime.now();
+    _startTime = DateTime.now();
     _remainingTime = duration;
-    _isPenaltyUnlocked = false;
-    _persistState();
-    _startCountdown();
+    _penaltyUnlocked = false;
+    _save();
+    _startTicker();
     notifyListeners();
   }
 
-  void startHealthChallenge({
-    required Duration duration,
-    required int targetSteps,
-  }) {
+  void startHealthChallenge(
+      {required Duration duration, required int targetSteps}) {
     _activeChallenge = ChallengeType.healthChallenge;
     _challengeDuration = duration;
-    _challengeStartTime = DateTime.now();
+    _startTime = DateTime.now();
     _remainingTime = duration;
     _targetSteps = targetSteps;
     _currentSteps = 0;
     _healthCompleted = false;
-    _isPenaltyUnlocked = false;
-    _persistState();
-    _startCountdown();
+    _penaltyUnlocked = false;
+    _save();
+    _startTicker();
     notifyListeners();
   }
 
-  // ── Countdown (recalculates from wall clock every tick) ───────────────────
-  void _startCountdown() {
-    _countdownTimer?.cancel();
-    _countdownTimer =
-        Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_challengeStartTime == null) {
-        timer.cancel();
-        return;
-      }
-      // Always recompute from wall clock — immune to drift or process kill gaps
-      final elapsed = DateTime.now().difference(_challengeStartTime!);
-      _remainingTime = _challengeDuration - elapsed;
+  // ── Wall-clock ticker ──────────────────────────────────────────────────────
 
+  void _startTicker() {
+    _ticker?.cancel();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_startTime == null) return;
+      final elapsed = DateTime.now().difference(_startTime!);
+      _remainingTime = _challengeDuration - elapsed;
       if (_remainingTime.isNegative || _remainingTime == Duration.zero) {
         _remainingTime = Duration.zero;
-        timer.cancel();
-        _onChallengeComplete();
+        _ticker?.cancel();
+        _completeChallenge();
         return;
       }
       notifyListeners();
     });
   }
 
-  void _onChallengeComplete({bool notify = true}) {
+  void _completeChallenge({bool notify = true}) {
     final wasHealth = _activeChallenge == ChallengeType.healthChallenge;
     _activeChallenge = ChallengeType.none;
     _lockedPackages = [];
-    _isPenaltyUnlocked = false;
-    _challengeStartTime = null;
+    _penaltyUnlocked = false;
+    _startTime = null;
     if (wasHealth) _healthCompleted = _currentSteps >= _targetSteps;
-    _persistState();
+    _save();
     if (notify) notifyListeners();
   }
 
-  // ── Emergency unlock (10 per day, 2-min window, auto-relock) ─────────────
+  // ── Emergency uses ─────────────────────────────────────────────────────────
 
-  /// Returns false if daily limit reached or wrong challenge type.
-  bool activateEmergencyUnlock() {
-    if (emergencyUsesLeft <= 0) return false;
-    if (_activeChallenge == ChallengeType.none) return false;
-    // Mobile lock does NOT support emergency unlock
-    if (_activeChallenge == ChallengeType.mobileLock) return false;
-
+  /// Called by HomeScreen when the overlay reports an emergency bypass.
+  void consumeEmergencyUse() {
+    if (emergencyUsesLeft <= 0) return;
     _emergencyUsesToday++;
-    _emergencyUnlockActive = true;
-    _emergencyRemaining = const Duration(minutes: 2);
-    _persistState();
-    notifyListeners();
-
-    _emergencyTimer?.cancel();
-    _emergencyTimer =
-        Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_emergencyRemaining.inSeconds <= 1) {
-        timer.cancel();
-        _deactivateEmergencyUnlock();
-        return;
-      }
-      _emergencyRemaining -= const Duration(seconds: 1);
-      notifyListeners();
-    });
-
-    return true;
-  }
-
-  void _deactivateEmergencyUnlock() {
-    _emergencyUnlockActive = false;
-    _emergencyRemaining = const Duration(minutes: 2);
+    _save();
     notifyListeners();
   }
 
-  // ── Penalty unlock — called by BillingService on successful purchase ───────
+  // ── Penalty unlock ─────────────────────────────────────────────────────────
+
   void unlockAll() {
-    _countdownTimer?.cancel();
-    _emergencyTimer?.cancel();
-    _emergencyUnlockActive = false;
-    _isPenaltyUnlocked = true;
+    _ticker?.cancel();
+    _penaltyUnlocked = true;
     _activeChallenge = ChallengeType.none;
     _lockedPackages = [];
     _remainingTime = Duration.zero;
-    _challengeStartTime = null;
-    _persistState();
+    _startTime = null;
+    _save();
     notifyListeners();
   }
 
-  // ── Step updates ───────────────────────────────────────────────────────────
-  void updateSteps(int steps) {
-    if (_activeChallenge != ChallengeType.healthChallenge) return;
-    _currentSteps = steps;
-    if (_currentSteps >= _targetSteps) {
-      _healthCompleted = true;
-      _countdownTimer?.cancel();
-      _activeChallenge = ChallengeType.none;
-      _persistState();
-    }
-    notifyListeners();
-  }
+  // ── Package lock check (used by HomeScreen) ────────────────────────────────
 
-  // ── Package lock check ─────────────────────────────────────────────────────
+  /// Returns true if [packageName] should trigger the overlay right now.
   bool isPackageLocked(String packageName) {
-    if (_emergencyUnlockActive || _isPenaltyUnlocked) return false;
+    if (_penaltyUnlocked) return false;
     if (_activeChallenge == ChallengeType.studyFocus) {
       return _lockedPackages.contains(packageName);
     }
@@ -290,10 +224,23 @@ class AppStateProvider extends ChangeNotifier {
     return false;
   }
 
+  // ── Step updates ───────────────────────────────────────────────────────────
+
+  void updateSteps(int steps) {
+    if (_activeChallenge != ChallengeType.healthChallenge) return;
+    _currentSteps = steps;
+    if (_currentSteps >= _targetSteps) {
+      _healthCompleted = true;
+      _ticker?.cancel();
+      _activeChallenge = ChallengeType.none;
+      _save();
+    }
+    notifyListeners();
+  }
+
   @override
   void dispose() {
-    _countdownTimer?.cancel();
-    _emergencyTimer?.cancel();
+    _ticker?.cancel();
     super.dispose();
   }
 }

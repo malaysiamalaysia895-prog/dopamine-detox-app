@@ -36,3 +36,9 @@ id = "iDrfBa0G3zD5ZnsQjkXbl"
 uri = "file://flutter_dopamine_detox_v4_bugfixes.tar.gz"
 type = "unspecified"
 title = "Dopamine Detox v4 — All 5 Bugs Fixed"
+
+[[outputs]]
+id = "RQlF8q7M_MssYDUMzXqfF"
+uri = "file://flutter_dopamine_detox_v5_app_specific_blocking.tar.gz"
+type = "unspecified"
+title = "Dopamine Detox v5 — App-Specific Blocking System"
