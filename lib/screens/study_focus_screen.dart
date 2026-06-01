@@ -25,6 +25,20 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
   Duration _selectedDuration = const Duration(hours: 1);
   bool _loadingApps = true;
 
+  // Search
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+
+  List<AppInfo> get _filteredApps {
+    if (_searchQuery.isEmpty) return _installedApps;
+    final q = _searchQuery.toLowerCase();
+    return _installedApps
+        .where((a) =>
+            a.name.toLowerCase().contains(q) ||
+            a.packageName.toLowerCase().contains(q))
+        .toList();
+  }
+
   // Permission states
   bool _overlayGranted = false;
   bool _usageGranted = false;
@@ -34,6 +48,12 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
   void initState() {
     super.initState();
     _requestAllPermissions();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   // ── Permission flow ────────────────────────────────────────────────────────
@@ -288,6 +308,54 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
             ),
           ),
 
+          // ── Search bar ────────────────────────────────────────────────
+          if (!_loadingApps && _installedApps.isNotEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: (v) => setState(() => _searchQuery = v.trim()),
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  decoration: InputDecoration(
+                    hintText: 'Search apps...',
+                    hintStyle: const TextStyle(color: Colors.white38),
+                    prefixIcon:
+                        const Icon(Icons.search, color: Colors.white38, size: 20),
+                    suffixIcon: _searchQuery.isNotEmpty
+                        ? GestureDetector(
+                            onTap: () {
+                              _searchController.clear();
+                              setState(() => _searchQuery = '');
+                            },
+                            child: const Icon(Icons.close,
+                                color: Colors.white38, size: 18),
+                          )
+                        : null,
+                    filled: true,
+                    fillColor: AppTheme.cardBg,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(
+                          color: Colors.white.withOpacity(0.08)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(
+                          color: Colors.white.withOpacity(0.08)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(
+                          color: AppTheme.primary.withOpacity(0.5),
+                          width: 1.5),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
           // ── App list ──────────────────────────────────────────────────
           _loadingApps
               ? SliverFillRemaining(
@@ -298,7 +366,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
                         const CircularProgressIndicator(
                             color: AppTheme.primary),
                         const SizedBox(height: 16),
-                        Text(
+                        const Text(
                           'Loading all installed apps...',
                           style: TextStyle(color: Colors.white54),
                         ),
@@ -331,34 +399,53 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
                         ),
                       ),
                     )
-                  : SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
-                      sliver: SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                          (context, index) {
-                            final app = _installedApps[index];
-                            final isSelected = _selectedPackages
-                                .contains(app.packageName);
-                            return _AppTile(
-                              app: app,
-                              isSelected: isSelected,
-                              onTap: () {
-                                setState(() {
-                                  if (isSelected) {
-                                    _selectedPackages
-                                        .remove(app.packageName);
-                                  } else {
-                                    _selectedPackages
-                                        .add(app.packageName);
-                                  }
-                                });
+                  : _filteredApps.isEmpty
+                      ? SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.all(40),
+                            child: Column(
+                              children: [
+                                const Text('🔍',
+                                    style: TextStyle(fontSize: 40)),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'No apps match "$_searchQuery"',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                      color: Colors.white54, fontSize: 14),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      : SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
+                          sliver: SliverList(
+                            delegate: SliverChildBuilderDelegate(
+                              (context, index) {
+                                final app = _filteredApps[index];
+                                final isSelected = _selectedPackages
+                                    .contains(app.packageName);
+                                return _AppTile(
+                                  app: app,
+                                  isSelected: isSelected,
+                                  onTap: () {
+                                    setState(() {
+                                      if (isSelected) {
+                                        _selectedPackages
+                                            .remove(app.packageName);
+                                      } else {
+                                        _selectedPackages
+                                            .add(app.packageName);
+                                      }
+                                    });
+                                  },
+                                );
                               },
-                            );
-                          },
-                          childCount: _installedApps.length,
+                              childCount: _filteredApps.length,
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
         ],
       ),
 
