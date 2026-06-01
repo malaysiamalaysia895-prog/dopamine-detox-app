@@ -30,3 +30,6 @@ externalPort = 8081
 [[ports]]
 localPort = 24982
 externalPort = 3000
+
+[nix]
+packages = ["flutter"]
