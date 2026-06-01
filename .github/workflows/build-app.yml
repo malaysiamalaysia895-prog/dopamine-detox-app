@@ -22,21 +22,26 @@ jobs:
         with:
           channel: 'stable'
           
-      - name: Auto-Find Project, Fix Android, and Build
+      - name: Build with Google Ads Support
         run: |
-          echo "Dhoondh raha hoon pubspec.yaml kahan hai..."
           PUBSPEC=$(find . -name "pubspec.yaml" | head -n 1)
           DIR=$(dirname "$PUBSPEC")
-          echo "Folder mil gaya yahan: $DIR"
           cd "$DIR"
           
-          # Pehle nayi Android files banayega taaki Ads ka error na aaye
+          # 1. Flutter clean karein taaki purani cache hat jaye
+          flutter clean
+          
+          # 2. Android directory ko fresh generate karein
           flutter create .
           
-          # Ab saare packages install karega
+          # 3. Dependencies update karein
           flutter pub get
           
-          # Final APK banayega
+          # 4. Ads ke liye 'android/gradle.properties' mein property add karein
+          echo "android.useAndroidX=true" >> android/gradle.properties
+          echo "android.enableJetifier=true" >> android/gradle.properties
+          
+          # 5. Final APK Build
           flutter build apk --release
           
           mkdir -p $GITHUB_WORKSPACE/output
@@ -47,4 +52,3 @@ jobs:
         with:
           name: Mera-Game-APK
           path: output/*.apk
-          
