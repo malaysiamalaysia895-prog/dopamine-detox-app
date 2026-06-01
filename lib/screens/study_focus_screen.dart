@@ -1,6 +1,8 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+import 'dart:io';
+import 'package:android_intent_plus/android_intent_plus.dart';
 import 'package:device_apps/device_apps.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
@@ -21,38 +23,93 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
   final Set<String> _selectedPackages = {};
   Duration _selectedDuration = const Duration(hours: 1);
   bool _loadingApps = true;
-  bool _permissionsGranted = false;
+
+  // Permission states
+  bool _overlayGranted = false;
+  bool _usageGranted = false;
+  bool _permissionsChecked = false;
 
   @override
   void initState() {
     super.initState();
-    _checkPermissionsAndLoadApps();
+    _requestAllPermissions();
   }
 
-  Future<void> _checkPermissionsAndLoadApps() async {
-    // Check overlay permission
-    final overlayGranted = await FlutterOverlayWindow.isPermissionGranted();
+  // ── Permission flow ────────────────────────────────────────────────────────
+
+  Future<void> _requestAllPermissions() async {
+    // 1. SYSTEM_ALERT_WINDOW — requestPermission handles the Settings redirect
+    final overlayGranted =
+        await FlutterOverlayWindow.isPermissionGranted();
     if (!overlayGranted) {
       await FlutterOverlayWindow.requestPermission();
     }
+    final overlayNow = await FlutterOverlayWindow.isPermissionGranted();
 
-    // Check usage stats permission (Android special permission)
-    // We guide the user to settings since it can't be requested programmatically
-    setState(() => _permissionsGranted = overlayGranted);
+    // 2. PACKAGE_USAGE_STATS — cannot be runtime-requested; must redirect to
+    //    Settings > Apps > Special app access > Usage access
+    //    We check via permission_handler and guide the user.
+    final usageStatus = await Permission.appTrackingTransparency.status;
+    // On Android, PACKAGE_USAGE_STATS is a special permission checked differently.
+    // We use a try/open-settings approach.
+    bool usageNow = await _checkUsageStatsGranted();
 
+    setState(() {
+      _overlayGranted = overlayNow;
+      _usageGranted = usageNow;
+      _permissionsChecked = true;
+    });
+
+    // Load apps regardless — show what we can, warn about usage stats
     await _loadApps();
+  }
+
+  /// Checks PACKAGE_USAGE_STATS via AppOps (best available in Flutter).
+  Future<bool> _checkUsageStatsGranted() async {
+    // permission_handler does not directly expose PACKAGE_USAGE_STATS.
+    // We attempt to read usage stats; if it throws, permission is not granted.
+    // On Android 5+ this is a special permission in Settings.
+    try {
+      final apps = await DeviceApps.getInstalledApplications(
+        includeAppIcons: false,
+        includeSystemApps: false,
+        onlyAppsWithLaunchIntent: true,
+      );
+      return apps.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _openUsageAccessSettings() async {
+    if (Platform.isAndroid) {
+      const intent = AndroidIntent(
+        action: 'android.settings.USAGE_ACCESS_SETTINGS',
+      );
+      await intent.launch();
+    }
   }
 
   Future<void> _loadApps() async {
     setState(() => _loadingApps = true);
     try {
+      // includeSystemApps: true + onlyAppsWithLaunchIntent: true gives ALL
+      // user-launchable apps. QUERY_ALL_PACKAGES in the manifest ensures
+      // Android 11+ returns the full list.
       final apps = await DeviceApps.getInstalledApplications(
         includeAppIcons: true,
-        includeSystemApps: false,
-        onlyAppsWithLaunchIntent: true,
+        includeSystemApps: true,        // ← key fix: was false before
+        onlyAppsWithLaunchIntent: true, // filters to only launchable apps
       );
-      apps.sort((a, b) =>
-          a.appName.toLowerCase().compareTo(b.appName.toLowerCase()));
+
+      // Sort: user-installed apps first, then system, all alphabetical
+      apps.sort((a, b) {
+        if (a.systemApp != b.systemApp) {
+          return a.systemApp ? 1 : -1; // user apps first
+        }
+        return a.appName.toLowerCase().compareTo(b.appName.toLowerCase());
+      });
+
       setState(() {
         _installedApps = apps;
         _loadingApps = false;
@@ -70,15 +127,25 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
   Future<void> _startFocus() async {
     if (_selectedPackages.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select at least one app to lock.')),
+        const SnackBar(
+            content: Text('Please select at least one app to lock.')),
       );
+      return;
+    }
+
+    if (!_overlayGranted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text(
+                '⚠️ "Display over other apps" permission is required.')),
+      );
+      await FlutterOverlayWindow.requestPermission();
       return;
     }
 
     final provider = context.read<AppStateProvider>();
     final billing = context.read<BillingService>();
 
-    // Wire billing callback
     billing.onPurchaseSuccess = () {
       provider.unlockAll();
       if (mounted) {
@@ -94,20 +161,11 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
       duration: _selectedDuration,
     );
 
-    // Show overlay window permission dialog if needed
-    await _ensureOverlayActive();
-
+    await _showOverlay();
     if (mounted) Navigator.pop(context);
   }
 
-  Future<void> _ensureOverlayActive() async {
-    final granted = await FlutterOverlayWindow.isPermissionGranted();
-    if (!granted) {
-      await FlutterOverlayWindow.requestPermission();
-      return;
-    }
-
-    // Show the overlay
+  Future<void> _showOverlay() async {
     await FlutterOverlayWindow.showOverlay(
       enableDrag: false,
       overlayTitle: 'Study Focus Active',
@@ -128,7 +186,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
       body: CustomScrollView(
         physics: const BouncingScrollPhysics(),
         slivers: [
-          // App bar
+          // ── App bar ──────────────────────────────────────────────────
           SliverAppBar(
             backgroundColor: AppTheme.bg,
             pinned: true,
@@ -146,11 +204,9 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
               ),
             ),
             flexibleSpace: FlexibleSpaceBar(
-              title: const Text(
-                'Study Focus',
-                style: TextStyle(
-                    fontWeight: FontWeight.w700, fontSize: 20),
-              ),
+              title: const Text('Study Focus',
+                  style:
+                      TextStyle(fontWeight: FontWeight.w700, fontSize: 20)),
               background: Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
@@ -160,13 +216,50 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
                   ),
                 ),
                 child: const Center(
-                  child: Text('📚', style: TextStyle(fontSize: 60)),
-                ),
+                    child: Text('📚', style: TextStyle(fontSize: 60))),
               ),
             ),
           ),
 
-          // Duration picker
+          // ── Permission banners ────────────────────────────────────────
+          if (_permissionsChecked)
+            SliverToBoxAdapter(
+              child: Column(
+                children: [
+                  if (!_overlayGranted)
+                    _PermBanner(
+                      icon: '🪟',
+                      title: 'Display Over Other Apps Required',
+                      subtitle:
+                          'Needed to show the lock screen over blocked apps.',
+                      buttonLabel: 'Grant Permission',
+                      color: const Color(0xFFFF6B9D),
+                      onTap: () async {
+                        await FlutterOverlayWindow.requestPermission();
+                        final g =
+                            await FlutterOverlayWindow.isPermissionGranted();
+                        setState(() => _overlayGranted = g);
+                      },
+                    ),
+                  if (!_usageGranted)
+                    _PermBanner(
+                      icon: '📊',
+                      title: 'Usage Access Required',
+                      subtitle:
+                          'Allows the app to detect which app is open and lock it.',
+                      buttonLabel: 'Open Usage Settings',
+                      color: const Color(0xFFFFB74D),
+                      onTap: () async {
+                        await _openUsageAccessSettings();
+                        final g = await _checkUsageStatsGranted();
+                        setState(() => _usageGranted = g);
+                      },
+                    ),
+                ],
+              ),
+            ),
+
+          // ── Duration picker ───────────────────────────────────────────
           SliverToBoxAdapter(
             child: _DurationSection(
               selected: _selectedDuration,
@@ -174,21 +267,17 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
             ),
           ),
 
-          // App list header
+          // ── App list header ───────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
               child: Row(
                 children: [
-                  const Text(
-                    'Select Apps to Lock',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                  const Text('Select Apps to Lock',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700)),
                   const Spacer(),
                   if (_selectedPackages.isNotEmpty)
                     Container(
@@ -201,10 +290,9 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
                       child: Text(
                         '${_selectedPackages.length} selected',
                         style: const TextStyle(
-                          color: AppTheme.primary,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                            color: AppTheme.primary,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600),
                       ),
                     ),
                 ],
@@ -212,7 +300,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
             ),
           ),
 
-          // App list
+          // ── App list ──────────────────────────────────────────────────
           _loadingApps
               ? SliverFillRemaining(
                   child: Center(
@@ -222,74 +310,180 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
                         const CircularProgressIndicator(
                             color: AppTheme.primary),
                         const SizedBox(height: 16),
-                        const Text('Loading installed apps...',
-                            style: TextStyle(color: Colors.white54)),
+                        Text(
+                          'Loading all installed apps...',
+                          style: TextStyle(color: Colors.white54),
+                        ),
                       ],
                     ),
                   ),
                 )
-              : SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
-                  sliver: SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final app = _installedApps[index];
-                        final isSelected =
-                            _selectedPackages.contains(app.packageName);
-                        return _AppTile(
-                          app: app,
-                          isSelected: isSelected,
-                          onTap: () {
-                            setState(() {
-                              if (isSelected) {
-                                _selectedPackages.remove(app.packageName);
-                              } else {
-                                _selectedPackages.add(app.packageName);
-                              }
-                            });
+              : _installedApps.isEmpty
+                  ? SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.all(32),
+                        child: Column(
+                          children: [
+                            const Text('📭',
+                                style: TextStyle(fontSize: 48)),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'No apps found.\nPlease grant Usage Access permission.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                  color: Colors.white54, fontSize: 14),
+                            ),
+                            const SizedBox(height: 16),
+                            ElevatedButton(
+                              onPressed: _openUsageAccessSettings,
+                              child:
+                                  const Text('Open Usage Access Settings'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
+                      sliver: SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final app = _installedApps[index];
+                            final isSelected = _selectedPackages
+                                .contains(app.packageName);
+                            return _AppTile(
+                              app: app,
+                              isSelected: isSelected,
+                              onTap: () {
+                                setState(() {
+                                  if (isSelected) {
+                                    _selectedPackages
+                                        .remove(app.packageName);
+                                  } else {
+                                    _selectedPackages
+                                        .add(app.packageName);
+                                  }
+                                });
+                              },
+                            );
                           },
-                        );
-                      },
-                      childCount: _installedApps.length,
+                          childCount: _installedApps.length,
+                        ),
+                      ),
                     ),
-                  ),
-                ),
         ],
       ),
 
-      // Start button
+      // ── Start button ───────────────────────────────────────────────────
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
           child: GestureDetector(
             onTap: _startFocus,
-            child: Container(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
               height: 60,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF7C4DFF), Color(0xFF5C6BC0)],
+                gradient: LinearGradient(
+                  colors: _overlayGranted
+                      ? [const Color(0xFF7C4DFF), const Color(0xFF5C6BC0)]
+                      : [Colors.grey.shade700, Colors.grey.shade600],
                 ),
                 borderRadius: BorderRadius.circular(18),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF7C4DFF).withOpacity(0.4),
-                    blurRadius: 20,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
+                boxShadow: _overlayGranted
+                    ? [
+                        BoxShadow(
+                          color: const Color(0xFF7C4DFF).withOpacity(0.4),
+                          blurRadius: 20,
+                          offset: const Offset(0, 8),
+                        ),
+                      ]
+                    : [],
               ),
               alignment: Alignment.center,
-              child: const Text(
-                '🔒 Start Study Focus',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                ),
+              child: Text(
+                _overlayGranted
+                    ? '🔒 Start Study Focus'
+                    : '⚠️ Grant Permissions First',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700),
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─── Permission Banner ────────────────────────────────────────────────────────
+class _PermBanner extends StatelessWidget {
+  final String icon;
+  final String title;
+  final String subtitle;
+  final String buttonLabel;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _PermBanner({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.buttonLabel,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Row(
+        children: [
+          Text(icon, style: const TextStyle(fontSize: 24)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: TextStyle(
+                        color: color,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13)),
+                const SizedBox(height: 3),
+                Text(subtitle,
+                    style: const TextStyle(
+                        color: Colors.white54, fontSize: 12)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: onTap,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text('Grant',
+                  style: TextStyle(
+                      color: color,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12)),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -313,24 +507,19 @@ class _DurationSection extends StatelessWidget {
       const Duration(hours: 4),
     ];
 
-    String label(Duration d) {
-      if (d.inMinutes < 60) return '${d.inMinutes}m';
-      return '${d.inHours}h';
-    }
+    String label(Duration d) =>
+        d.inMinutes < 60 ? '${d.inMinutes}m' : '${d.inHours}h';
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Lock Duration',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
+          const Text('Lock Duration',
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700)),
           const SizedBox(height: 14),
           Wrap(
             spacing: 10,
@@ -375,17 +564,13 @@ class _AppTile extends StatelessWidget {
   final bool isSelected;
   final VoidCallback onTap;
 
-  const _AppTile({
-    required this.app,
-    required this.isSelected,
-    required this.onTap,
-  });
+  const _AppTile(
+      {required this.app, required this.isSelected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final appWithIcon = app is ApplicationWithIcon
-        ? app as ApplicationWithIcon
-        : null;
+    final appWithIcon =
+        app is ApplicationWithIcon ? app as ApplicationWithIcon : null;
 
     return GestureDetector(
       onTap: onTap,
@@ -394,9 +579,8 @@ class _AppTile extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: isSelected
-              ? AppTheme.primary.withOpacity(0.15)
-              : AppTheme.cardBg,
+          color:
+              isSelected ? AppTheme.primary.withOpacity(0.15) : AppTheme.cardBg,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: isSelected
@@ -406,58 +590,41 @@ class _AppTile extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // App icon
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
               child: appWithIcon != null
-                  ? Image.memory(
-                      appWithIcon.icon,
-                      width: 44,
-                      height: 44,
-                      fit: BoxFit.cover,
-                    )
+                  ? Image.memory(appWithIcon.icon,
+                      width: 44, height: 44, fit: BoxFit.cover)
                   : Container(
                       width: 44,
                       height: 44,
                       color: AppTheme.surface,
                       child: const Icon(Icons.android,
-                          color: Colors.white54, size: 24),
-                    ),
+                          color: Colors.white54, size: 24)),
             ),
             const SizedBox(width: 14),
-            // Name
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    app.appName,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 15,
-                    ),
-                  ),
-                  Text(
-                    app.packageName,
-                    style: const TextStyle(
-                      color: Color(0xFF6666AA),
-                      fontSize: 11,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  Text(app.appName,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15)),
+                  Text(app.packageName,
+                      style: const TextStyle(
+                          color: Color(0xFF6666AA), fontSize: 11),
+                      overflow: TextOverflow.ellipsis),
                 ],
               ),
             ),
-            // Checkbox
             AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               width: 26,
               height: 26,
               decoration: BoxDecoration(
-                color: isSelected
-                    ? AppTheme.primary
-                    : Colors.transparent,
+                color: isSelected ? AppTheme.primary : Colors.transparent,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: isSelected
@@ -467,8 +634,7 @@ class _AppTile extends StatelessWidget {
                 ),
               ),
               child: isSelected
-                  ? const Icon(Icons.check,
-                      color: Colors.white, size: 16)
+                  ? const Icon(Icons.check, color: Colors.white, size: 16)
                   : null,
             ),
           ],

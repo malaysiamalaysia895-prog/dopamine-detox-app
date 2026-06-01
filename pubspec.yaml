@@ -4,25 +4,50 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.0.0 <4.0.0"
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: '>=3.10.0'
 
 dependencies:
   flutter:
     sdk: flutter
-    
+
+  # State management
   provider: ^6.1.2
+
+  # Local storage
   shared_preferences: ^2.2.3
+
+  # Installed apps
   device_apps: ^2.2.0
+
+  # Permissions
   permission_handler: ^11.3.1
+
+  # Overlay window for app lock
   flutter_overlay_window: ^0.4.2
+
+  # Google Play Billing / IAP
   in_app_purchase: ^3.1.13
+
+  # Onboarding page indicator
   smooth_page_indicator: ^1.1.0
-  
-  # Pedometer ka Purana Version (Jo SDK 35 nahi mangega)
-  pedometer: 3.0.0
-  
+
+  # Pedometer for step tracking
+  pedometer: ^3.0.0
+
+  # Lottie animations
   lottie: ^3.1.2
+
+  # Network image caching
   cached_network_image: ^3.3.1
+
+  # Internet connectivity check
+  connectivity_plus: ^6.0.3
+
+  # Android Intent (for opening Usage Access settings)
+  android_intent_plus: ^5.0.2
+
+  # UUID
   uuid: ^4.4.0
 
 dev_dependencies:

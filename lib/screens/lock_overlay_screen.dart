@@ -2,11 +2,16 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 
-/// This screen is rendered INSIDE the overlay window (separate isolate).
-/// It communicates back to the main app via FlutterOverlayWindow message passing.
+import '../main.dart';
+
+/// Rendered inside the overlay window (separate Flutter isolate).
+/// Communicates with the main app via FlutterOverlayWindow.shareData().
 ///
-/// Emergency unlock: long-press — max 2 uses, 2 minutes each.
-/// Penalty unlock: pay ₹99 via the main app (button opens main app).
+/// Features:
+///   • Live countdown timer (received from main app via shareData messages)
+///   • Emergency unlock: long-press → 2-min window, max 10/day
+///   • Pay ₹99 penalty → opens main app billing flow
+///   • Android 13+ Restricted Settings guidance
 class LockOverlayScreen extends StatefulWidget {
   const LockOverlayScreen({super.key});
 
@@ -16,112 +21,126 @@ class LockOverlayScreen extends StatefulWidget {
 
 class _LockOverlayScreenState extends State<LockOverlayScreen>
     with SingleTickerProviderStateMixin {
-  // ── Emergency state ────────────────────────────────────────────────────────
-  int _emergencyUsesLeft = 2;
+
+  // ── State received from main app via message channel ──────────────────────
+  String _timeRemaining = '--:--:--';
+  int _emergencyUsesLeft = 10;
+  bool _isMobileLock = false;
+  double _progress = 0.0;
+
+  // ── Emergency unlock ───────────────────────────────────────────────────────
   bool _emergencyActive = false;
   Duration _emergencyRemaining = const Duration(minutes: 2);
   Timer? _emergencyTimer;
 
-  // ── Long press progress ────────────────────────────────────────────────────
+  // ── Long-press progress ────────────────────────────────────────────────────
   double _longPressProgress = 0.0;
   Timer? _longPressTimer;
   bool _longPressing = false;
 
-  // ── Animation ─────────────────────────────────────────────────────────────
-  late AnimationController _pulseController;
-  late Animation<double> _pulseAnimation;
+  // ── Billing loading ────────────────────────────────────────────────────────
+  bool _billingLoading = false;
+  bool _showRestrictedGuide = false;
+
+  // ── Pulse animation ────────────────────────────────────────────────────────
+  late AnimationController _pulseCtrl;
+  late Animation<double> _pulseAnim;
 
   @override
   void initState() {
     super.initState();
 
-    _pulseController = AnimationController(
+    _pulseCtrl = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
 
-    _pulseAnimation = Tween<double>(begin: 0.95, end: 1.05).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    _pulseAnim = Tween<double>(begin: 0.94, end: 1.06).animate(
+      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
     );
 
-    // Listen to messages from the main app (e.g., emergency count updates)
-    FlutterOverlayWindow.overlayListener.listen((data) {
-      if (data is Map) {
-        final type = data['type'] as String?;
-        if (type == 'emergency_uses_left') {
-          setState(() => _emergencyUsesLeft = data['value'] as int? ?? 0);
-        }
-        if (type == 'unlock') {
-          FlutterOverlayWindow.closeOverlay();
-        }
-      }
-    });
+    // Listen for messages from the main app
+    FlutterOverlayWindow.overlayListener.listen(_onMessage);
   }
 
-  // ── Long press logic ───────────────────────────────────────────────────────
+  void _onMessage(dynamic data) {
+    if (data is! Map) return;
+    final type = data['type'] as String? ?? '';
+
+    switch (type) {
+      case 'timer_update':
+        if (mounted) {
+          setState(() {
+            _timeRemaining = data['time'] as String? ?? '--:--:--';
+            _emergencyUsesLeft = data['emergencyUsesLeft'] as int? ?? 10;
+            _isMobileLock = data['isMobileLock'] as bool? ?? false;
+            _progress = (data['progress'] as num?)?.toDouble() ?? 0.0;
+          });
+        }
+        break;
+
+      case 'unlock':
+        // Main app confirmed unlock (penalty paid or challenge done)
+        FlutterOverlayWindow.closeOverlay();
+        break;
+
+      case 'restricted_settings':
+        if (mounted) setState(() => _showRestrictedGuide = true);
+        break;
+    }
+  }
+
+  // ── Long-press emergency ───────────────────────────────────────────────────
   void _onLongPressStart(LongPressStartDetails _) {
-    if (_emergencyUsesLeft <= 0 || _emergencyActive) return;
+    if (_emergencyUsesLeft <= 0 || _emergencyActive || _isMobileLock) return;
     _longPressing = true;
     _longPressProgress = 0.0;
 
     _longPressTimer =
-        Timer.periodic(const Duration(milliseconds: 30), (timer) {
+        Timer.periodic(const Duration(milliseconds: 30), (t) {
       if (!_longPressing) {
-        timer.cancel();
-        setState(() => _longPressProgress = 0.0);
+        t.cancel();
+        if (mounted) setState(() => _longPressProgress = 0.0);
         return;
       }
-      setState(() {
-        _longPressProgress += 0.03;
-        if (_longPressProgress >= 1.0) {
-          timer.cancel();
-          _longPressProgress = 0.0;
-          _longPressing = false;
-          _activateEmergency();
-        }
-      });
+      if (mounted) {
+        setState(() {
+          _longPressProgress += 0.03;
+          if (_longPressProgress >= 1.0) {
+            t.cancel();
+            _longPressProgress = 0.0;
+            _longPressing = false;
+            _triggerEmergencyUnlock();
+          }
+        });
+      }
     });
   }
 
   void _onLongPressEnd(LongPressEndDetails _) {
     _longPressing = false;
     _longPressTimer?.cancel();
-    setState(() => _longPressProgress = 0.0);
+    if (mounted) setState(() => _longPressProgress = 0.0);
   }
 
-  void _activateEmergency() {
-    if (_emergencyUsesLeft <= 0) return;
+  void _triggerEmergencyUnlock() {
+    if (_emergencyUsesLeft <= 0 || _isMobileLock) return;
+
+    // Notify main app to decrement daily count + unlock for 2 min
+    FlutterOverlayWindow.shareData({'type': 'emergency_unlock_requested'});
 
     setState(() {
-      _emergencyUsesLeft--;
       _emergencyActive = true;
+      _emergencyUsesLeft = (_emergencyUsesLeft - 1).clamp(0, 10);
       _emergencyRemaining = const Duration(minutes: 2);
     });
 
-    // Notify main app
-    FlutterOverlayWindow.shareData({
-      'type': 'emergency_unlock',
-      'usesLeft': _emergencyUsesLeft,
-    });
-
-    // Close overlay temporarily
+    // Close overlay so user can use phone for 2 min
     FlutterOverlayWindow.closeOverlay();
 
-    // Schedule re-lock after 2 minutes
-    _emergencyTimer = Timer(const Duration(minutes: 2), () {
-      _reActivateOverlay();
-    });
-
-    // Countdown for UI (if overlay is somehow still visible)
-    Timer.periodic(const Duration(seconds: 1), (t) {
-      if (_emergencyRemaining.inSeconds <= 0 || !_emergencyActive) {
-        t.cancel();
-        return;
-      }
-      setState(() {
-        _emergencyRemaining -= const Duration(seconds: 1);
-      });
-    });
+    // Re-show overlay after 2 min
+    _emergencyTimer?.cancel();
+    _emergencyTimer = Timer(const Duration(minutes: 2), _reActivateOverlay);
   }
 
   Future<void> _reActivateOverlay() async {
@@ -129,29 +148,78 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
       _emergencyActive = false;
       _emergencyRemaining = const Duration(minutes: 2);
     });
-
-    await FlutterOverlayWindow.showOverlay(
-      enableDrag: false,
-      overlayTitle: 'Challenge Active',
-      overlayContent: 'Kripya apna challenge complete karein.',
-      flag: OverlayFlag.defaultFlag,
-      alignment: OverlayAlignment.center,
-      visibility: NotificationVisibility.visibilityPublic,
-      positionGravity: PositionGravity.auto,
-      height: WindowSize.fullCover,
-      width: WindowSize.fullCover,
-    );
+    try {
+      await FlutterOverlayWindow.showOverlay(
+        enableDrag: false,
+        overlayTitle: 'Challenge Active',
+        overlayContent: 'Kripya apna challenge complete karein.',
+        flag: OverlayFlag.defaultFlag,
+        alignment: OverlayAlignment.center,
+        visibility: NotificationVisibility.visibilityPublic,
+        positionGravity: PositionGravity.auto,
+        height: WindowSize.fullCover,
+        width: WindowSize.fullCover,
+      );
+    } catch (_) {}
   }
 
-  void _openMainApp() {
-    // Share message to main app to trigger billing
+  // ── Penalty billing ────────────────────────────────────────────────────────
+  Future<void> _payPenalty() async {
+    if (_billingLoading) return;
+
+    final confirmed = await _showPenaltyDialog();
+    if (!confirmed) return;
+
+    setState(() => _billingLoading = true);
+    // Tell the main app to trigger billing
     FlutterOverlayWindow.shareData({'type': 'open_billing'});
-    // The main app should respond by bringing itself to foreground
+    // Main app will send back 'unlock' message on successful purchase
+    setState(() => _billingLoading = false);
+  }
+
+  Future<bool> _showPenaltyDialog() async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppTheme.cardBg,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('💳 Pay ₹99 Penalty?',
+            style: TextStyle(
+                color: Colors.white, fontWeight: FontWeight.w700)),
+        content: const Text(
+          'Early unlock requires a ₹99 payment via Google Play.\n\n'
+          'The lock will ONLY be removed after a SUCCESSFUL payment. '
+          'Cancelling or failing payment keeps the lock active.',
+          style: TextStyle(
+              color: Color(0xFFCCCCDD), fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep Going',
+                style: TextStyle(color: Color(0xFF6666AA))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFF6B9D),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Pay ₹99 & Unlock',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
   }
 
   @override
   void dispose() {
-    _pulseController.dispose();
+    _pulseCtrl.dispose();
     _emergencyTimer?.cancel();
     _longPressTimer?.cancel();
     super.dispose();
@@ -175,172 +243,142 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
           ),
         ),
         child: SafeArea(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Spacer(flex: 2),
-
-              // ── Pulse lock icon ─────────────────────────────────────────
-              ScaleTransition(
-                scale: _pulseAnimation,
-                child: Container(
-                  width: 120,
-                  height: 120,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF7C4DFF), Color(0xFF00E5FF)],
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF7C4DFF).withOpacity(0.5),
-                        blurRadius: 40,
-                        spreadRadius: 10,
+          child: SingleChildScrollView(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
+            child: Column(
+              children: [
+                // ── Lock icon (pulsing) ──────────────────────────────────
+                ScaleTransition(
+                  scale: _pulseAnim,
+                  child: Container(
+                    width: 110,
+                    height: 110,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF7C4DFF), Color(0xFF00E5FF)],
                       ),
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.lock_rounded,
-                    color: Colors.white,
-                    size: 56,
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF7C4DFF).withOpacity(0.5),
+                          blurRadius: 40,
+                          spreadRadius: 10,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      _isMobileLock
+                          ? Icons.phonelink_lock_rounded
+                          : Icons.lock_rounded,
+                      color: Colors.white,
+                      size: 50,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 32),
+                const SizedBox(height: 20),
 
-              // ── Main message ────────────────────────────────────────────
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 40),
-                child: Text(
+                // ── Main message ─────────────────────────────────────────
+                const Text(
                   'Kripya apna challenge\ncomplete karein.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: 26,
+                    fontSize: 22,
                     fontWeight: FontWeight.w800,
                     height: 1.4,
                   ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 40),
-                child: Text(
-                  'App locked until your challenge ends.',
+                const SizedBox(height: 8),
+                Text(
+                  _isMobileLock
+                      ? 'Full phone lock is active.'
+                      : 'App is locked until your challenge ends.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.5),
-                    fontSize: 14,
-                  ),
+                      color: Colors.white.withOpacity(0.45),
+                      fontSize: 13),
                 ),
-              ),
+                const SizedBox(height: 24),
 
-              const Spacer(flex: 2),
-
-              // ── Emergency button ────────────────────────────────────────
-              if (_emergencyUsesLeft > 0) ...[
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 40),
+                // ── Countdown timer ──────────────────────────────────────
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      vertical: 20, horizontal: 24),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                        color: const Color(0xFF7C4DFF).withOpacity(0.25)),
+                  ),
                   child: Column(
                     children: [
+                      const Text('⏱ Time Remaining',
+                          style: TextStyle(
+                              color: Colors.white54,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500)),
+                      const SizedBox(height: 8),
                       Text(
-                        '⚠️ Emergency Uses Left: $_emergencyUsesLeft / 2',
+                        _timeRemaining,
                         style: const TextStyle(
-                          color: Color(0xFFFFB74D),
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                          fontSize: 46,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 3,
+                          fontFeatures: [FontFeature.tabularFigures()],
                         ),
                       ),
-                      const SizedBox(height: 10),
-
-                      // Long-press progress indicator
-                      if (_longPressProgress > 0)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(4),
-                            child: LinearProgressIndicator(
-                              value: _longPressProgress,
-                              backgroundColor:
-                                  Colors.white.withOpacity(0.1),
-                              valueColor:
-                                  const AlwaysStoppedAnimation<Color>(
-                                      Color(0xFFFFB74D)),
-                              minHeight: 5,
-                            ),
-                          ),
-                        ),
-
-                      GestureDetector(
-                        onLongPressStart: _onLongPressStart,
-                        onLongPressEnd: _onLongPressEnd,
-                        child: Container(
-                          width: double.infinity,
-                          padding:
-                              const EdgeInsets.symmetric(vertical: 18),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFFB74D).withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(
-                                color: const Color(0xFFFFB74D)
-                                    .withOpacity(0.4)),
-                          ),
-                          alignment: Alignment.center,
-                          child: const Column(
-                            children: [
-                              Text(
-                                '🔓 Long Press for Emergency',
-                                style: TextStyle(
-                                  color: Color(0xFFFFB74D),
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 16,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'Unlocks for 2 minutes only',
-                                style: TextStyle(
-                                  color: Color(0xFFFFB74D),
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w400,
-                                ),
-                              ),
-                            ],
-                          ),
+                      const SizedBox(height: 14),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: _progress,
+                          backgroundColor: Colors.white12,
+                          valueColor: const AlwaysStoppedAnimation<Color>(
+                              Color(0xFF7C4DFF)),
+                          minHeight: 5,
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 14),
-              ] else ...[
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 40),
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: Colors.red.withOpacity(0.3)),
-                    ),
-                    child: const Text(
-                      '🚫 Emergency uses exhausted.',
-                      style: TextStyle(
-                          color: Colors.redAccent,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 14),
-              ],
+                const SizedBox(height: 20),
 
-              // ── Pay Penalty button ──────────────────────────────────────
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 40),
-                child: GestureDetector(
-                  onTap: _openMainApp,
+                // ── Emergency section (not for Mobile Lock) ──────────────
+                if (!_isMobileLock) ...[
+                  _emergencyUsesLeft > 0
+                      ? _EmergencyButton(
+                          usesLeft: _emergencyUsesLeft,
+                          progress: _longPressProgress,
+                          onLongPressStart: _onLongPressStart,
+                          onLongPressEnd: _onLongPressEnd,
+                        )
+                      : Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                                color: Colors.red.withOpacity(0.25)),
+                          ),
+                          child: const Text(
+                            '🚫 Daily emergency uses exhausted (10/10).\nResets at midnight.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                color: Colors.redAccent,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500),
+                          ),
+                        ),
+                  const SizedBox(height: 16),
+                ],
+
+                // ── Pay penalty ──────────────────────────────────────────
+                GestureDetector(
+                  onTap: _billingLoading ? null : _payPenalty,
                   child: Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(vertical: 18),
@@ -353,27 +391,184 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                         BoxShadow(
                           color: const Color(0xFFFF6B9D).withOpacity(0.3),
                           blurRadius: 20,
-                          offset: const Offset(0, 8),
+                          offset: const Offset(0, 6),
                         ),
                       ],
                     ),
                     alignment: Alignment.center,
-                    child: const Text(
-                      '💳 Pay ₹99 Penalty to Unlock',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16,
-                      ),
-                    ),
+                    child: _billingLoading
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                                color: Colors.white, strokeWidth: 2.5),
+                          )
+                        : const Column(
+                            children: [
+                              Text('💳 Early Unlock',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 17)),
+                              SizedBox(height: 3),
+                              Text('Pay ₹99 Penalty via Google Play',
+                                  style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 12)),
+                            ],
+                          ),
                   ),
                 ),
-              ),
+                const SizedBox(height: 16),
 
-              const SizedBox(height: 40),
-            ],
+                // ── Android 13+ Restricted Settings Guide ────────────────
+                if (_showRestrictedGuide) _RestrictedSettingsGuide(),
+
+                const SizedBox(height: 8),
+                GestureDetector(
+                  onTap: () =>
+                      setState(() => _showRestrictedGuide = !_showRestrictedGuide),
+                  child: Text(
+                    _showRestrictedGuide
+                        ? 'Hide help ▲'
+                        : 'Overlay not showing? Tap for help ▼',
+                    style: TextStyle(
+                        color: Colors.white.withOpacity(0.3),
+                        fontSize: 11),
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+              ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─── Emergency Button Widget ──────────────────────────────────────────────────
+class _EmergencyButton extends StatelessWidget {
+  final int usesLeft;
+  final double progress;
+  final void Function(LongPressStartDetails) onLongPressStart;
+  final void Function(LongPressEndDetails) onLongPressEnd;
+
+  const _EmergencyButton({
+    required this.usesLeft,
+    required this.progress,
+    required this.onLongPressStart,
+    required this.onLongPressEnd,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text('⚡ Emergency Uses Today: ',
+                style:
+                    TextStyle(color: Color(0xFFFFB74D), fontSize: 12)),
+            Text(
+              '$usesLeft / 10 remaining',
+              style: const TextStyle(
+                  color: Color(0xFFFFB74D),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (progress > 0)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: progress,
+                backgroundColor: Colors.white.withOpacity(0.08),
+                valueColor: const AlwaysStoppedAnimation<Color>(
+                    Color(0xFFFFB74D)),
+                minHeight: 4,
+              ),
+            ),
+          ),
+        GestureDetector(
+          onLongPressStart: onLongPressStart,
+          onLongPressEnd: onLongPressEnd,
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 18),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFB74D).withOpacity(0.1),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                  color: const Color(0xFFFFB74D).withOpacity(0.35)),
+            ),
+            alignment: Alignment.center,
+            child: const Column(
+              children: [
+                Text('🔓 Long Press for Emergency Unlock',
+                    style: TextStyle(
+                        color: Color(0xFFFFB74D),
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15)),
+                SizedBox(height: 4),
+                Text('Unlocks for 2 minutes • Auto-relocks',
+                    style: TextStyle(
+                        color: Color(0xFFFFB74D),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w400)),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Android 13+ Restricted Settings Guide ───────────────────────────────────
+class _RestrictedSettingsGuide extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF00E5FF).withOpacity(0.06),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: const Color(0xFF00E5FF).withOpacity(0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '📱 Android 13+ — Overlay Not Working?',
+            style: TextStyle(
+                color: Color(0xFF00E5FF),
+                fontWeight: FontWeight.w700,
+                fontSize: 13),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Android 13+ blocks "Display over other apps" for sideloaded apps.\n\n'
+            'To fix:\n'
+            '1. Open phone Settings\n'
+            '2. Go to Apps → Dopamine Detox\n'
+            '3. Tap "3-dot menu" (top right)\n'
+            '4. Tap "Allow Restricted Settings"\n'
+            '5. Return here and enable the permission',
+            style: TextStyle(
+                color: Colors.white60,
+                fontSize: 12,
+                height: 1.6),
+          ),
+        ],
       ),
     );
   }

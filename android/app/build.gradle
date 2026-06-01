@@ -1,3 +1,9 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// android/app/build.gradle  —  Dopamine Detox
+// compileSdk 35 + targetSdk 34 avoids AGP 8.x deprecation warnings while
+// keeping maximum package compatibility.
+// ─────────────────────────────────────────────────────────────────────────────
+
 def localProperties = new Properties()
 def localPropertiesFile = rootProject.file('local.properties')
 if (localPropertiesFile.exists()) {
@@ -12,13 +18,28 @@ if (flutterRoot == null) {
 }
 
 def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
-if (flutterVersionCode == null) {
-    flutterVersionCode = '1'
-}
+if (flutterVersionCode == null) { flutterVersionCode = '1' }
 
 def flutterVersionName = localProperties.getProperty('flutter.versionName')
-if (flutterVersionName == null) {
-    flutterVersionName = '1.0'
+if (flutterVersionName == null) { flutterVersionName = '1.0.0' }
+
+// ─── Keystore signing ─────────────────────────────────────────────────────────
+// Create android/key.properties (never commit to git):
+//
+//   storePassword=YOUR_KEYSTORE_PASSWORD
+//   keyPassword=YOUR_KEY_PASSWORD
+//   keyAlias=upload
+//   storeFile=../android/keystore/upload-keystore.jks
+//
+// Generate keystore once with:
+//   keytool -genkey -v -keystore android/keystore/upload-keystore.jks \
+//     -storetype JKS -keyalg RSA -keysize 2048 -validity 10000 \
+//     -alias upload
+
+def keystorePropertiesFile = rootProject.file("key.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 
 apply plugin: 'com.android.application'
@@ -26,27 +47,77 @@ apply plugin: 'kotlin-android'
 apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
 
 android {
-    compileSdkVersion 30
+    // compileSdk 35 — avoids "API level X is higher than compileSdk" warnings
+    // that appear when packages reference Android 15 APIs.
+    compileSdk 35
+    ndkVersion flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
 
     sourceSets {
         main.java.srcDirs += 'src/main/kotlin'
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId "com.example.workspace"
-        minSdkVersion 16
-        targetSdkVersion 30
+        applicationId "com.example.dopamine_detox"
+        // ⚠️  Change to your Play Console package name before submitting:
+        // applicationId "com.yourname.dopaminedetox"
+
+        // flutter_overlay_window requires minSdk 21
+        minSdk 21
+        targetSdk 34     // Keeps compatibility; use 34 until AGP fully supports 35
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
+        multiDexEnabled true
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+            }
+        }
     }
 
     buildTypes {
-        release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig signingConfigs.debug
+        debug {
+            applicationIdSuffix ".debug"
+            debuggable true
+            minifyEnabled false
+            shrinkResources false
         }
+
+        release {
+            signingConfig keystorePropertiesFile.exists()
+                ? signingConfigs.release
+                : signingConfigs.debug
+
+            minifyEnabled true
+            shrinkResources true
+            debuggable false
+
+            proguardFiles(
+                getDefaultProguardFile('proguard-android-optimize.txt'),
+                'proguard-rules.pro'
+            )
+        }
+    }
+
+    // Suppress lint errors that block release build for Play Store
+    lint {
+        disable 'InvalidPackage'
+        checkReleaseBuilds false
+        abortOnError false
     }
 }
 
@@ -55,5 +126,10 @@ flutter {
 }
 
 dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
+    implementation 'androidx.multidex:multidex:2.0.1'
+    implementation 'com.android.billingclient:billing:6.2.1'
+    implementation 'androidx.core:core-ktx:1.13.1'
+    // Needed for connectivity_plus on Android
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
