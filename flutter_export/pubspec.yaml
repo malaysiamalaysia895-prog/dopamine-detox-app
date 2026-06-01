@@ -1,0 +1,33 @@
+name: tech_tycoon_merge
+description: Tech Tycoon Merge - 50-Level Android Puzzle Game
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.1
+  google_mobile_ads: ^5.1.0
+  audioplayers: ^6.0.0
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/audio/
+
+  fonts:
+    - family: Orbitron
+      fonts:
+        - asset: assets/fonts/Orbitron-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Orbitron-Regular.ttf
