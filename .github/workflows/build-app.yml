@@ -20,7 +20,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.6'
+          channel: 'stable'
           
       - name: Auto-Find Project, Fix Android, and Build
         run: |
@@ -30,12 +30,11 @@ jobs:
           echo "Folder mil gaya yahan: $DIR"
           cd "$DIR"
           
-          # Pehle packages ko latest version par update karein
-          flutter pub get
-          flutter pub upgrade
-          
-          echo "Replit ki missing Android files ko naya bana raha hoon..."
+          # Pehle nayi Android files banayega taaki Ads ka error na aaye
           flutter create .
+          
+          # Ab saare packages install karega
+          flutter pub get
           
           # Final APK banayega
           flutter build apk --release
