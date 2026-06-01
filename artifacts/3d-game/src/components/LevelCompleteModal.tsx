@@ -1,13 +1,16 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { useGameStore } from "../store/useGameStore";
 import { LEVELS, PHASE_THEMES } from "../data/gameData";
 import { AdManagerService } from "../services/adManager";
 
 export function LevelCompleteModal() {
-  const { phase, currentLevel, levelCompleteCoins, multiplyCoins, setPhase, startLevel } = useGameStore();
+  const {
+    phase, currentLevel, levelCompleteCoins,
+    multiplyCoins, setPhase, startLevel,
+  } = useGameStore();
+
   const [adWatched, setAdWatched] = useState(false);
-  const [collectCoins, setCollectCoins] = useState(0);
   const [awaitingInterstitial, setAwaitingInterstitial] = useState(false);
 
   if (phase !== "level_complete") return null;
@@ -16,19 +19,22 @@ export function LevelCompleteModal() {
   const theme = PHASE_THEMES[cfg.theme];
   const isLastLevel = currentLevel === LEVELS.length - 1;
 
-  // Calculate displayed coins
-  const displayCoins = adWatched ? levelCompleteCoins * 3 : levelCompleteCoins;
+  // The coins shown already reflect any multiplier applied to levelCompleteCoins in the store
+  const displayCoins = adWatched ? levelCompleteCoins : levelCompleteCoins;
 
+  // ── Rule 3: Watch rewarded ad for 3× coins (allowScoreMultiplier gate) ─────
   async function handleWatchAd() {
-    // Rule 3: Rewarded ad for 3x coins
+    if (!cfg.allowScoreMultiplier) return;
     await AdManagerService.showRewardedAd(() => {
+      // onSuccess fires only on full ad completion — multiply coins now
       multiplyCoins(3);
       setAdWatched(true);
     });
   }
 
+  // ── Rule 4: Interstitial fires on every "Next Level" tap (triggerInterstitialNext gate) ──
   async function handleNextLevel() {
-    // Collect coins into total
+    // Collect coins into running total first
     useGameStore.setState(s => ({
       totalCoins: s.totalCoins + s.levelCompleteCoins,
     }));
@@ -38,12 +44,16 @@ export function LevelCompleteModal() {
       return;
     }
 
-    // Rule 4: Strict interstitial before loading next level
-    setAwaitingInterstitial(true);
-    await AdManagerService.showInterstitialAd(() => {
-      setAwaitingInterstitial(false);
+    if (cfg.triggerInterstitialNext) {
+      // Strictly block next level load until interstitial onDismiss fires
+      setAwaitingInterstitial(true);
+      await AdManagerService.showInterstitialAd(() => {
+        setAwaitingInterstitial(false);
+        startLevel(currentLevel + 1);
+      });
+    } else {
       startLevel(currentLevel + 1);
-    });
+    }
   }
 
   return (
@@ -56,15 +66,14 @@ export function LevelCompleteModal() {
         initial={{ scale: 0.8, y: 40 }}
         animate={{ scale: 1, y: 0 }}
         transition={{ type: "spring", stiffness: 300, damping: 20 }}
-        className="w-full max-w-sm rounded-2xl overflow-hidden border border-white/10"
+        className="w-full max-w-sm rounded-2xl overflow-hidden border"
         style={{
           background: `linear-gradient(135deg, ${theme.primary}22, #000)`,
           borderColor: theme.primary + "44",
         }}
       >
-        {/* Header */}
-        <div className="p-6 text-center relative overflow-hidden">
-          {/* Star burst */}
+        {/* ── Header ── */}
+        <div className="p-6 text-center">
           <motion.div
             initial={{ scale: 0 }}
             animate={{ scale: 1, rotate: [0, 15, -10, 5, 0] }}
@@ -91,58 +100,74 @@ export function LevelCompleteModal() {
           </motion.p>
         </div>
 
-        {/* Coin reward */}
+        {/* ── Coin reward ── */}
         <div className="mx-4 mb-4 p-4 rounded-xl bg-black/40 border border-white/10 text-center">
           <p className="text-white/50 text-xs mb-1">Coins Earned</p>
           <motion.div
-            key={displayCoins}
-            initial={{ scale: 1.4 }}
+            key={levelCompleteCoins}
+            initial={{ scale: 1.3 }}
             animate={{ scale: 1 }}
             className="text-yellow-400 font-black text-4xl"
           >
-            💰 {displayCoins.toLocaleString()}
+            💰 {levelCompleteCoins.toLocaleString()}
           </motion.div>
-          {adWatched && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-green-400 text-xs font-bold mt-1"
-            >
-              ✓ 3X MULTIPLIER APPLIED!
-            </motion.div>
-          )}
+          <AnimatePresence>
+            {adWatched && (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="text-green-400 text-xs font-bold mt-1"
+              >
+                ✓ 3× MULTIPLIER APPLIED!
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
-        {/* Actions */}
+        {/* ── Actions ── */}
         <div className="px-4 pb-6 flex flex-col gap-3">
-          {/* Rule 3: 3x ad button */}
-          {!adWatched && (
+          {/* Rule 3 — 3× ad button, only rendered when allowScoreMultiplier is true */}
+          {cfg.allowScoreMultiplier && !adWatched && (
             <motion.button
               whileTap={{ scale: 0.97 }}
               onClick={handleWatchAd}
               className="w-full py-4 rounded-xl font-black text-lg text-black border-2 border-yellow-300"
-              style={{ background: `linear-gradient(135deg, #FFD700, #FFA500)` }}
+              style={{ background: "linear-gradient(135deg, #FFD700, #FFA500)" }}
               animate={{
-                boxShadow: ["0 0 10px #FFD70088", "0 0 25px #FFD700bb", "0 0 10px #FFD70088"],
+                boxShadow: [
+                  "0 0 10px #FFD70088",
+                  "0 0 28px #FFD700cc",
+                  "0 0 10px #FFD70088",
+                ],
               }}
               transition={{ boxShadow: { repeat: Infinity, duration: 1.5 } }}
             >
-              📺 Watch Ad to get 3X Coins!
+              📺 Watch Ad to get 3× Coins!
             </motion.button>
           )}
 
-          {/* Next level button — triggers interstitial (Rule 4) */}
+          {/* Rule 4 — Next Level, fires interstitial when triggerInterstitialNext is true.
+              The next level's grid ONLY loads inside the onDismiss callback. */}
           <button
             onClick={handleNextLevel}
             disabled={awaitingInterstitial}
-            className="w-full py-3 rounded-xl font-bold text-white border border-white/20 bg-white/10 disabled:opacity-50"
+            className="w-full py-3 rounded-xl font-bold text-white border border-white/20 bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {awaitingInterstitial
-              ? "Loading..."
+              ? "⏳ Loading ad…"
               : isLastLevel
               ? "🎉 Back to Menu"
+              : cfg.triggerInterstitialNext
+              ? "Next Level →"   // interstitial fires first
               : "Next Level →"}
           </button>
+
+          {/* Interstitial unit ID badge (shown while awaiting) */}
+          {awaitingInterstitial && (
+            <p className="text-center text-[10px] text-white/30">
+              Interstitial · {cfg.interstitialAdUnitId}
+            </p>
+          )}
         </div>
       </motion.div>
     </motion.div>
