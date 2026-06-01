@@ -1,14 +1,86 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:lottie/lottie.dart';
 import 'package:provider/provider.dart';
 
 import '../main.dart';
 import '../providers/app_state_provider.dart';
+import '../services/billing_service.dart';
 import 'study_focus_screen.dart';
 import 'health_challenge_screen.dart';
 
-class HomeScreen extends StatelessWidget {
+/// HomeScreen listens to overlay messages so billing can be triggered
+/// from the overlay isolate via FlutterOverlayWindow.shareData().
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  // ── Bug fix #5: listen for overlay → main-app messages ────────────────────
+  StreamSubscription? _overlaySub;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribeToOverlayMessages();
+  }
+
+  void _subscribeToOverlayMessages() {
+    _overlaySub = FlutterOverlayWindow.overlayListener.listen((data) async {
+      if (data is! Map) return;
+      final type = data['type'] as String? ?? '';
+
+      switch (type) {
+        case 'open_billing':
+          // Overlay requests billing — trigger it in the main app context
+          await _handleBillingRequest();
+          break;
+
+        case 'emergency_unlock_requested':
+          // Overlay consumed one emergency use — sync to provider
+          final provider = context.read<AppStateProvider>();
+          provider.activateEmergencyUnlock();
+          break;
+      }
+    });
+  }
+
+  Future<void> _handleBillingRequest() async {
+    final billing = context.read<BillingService>();
+    final provider = context.read<AppStateProvider>();
+
+    // Wire up success callback
+    billing.onPurchaseSuccess = () {
+      provider.unlockAll();
+      // Tell overlay to close
+      FlutterOverlayWindow.shareData({'type': 'unlock'});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('✅ Penalty paid — lock removed.')),
+        );
+      }
+    };
+
+    try {
+      await billing.buyPenalty();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('❌ Payment error: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _overlaySub?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -19,16 +91,16 @@ class HomeScreen extends StatelessWidget {
       body: CustomScrollView(
         physics: const BouncingScrollPhysics(),
         slivers: [
-          // ── Header ──────────────────────────────────────────────────
+          // ── Header ────────────────────────────────────────────────────
           SliverToBoxAdapter(child: _Header(isLocked: provider.isLocked)),
 
-          // ── Active Challenge Banner ──────────────────────────────────
+          // ── Active Challenge Banner ────────────────────────────────────
           if (provider.isLocked)
             SliverToBoxAdapter(
               child: _ActiveChallengeBanner(provider: provider),
             ),
 
-          // ── Action Cards ─────────────────────────────────────────────
+          // ── Action Cards ──────────────────────────────────────────────
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
             sliver: SliverList(
@@ -36,7 +108,8 @@ class HomeScreen extends StatelessWidget {
                 _ActionCard(
                   icon: '📚',
                   title: 'Focus on Your Study',
-                  subtitle: 'Lock distracting apps & study without interruptions.',
+                  subtitle:
+                      'Lock distracting apps & study without interruptions.',
                   gradientColors: const [Color(0xFF7C4DFF), Color(0xFF5C6BC0)],
                   glowColor: const Color(0xFF7C4DFF),
                   isLocked: provider.isLocked,
@@ -53,7 +126,8 @@ class HomeScreen extends StatelessWidget {
                   gradientColors: const [Color(0xFFFF6B9D), Color(0xFFFF8E53)],
                   glowColor: const Color(0xFFFF6B9D),
                   isLocked: provider.isLocked,
-                  onTap: () => _showMobileLockDialog(context, provider),
+                  onTap: () =>
+                      _showMobileLockDialog(context, provider, billing: context.read<BillingService>()),
                 ),
                 const SizedBox(height: 16),
                 _ActionCard(
@@ -69,8 +143,6 @@ class HomeScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 16),
-
-                // ── Stats row ─────────────────────────────────────────
                 _StatsRow(provider: provider),
               ]),
             ),
@@ -87,17 +159,25 @@ class HomeScreen extends StatelessWidget {
         position: Tween<Offset>(
           begin: const Offset(1, 0),
           end: Offset.zero,
-        ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
+        ).animate(CurvedAnimation(
+            parent: animation, curve: Curves.easeOutCubic)),
         child: child,
       ),
       transitionDuration: const Duration(milliseconds: 400),
     );
   }
 
-  void _showMobileLockDialog(BuildContext context, AppStateProvider provider) {
+  void _showMobileLockDialog(
+    BuildContext context,
+    AppStateProvider provider, {
+    required BillingService billing,
+  }) {
     if (provider.isLocked) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('A challenge is already active.')),
+        const SnackBar(
+          content: Text('⚠️ A challenge is already active.'),
+          backgroundColor: Colors.orange,
+        ),
       );
       return;
     }
@@ -116,15 +196,18 @@ class HomeScreen extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const Text('Mobile Lock Duration',
+                  style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white)),
+              const SizedBox(height: 8),
               const Text(
-                'Mobile Lock Duration',
+                '⚠️ Full phone lock cannot be emergency-unlocked.\nOnly ₹99 penalty unlocks it.',
                 style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                ),
+                    color: Color(0xFFFF6B9D), fontSize: 12, height: 1.4),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
               Wrap(
                 spacing: 10,
                 runSpacing: 10,
@@ -147,18 +230,16 @@ class HomeScreen extends StatelessWidget {
                     backgroundColor: const Color(0xFFFF6B9D),
                     padding: const EdgeInsets.symmetric(vertical: 18),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
+                        borderRadius: BorderRadius.circular(16)),
                   ),
                   onPressed: () {
+                    billing.onPurchaseSuccess = () => provider.unlockAll();
                     provider.startMobileLock(duration: selected);
                     Navigator.pop(ctx);
                   },
-                  child: const Text(
-                    '🔒 Start Mobile Lock',
-                    style: TextStyle(
-                        fontSize: 17, fontWeight: FontWeight.w700),
-                  ),
+                  child: const Text('🔒 Start Mobile Lock',
+                      style: TextStyle(
+                          fontSize: 17, fontWeight: FontWeight.w700)),
                 ),
               ),
               const SizedBox(height: 16),
@@ -189,7 +270,6 @@ class _Header extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Text section
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -197,10 +277,9 @@ class _Header extends StatelessWidget {
                 Text(
                   isLocked ? '🔒 Challenge Active' : '👋 Welcome Back!',
                   style: const TextStyle(
-                    fontSize: 14,
-                    color: Color(0xFF9999BB),
-                    fontWeight: FontWeight.w500,
-                  ),
+                      fontSize: 14,
+                      color: Color(0xFF9999BB),
+                      fontWeight: FontWeight.w500),
                 ),
                 const SizedBox(height: 6),
                 ShaderMask(
@@ -210,37 +289,28 @@ class _Header extends StatelessWidget {
                   child: const Text(
                     'Dopamine\nDetox',
                     style: TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      height: 1.1,
-                    ),
+                        fontSize: 32,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        height: 1.1),
                   ),
                 ),
                 const SizedBox(height: 10),
                 const Text(
                   'Build better habits, one day at a time.',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Color(0xFF6666AA),
-                  ),
+                  style: TextStyle(fontSize: 13, color: Color(0xFF6666AA)),
                 ),
               ],
             ),
           ),
-
-          // Anime illustration (Lottie)
           SizedBox(
             width: 130,
             height: 130,
             child: Lottie.network(
               'https://assets4.lottiefiles.com/packages/lf20_jcikwtux.json',
               fit: BoxFit.contain,
-              errorBuilder: (_, __, ___) => const Text(
-                '🧑‍💻',
-                style: TextStyle(fontSize: 80),
-                textAlign: TextAlign.center,
-              ),
+              errorBuilder: (_, __, ___) =>
+                  const Text('🧑‍💻', style: TextStyle(fontSize: 80)),
             ),
           ),
         ],
@@ -269,18 +339,17 @@ class _ActiveChallengeBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final remaining = provider.remainingTime;
-    final h = remaining.inHours.toString().padLeft(2, '0');
-    final m = (remaining.inMinutes % 60).toString().padLeft(2, '0');
-    final s = (remaining.inSeconds % 60).toString().padLeft(2, '0');
+    final r = provider.remainingTime;
+    final h = r.inHours.toString().padLeft(2, '0');
+    final m = (r.inMinutes % 60).toString().padLeft(2, '0');
+    final s = (r.inSeconds % 60).toString().padLeft(2, '0');
 
     return Container(
       margin: const EdgeInsets.fromLTRB(20, 0, 20, 16),
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF7C4DFF), Color(0xFF00E5FF)],
-        ),
+            colors: [Color(0xFF7C4DFF), Color(0xFF00E5FF)]),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
@@ -296,26 +365,18 @@ class _ActiveChallengeBanner extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  _title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 16,
-                  ),
-                ),
+                Text(_title,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16)),
                 const SizedBox(height: 4),
-                Text(
-                  'Remaining: $h:$m:$s',
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 13,
-                  ),
-                ),
+                Text('Remaining: $h:$m:$s',
+                    style: const TextStyle(
+                        color: Colors.white70, fontSize: 13)),
               ],
             ),
           ),
-          // Progress ring
           SizedBox(
             width: 50,
             height: 50,
@@ -364,9 +425,7 @@ class _ActionCard extends StatelessWidget {
           color: AppTheme.cardBg,
           borderRadius: BorderRadius.circular(24),
           border: Border.all(
-            color: gradientColors.first.withOpacity(0.25),
-            width: 1.5,
-          ),
+              color: gradientColors.first.withOpacity(0.25), width: 1.5),
           boxShadow: [
             BoxShadow(
               color: glowColor.withOpacity(0.08),
@@ -377,49 +436,39 @@ class _ActionCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // Icon container with gradient
             Container(
               width: 60,
               height: 60,
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: gradientColors,
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
+                    colors: gradientColors,
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight),
                 borderRadius: BorderRadius.circular(18),
               ),
               alignment: Alignment.center,
               child: Text(icon, style: const TextStyle(fontSize: 28)),
             ),
             const SizedBox(width: 16),
-            // Text
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                  Text(title,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700)),
                   const SizedBox(height: 5),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      color: Color(0xFF8888AA),
-                      fontSize: 12,
-                      height: 1.4,
-                    ),
-                  ),
+                  Text(subtitle,
+                      style: const TextStyle(
+                          color: Color(0xFF8888AA),
+                          fontSize: 12,
+                          height: 1.4)),
                 ],
               ),
             ),
             const SizedBox(width: 12),
-            // Arrow
             Container(
               width: 36,
               height: 36,
@@ -427,11 +476,8 @@ class _ActionCard extends StatelessWidget {
                 color: gradientColors.first.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(
-                Icons.arrow_forward_ios_rounded,
-                color: gradientColors.first,
-                size: 16,
-              ),
+              child: Icon(Icons.arrow_forward_ios_rounded,
+                  color: gradientColors.first, size: 16),
             ),
           ],
         ),
@@ -450,18 +496,16 @@ class _StatsRow extends StatelessWidget {
     return Row(
       children: [
         _StatTile(
-          icon: '🔥',
-          label: 'Streak',
-          value: '0 days',
-          color: const Color(0xFFFF6B9D),
-        ),
+            icon: '🔥',
+            label: 'Streak',
+            value: '0 days',
+            color: const Color(0xFFFF6B9D)),
         const SizedBox(width: 12),
         _StatTile(
-          icon: '👟',
-          label: 'Today Steps',
-          value: '${provider.currentSteps}',
-          color: const Color(0xFF00E5FF),
-        ),
+            icon: '👟',
+            label: 'Today Steps',
+            value: '${provider.currentSteps}',
+            color: const Color(0xFF00E5FF)),
       ],
     );
   }
@@ -472,7 +516,6 @@ class _StatTile extends StatelessWidget {
   final String label;
   final String value;
   final Color color;
-
   const _StatTile({
     required this.icon,
     required this.label,
@@ -497,15 +540,12 @@ class _StatTile extends StatelessWidget {
             const SizedBox(height: 8),
             Text(value,
                 style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: color,
-                )),
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: color)),
             Text(label,
                 style: const TextStyle(
-                  fontSize: 12,
-                  color: Color(0xFF6666AA),
-                )),
+                    fontSize: 12, color: Color(0xFF6666AA))),
           ],
         ),
       ),
@@ -518,7 +558,6 @@ class _DurationChip extends StatelessWidget {
   final bool selected;
   final Color color;
   final VoidCallback onTap;
-
   const _DurationChip({
     required this.label,
     required this.selected,
@@ -538,13 +577,10 @@ class _DurationChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: color.withOpacity(0.4)),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? Colors.white : color,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
+        child: Text(label,
+            style: TextStyle(
+                color: selected ? Colors.white : color,
+                fontWeight: FontWeight.w700)),
       ),
     );
   }

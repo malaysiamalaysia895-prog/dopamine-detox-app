@@ -16,171 +16,225 @@ class HealthChallengeScreen extends StatefulWidget {
   State<HealthChallengeScreen> createState() => _HealthChallengeScreenState();
 }
 
-class _HealthChallengeScreenState extends State<HealthChallengeScreen> {
+class _HealthChallengeScreenState extends State<HealthChallengeScreen>
+    with WidgetsBindingObserver {
+
   // ── Pedometer ──────────────────────────────────────────────────────────────
-  StreamSubscription<StepCount>? _stepSubscription;
-  StreamSubscription<PedestrianStatus>? _statusSubscription;
-  int _initialStepCount = -1;
+  StreamSubscription<StepCount>? _stepSub;
+  StreamSubscription<PedestrianStatus>? _statusSub;
+  int _baseStepCount = -1;  // step count at challenge start
   int _sessionSteps = 0;
-  String _pedometerStatus = 'stopped';
+  String _pedeStatus = 'stopped';
 
   // ── Permission ─────────────────────────────────────────────────────────────
-  PermissionStatus _permissionStatus = PermissionStatus.denied;
-  bool _permissionChecked = false;
+  PermissionStatus _permStatus = PermissionStatus.denied;
+  bool _permChecked = false;
 
-  // ── Challenge state ────────────────────────────────────────────────────────
-  bool _challengeStarted = false;
-
-  // ── Billing loading ────────────────────────────────────────────────────────
+  // ── Billing ────────────────────────────────────────────────────────────────
   bool _billingLoading = false;
 
   // ── Presets ────────────────────────────────────────────────────────────────
   final List<_ChallengePreset> _presets = const [
     _ChallengePreset(
-      emoji: '🚶',
-      title: '10 Min Walk',
-      subtitle: '1,000 steps',
-      duration: Duration(minutes: 10),
-      targetSteps: 1000,
+      emoji: '🚶', title: '10 Min Walk',    subtitle: '~1,000 steps',
+      duration: Duration(minutes: 10), targetSteps: 1000,
       color: Color(0xFF00E5FF),
     ),
     _ChallengePreset(
-      emoji: '🏃',
-      title: '15 Min Run',
-      subtitle: '1,500 steps',
-      duration: Duration(minutes: 15),
-      targetSteps: 1500,
+      emoji: '🏃', title: '15 Min Run',     subtitle: '~1,500 steps',
+      duration: Duration(minutes: 15), targetSteps: 1500,
       color: Color(0xFF69F0AE),
     ),
     _ChallengePreset(
-      emoji: '🔥',
-      title: '30 Min Workout',
-      subtitle: '3,000 steps',
-      duration: Duration(minutes: 30),
-      targetSteps: 3000,
+      emoji: '🔥', title: '30 Min Workout', subtitle: '~3,000 steps',
+      duration: Duration(minutes: 30), targetSteps: 3000,
       color: Color(0xFFFF6B9D),
     ),
     _ChallengePreset(
-      emoji: '⚡',
-      title: '45 Min Jog',
-      subtitle: '4,500 steps',
-      duration: Duration(minutes: 45),
-      targetSteps: 4500,
+      emoji: '⚡', title: '45 Min Jog',     subtitle: '~4,500 steps',
+      duration: Duration(minutes: 45), targetSteps: 4500,
       color: Color(0xFFFFB74D),
     ),
   ];
-
-  int _selectedPresetIndex = 1;
+  int _selectedIndex = 1;
 
   @override
   void initState() {
     super.initState();
-    _requestActivityPermission();
+    WidgetsBinding.instance.addObserver(this);
+    _checkPermission();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Re-check permission when user returns from Settings screen
+    if (state == AppLifecycleState.resumed && !_permStatus.isGranted) {
+      _checkPermission();
+    }
   }
 
   // ── Permission ─────────────────────────────────────────────────────────────
 
-  Future<void> _requestActivityPermission() async {
-    // Explicitly request ACTIVITY_RECOGNITION at runtime
-    final status = await Permission.activityRecognition.request();
-    setState(() {
-      _permissionStatus = status;
-      _permissionChecked = true;
-    });
+  Future<void> _checkPermission() async {
+    final status = await Permission.activityRecognition.status;
+    if (mounted) setState(() => _permStatus = status);
+  }
 
-    if (status.isGranted) {
-      // If a challenge was already running (app reopened), restart pedometer
-      final provider = context.read<AppStateProvider>();
-      if (provider.activeChallenge == ChallengeType.healthChallenge) {
-        _startPedometer();
+  /// Requests ACTIVITY_RECOGNITION. On Android 10+ this shows the system dialog.
+  /// If permanently denied, opens App Settings so user can enable manually.
+  Future<void> _requestPermission() async {
+    if (_permStatus.isPermanentlyDenied) {
+      // System dialog will not appear — must open Settings
+      await openAppSettings();
+      return;
+    }
+
+    final result = await Permission.activityRecognition.request();
+    if (mounted) {
+      setState(() {
+        _permStatus = result;
+        _permChecked = true;
+      });
+
+      if (result.isGranted) {
+        // If a challenge is already active, reconnect pedometer
+        final provider = context.read<AppStateProvider>();
+        if (provider.activeChallenge == ChallengeType.healthChallenge) {
+          _startPedometer();
+        }
+      } else if (result.isPermanentlyDenied) {
+        // Show settings guidance
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+                '⚠️ Permission denied. Opening App Settings…'),
+            action: SnackBarAction(
+              label: 'Settings',
+              onPressed: openAppSettings,
+            ),
+          ),
+        );
+        await Future.delayed(const Duration(seconds: 1));
+        await openAppSettings();
       }
     }
   }
 
-  bool get _permissionGranted => _permissionStatus.isGranted;
+  bool get _permGranted => _permStatus.isGranted;
 
   // ── Pedometer ──────────────────────────────────────────────────────────────
 
   void _startPedometer() {
-    _stepSubscription?.cancel();
-    _statusSubscription?.cancel();
-
-    _stepSubscription = Pedometer.stepCountStream
-        .listen(_onStepCount, onError: _onStepError);
-    _statusSubscription = Pedometer.pedestrianStatusStream
-        .listen(_onPedestrianStatus, onError: _onStatusError);
+    _stepSub?.cancel();
+    _statusSub?.cancel();
+    _stepSub = Pedometer.stepCountStream.listen(
+      _onStep,
+      onError: (_) => setState(() => _pedeStatus = 'sensor_error'),
+      cancelOnError: false,
+    );
+    _statusSub = Pedometer.pedestrianStatusStream.listen(
+      (e) { if (mounted) setState(() => _pedeStatus = e.status); },
+      onError: (_) {},
+      cancelOnError: false,
+    );
   }
 
-  void _onStepCount(StepCount event) {
+  void _onStep(StepCount event) {
     if (!mounted) return;
-    final provider = context.read<AppStateProvider>();
-    if (_initialStepCount < 0) _initialStepCount = event.steps;
-    final session = event.steps - _initialStepCount;
+    if (_baseStepCount < 0) _baseStepCount = event.steps;
+    final session = event.steps - _baseStepCount;
     setState(() => _sessionSteps = session);
-    provider.updateSteps(session);
+    context.read<AppStateProvider>().updateSteps(session);
   }
 
-  void _onStepError(Object error) {
-    setState(() => _pedometerStatus = 'error');
-  }
+  // ── Start challenge ────────────────────────────────────────────────────────
 
-  void _onPedestrianStatus(PedestrianStatus event) {
-    if (mounted) setState(() => _pedometerStatus = event.status);
-  }
+  Future<void> _startChallenge() async {
+    final provider = context.read<AppStateProvider>();
 
-  void _onStatusError(Object error) {
-    debugPrint('[Pedometer] Status error: $error');
-  }
-
-  // ── Start challenge ─────────────────────────────────────────────────────────
-
-  void _startChallenge() {
-    if (!_permissionGranted) {
-      _requestActivityPermission();
+    // Guard: don't allow second challenge
+    if (provider.isLocked) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ A challenge is already active.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
       return;
     }
 
-    final preset = _presets[_selectedPresetIndex];
-    final provider = context.read<AppStateProvider>();
-    final billing = context.read<BillingService>();
+    if (!_permGranted) {
+      await _requestPermission();
+      return;
+    }
 
+    final billing = context.read<BillingService>();
     billing.onPurchaseSuccess = () {
       provider.unlockAll();
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('✅ Penalty paid — challenge unlocked.')),
+          const SnackBar(content: Text('✅ Penalty paid — challenge unlocked.')),
         );
       }
     };
 
+    final preset = _presets[_selectedIndex];
     provider.startHealthChallenge(
       duration: preset.duration,
       targetSteps: preset.targetSteps,
     );
 
-    _initialStepCount = -1;
+    _baseStepCount = -1;
     _sessionSteps = 0;
     _startPedometer();
-    setState(() => _challengeStarted = true);
   }
 
-  // ── Abort with ₹99 penalty ─────────────────────────────────────────────────
+  // ── Abort ──────────────────────────────────────────────────────────────────
 
   Future<void> _attemptAbort() async {
-    final billing = context.read<BillingService>();
-
-    final shouldPay = await showDialog<bool>(
+    final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const _AbortDialog(),
+      builder: (_) => AlertDialog(
+        backgroundColor: AppTheme.cardBg,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const Text('🚨 Abort Challenge?',
+            style:
+                TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+        content: const Text(
+          'Aborting early requires a ₹99 penalty via Google Play.\n\n'
+          'The challenge is ONLY removed after a SUCCESSFUL payment. '
+          'Cancelling keeps the lock active.',
+          style:
+              TextStyle(color: Color(0xFFCCCCDD), fontSize: 14, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep Going',
+                style: TextStyle(color: Color(0xFF6666AA))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFF6B9D),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Pay ₹99 & Abort',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
     );
 
-    if (shouldPay != true) return;
+    if (confirmed != true) return;
 
     setState(() => _billingLoading = true);
     try {
+      final billing = context.read<BillingService>();
       await billing.buyPenalty();
     } catch (e) {
       if (mounted) {
@@ -195,17 +249,18 @@ class _HealthChallengeScreenState extends State<HealthChallengeScreen> {
 
   @override
   void dispose() {
-    _stepSubscription?.cancel();
-    _statusSubscription?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _stepSub?.cancel();
+    _statusSub?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AppStateProvider>();
-    final bool completed = provider.healthCompleted;
-    final bool activeChallengeHere =
+    final isActive =
         provider.activeChallenge == ChallengeType.healthChallenge;
+    final completed = provider.healthCompleted;
 
     return Scaffold(
       backgroundColor: AppTheme.bg,
@@ -219,7 +274,7 @@ class _HealthChallengeScreenState extends State<HealthChallengeScreen> {
             expandedHeight: 180,
             leading: GestureDetector(
               onTap: () {
-                if (activeChallengeHere && !completed) {
+                if (isActive && !completed) {
                   _attemptAbort();
                 } else {
                   Navigator.pop(context);
@@ -231,8 +286,13 @@ class _HealthChallengeScreenState extends State<HealthChallengeScreen> {
                   color: AppTheme.glassWhite,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Icon(Icons.arrow_back_ios_rounded,
-                    color: Colors.white, size: 18),
+                child: Icon(
+                  isActive
+                      ? Icons.close_rounded
+                      : Icons.arrow_back_ios_rounded,
+                  color: Colors.white,
+                  size: 18,
+                ),
               ),
             ),
             flexibleSpace: FlexibleSpaceBar(
@@ -266,30 +326,25 @@ class _HealthChallengeScreenState extends State<HealthChallengeScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ── Permission warning or prompt ────────────────────
-                  if (_permissionChecked && !_permissionGranted)
-                    _PermissionWarning(
-                      status: _permissionStatus,
-                      onRequest: _requestActivityPermission,
-                    ),
+                  // ── Permission section ────────────────────────────────
+                  if (!_permGranted) _buildPermissionCard(),
 
-                  // ── Completed banner ────────────────────────────────
+                  // ── Completed banner ──────────────────────────────────
                   if (completed)
-                    _CompletedBanner(
-                        onDismiss: () => Navigator.pop(context)),
+                    _CompletedBanner(onDismiss: () => Navigator.pop(context)),
 
-                  // ── Active tracker ──────────────────────────────────
-                  if (activeChallengeHere && !completed)
+                  // ── Active challenge tracker ──────────────────────────
+                  if (isActive && !completed)
                     _ActiveTracker(
                       provider: provider,
                       sessionSteps: _sessionSteps,
-                      pedometerStatus: _pedometerStatus,
+                      pedeStatus: _pedeStatus,
                       billingLoading: _billingLoading,
                       onAbort: _attemptAbort,
                     ),
 
-                  // ── Preset selector ─────────────────────────────────
-                  if (!activeChallengeHere && !completed) ...[
+                  // ── Preset selector ───────────────────────────────────
+                  if (!isActive && !completed) ...[
                     const Text('Choose Your Challenge',
                         style: TextStyle(
                             color: Colors.white,
@@ -297,7 +352,7 @@ class _HealthChallengeScreenState extends State<HealthChallengeScreen> {
                             fontWeight: FontWeight.w700)),
                     const SizedBox(height: 4),
                     const Text(
-                      'Aborting early requires ₹99 penalty payment.',
+                      'Aborting early = ₹99 penalty payment.',
                       style: TextStyle(
                           color: Color(0xFFFF6B9D), fontSize: 12),
                     ),
@@ -306,14 +361,13 @@ class _HealthChallengeScreenState extends State<HealthChallengeScreen> {
                       _presets.length,
                       (i) => _PresetCard(
                         preset: _presets[i],
-                        isSelected: _selectedPresetIndex == i,
-                        onTap: () =>
-                            setState(() => _selectedPresetIndex = i),
+                        isSelected: _selectedIndex == i,
+                        onTap: () => setState(() => _selectedIndex = i),
                       ),
                     ),
                     const SizedBox(height: 30),
 
-                    // Start button
+                    // ── Start button ──────────────────────────────────
                     GestureDetector(
                       onTap: _startChallenge,
                       child: AnimatedContainer(
@@ -322,22 +376,15 @@ class _HealthChallengeScreenState extends State<HealthChallengeScreen> {
                         height: 60,
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
-                            colors: _permissionGranted
-                                ? [
-                                    const Color(0xFF00E5FF),
-                                    const Color(0xFF00BFA5)
-                                  ]
-                                : [
-                                    Colors.grey.shade700,
-                                    Colors.grey.shade600
-                                  ],
+                            colors: _permGranted
+                                ? [const Color(0xFF00E5FF), const Color(0xFF00BFA5)]
+                                : [Colors.grey.shade800, Colors.grey.shade700],
                           ),
                           borderRadius: BorderRadius.circular(18),
-                          boxShadow: _permissionGranted
+                          boxShadow: _permGranted
                               ? [
                                   BoxShadow(
-                                    color: const Color(0xFF00E5FF)
-                                        .withOpacity(0.35),
+                                    color: const Color(0xFF00E5FF).withOpacity(0.35),
                                     blurRadius: 20,
                                     offset: const Offset(0, 8),
                                   ),
@@ -346,12 +393,14 @@ class _HealthChallengeScreenState extends State<HealthChallengeScreen> {
                         ),
                         alignment: Alignment.center,
                         child: Text(
-                          _permissionGranted
+                          _permGranted
                               ? '🏃 Start Challenge'
-                              : '⚠️ Permission Required',
+                              : _permStatus.isPermanentlyDenied
+                                  ? '⚙️ Open Settings to Grant Permission'
+                                  : '⚠️ Grant Activity Permission',
                           style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 18,
+                              fontSize: 17,
                               fontWeight: FontWeight.w700),
                         ),
                       ),
@@ -365,31 +414,81 @@ class _HealthChallengeScreenState extends State<HealthChallengeScreen> {
       ),
     );
   }
+
+  Widget _buildPermissionCard() {
+    final isPermanent = _permStatus.isPermanentlyDenied;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFF6B9D).withOpacity(0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFFF6B9D).withOpacity(0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('⚠️ Activity Recognition Required',
+              style: TextStyle(
+                  color: Color(0xFFFF6B9D),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14)),
+          const SizedBox(height: 6),
+          Text(
+            isPermanent
+                ? 'Permission permanently denied. Go to:\nSettings → Apps → Dopamine Detox → Permissions → Physical activity → Allow'
+                : 'Tap below to grant "Physical activity" permission so this app can count your steps.',
+            style: const TextStyle(
+                color: Colors.white54, fontSize: 12, height: 1.5),
+          ),
+          const SizedBox(height: 12),
+          GestureDetector(
+            onTap: _requestPermission,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF6B9D).withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                isPermanent ? '⚙️ Open App Settings' : '✅ Grant Permission',
+                style: const TextStyle(
+                    color: Color(0xFFFF6B9D),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ─── Active Tracker ───────────────────────────────────────────────────────────
 class _ActiveTracker extends StatelessWidget {
   final AppStateProvider provider;
   final int sessionSteps;
-  final String pedometerStatus;
+  final String pedeStatus;
   final bool billingLoading;
   final VoidCallback onAbort;
 
   const _ActiveTracker({
     required this.provider,
     required this.sessionSteps,
-    required this.pedometerStatus,
+    required this.pedeStatus,
     required this.billingLoading,
     required this.onAbort,
   });
 
   @override
   Widget build(BuildContext context) {
-    final remaining = provider.remainingTime;
-    final h = remaining.inHours.toString().padLeft(2, '0');
-    final m = (remaining.inMinutes % 60).toString().padLeft(2, '0');
-    final s = (remaining.inSeconds % 60).toString().padLeft(2, '0');
-    final stepsProgress =
+    final r = provider.remainingTime;
+    final h = r.inHours.toString().padLeft(2, '0');
+    final m = (r.inMinutes % 60).toString().padLeft(2, '0');
+    final s = (r.inSeconds % 60).toString().padLeft(2, '0');
+    final stepProgress =
         (sessionSteps / provider.targetSteps).clamp(0.0, 1.0);
 
     return Column(
@@ -401,8 +500,7 @@ class _ActiveTracker extends StatelessWidget {
           padding: const EdgeInsets.all(28),
           decoration: BoxDecoration(
             gradient: const LinearGradient(
-              colors: [Color(0xFF00E5FF), Color(0xFF00BFA5)],
-            ),
+                colors: [Color(0xFF00E5FF), Color(0xFF00BFA5)]),
             borderRadius: BorderRadius.circular(24),
             boxShadow: [
               BoxShadow(
@@ -417,13 +515,13 @@ class _ActiveTracker extends StatelessWidget {
               const Text('⏱ Time Remaining',
                   style: TextStyle(
                       color: Colors.white70,
-                      fontSize: 14,
+                      fontSize: 13,
                       fontWeight: FontWeight.w500)),
               const SizedBox(height: 8),
               Text('$h:$m:$s',
                   style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 52,
+                      fontSize: 50,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 2)),
               const SizedBox(height: 16),
@@ -442,10 +540,10 @@ class _ActiveTracker extends StatelessWidget {
         ),
         const SizedBox(height: 20),
 
-        // Step counter
+        // Step counter card
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(22),
           decoration: BoxDecoration(
             color: AppTheme.cardBg,
             borderRadius: BorderRadius.circular(20),
@@ -473,7 +571,7 @@ class _ActiveTracker extends StatelessWidget {
               ClipRRect(
                 borderRadius: BorderRadius.circular(6),
                 child: LinearProgressIndicator(
-                  value: stepsProgress,
+                  value: stepProgress,
                   backgroundColor:
                       const Color(0xFF00E5FF).withOpacity(0.1),
                   valueColor: const AlwaysStoppedAnimation<Color>(
@@ -482,21 +580,26 @@ class _ActiveTracker extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 12),
+              // Pedometer status pill
               Container(
                 padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 6),
+                    horizontal: 14, vertical: 6),
                 decoration: BoxDecoration(
-                  color: pedometerStatus == 'walking'
+                  color: pedeStatus == 'walking'
                       ? const Color(0xFF69F0AE).withOpacity(0.15)
-                      : Colors.white.withOpacity(0.05),
+                      : pedeStatus == 'sensor_error'
+                          ? Colors.red.withOpacity(0.1)
+                          : Colors.white.withOpacity(0.05),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
-                  pedometerStatus == 'walking'
+                  pedeStatus == 'walking'
                       ? '🟢 Moving'
-                      : pedometerStatus == 'stopped'
-                          ? '🔴 Stopped'
-                          : '⚪ $pedometerStatus',
+                      : pedeStatus == 'stopped'
+                          ? '🔴 Standing still'
+                          : pedeStatus == 'sensor_error'
+                              ? '⚠️ Sensor unavailable'
+                              : '⚪ $pedeStatus',
                   style: const TextStyle(
                       color: Colors.white70, fontSize: 13),
                 ),
@@ -506,7 +609,7 @@ class _ActiveTracker extends StatelessWidget {
         ),
         const SizedBox(height: 20),
 
-        // ── Emergency Abort button (₹99 penalty) ───────────────────────
+        // Abort button (₹99 penalty)
         GestureDetector(
           onTap: billingLoading ? null : onAbort,
           child: Container(
@@ -514,8 +617,7 @@ class _ActiveTracker extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: 20),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: [Color(0xFFFF6B9D), Color(0xFFFF8E53)],
-              ),
+                  colors: [Color(0xFFFF6B9D), Color(0xFFFF8E53)]),
               borderRadius: BorderRadius.circular(18),
               boxShadow: [
                 BoxShadow(
@@ -535,19 +637,15 @@ class _ActiveTracker extends StatelessWidget {
                   )
                 : const Column(
                     children: [
-                      Text(
-                        '🚨 Emergency Abort',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 18),
-                      ),
+                      Text('🚨 Emergency Abort',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 18)),
                       SizedBox(height: 4),
-                      Text(
-                        'Penalty: ₹99 via Google Play',
-                        style: TextStyle(
-                            color: Colors.white70, fontSize: 13),
-                      ),
+                      Text('Penalty: ₹99 via Google Play',
+                          style: TextStyle(
+                              color: Colors.white70, fontSize: 13)),
                     ],
                   ),
           ),
@@ -558,70 +656,11 @@ class _ActiveTracker extends StatelessWidget {
   }
 }
 
-// ─── Permission Warning ───────────────────────────────────────────────────────
-class _PermissionWarning extends StatelessWidget {
-  final PermissionStatus status;
-  final VoidCallback onRequest;
-
-  const _PermissionWarning(
-      {required this.status, required this.onRequest});
-
-  @override
-  Widget build(BuildContext context) {
-    final isPermanentlyDenied = status.isPermanentlyDenied;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 20),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFF6B9D).withOpacity(0.1),
-        borderRadius: BorderRadius.circular(16),
-        border:
-            Border.all(color: const Color(0xFFFF6B9D).withOpacity(0.4)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('⚠️ Activity Recognition Required',
-              style: TextStyle(
-                  color: Color(0xFFFF6B9D),
-                  fontWeight: FontWeight.w700,
-                  fontSize: 15)),
-          const SizedBox(height: 6),
-          Text(
-            isPermanentlyDenied
-                ? 'Permission was permanently denied. Please enable it in Settings > Apps > Dopamine Detox > Permissions.'
-                : 'Please grant Activity Recognition permission to track your steps in real time.',
-            style:
-                const TextStyle(color: Colors.white54, fontSize: 13),
-          ),
-          const SizedBox(height: 12),
-          GestureDetector(
-            onTap: isPermanentlyDenied
-                ? () => openAppSettings()
-                : onRequest,
-            child: Text(
-              isPermanentlyDenied
-                  ? 'Open App Settings →'
-                  : 'Grant Permission →',
-              style: const TextStyle(
-                  color: Color(0xFF00E5FF),
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 // ─── Preset Card ──────────────────────────────────────────────────────────────
 class _PresetCard extends StatelessWidget {
   final _ChallengePreset preset;
   final bool isSelected;
   final VoidCallback onTap;
-
   const _PresetCard(
       {required this.preset,
       required this.isSelected,
@@ -636,9 +675,8 @@ class _PresetCard extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
-          color: isSelected
-              ? preset.color.withOpacity(0.15)
-              : AppTheme.cardBg,
+          color:
+              isSelected ? preset.color.withOpacity(0.15) : AppTheme.cardBg,
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
             color: isSelected
@@ -685,8 +723,7 @@ class _PresetCard extends StatelessWidget {
                 height: 28,
                 decoration: BoxDecoration(
                     color: preset.color, shape: BoxShape.circle),
-                child: const Icon(Icons.check,
-                    color: Colors.white, size: 16),
+                child: const Icon(Icons.check, color: Colors.white, size: 16),
               ),
           ],
         ),
@@ -699,7 +736,6 @@ class _PresetCard extends StatelessWidget {
 class _CompletedBanner extends StatelessWidget {
   final VoidCallback onDismiss;
   const _CompletedBanner({required this.onDismiss});
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -708,8 +744,7 @@ class _CompletedBanner extends StatelessWidget {
       padding: const EdgeInsets.all(28),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF69F0AE), Color(0xFF00E5FF)],
-        ),
+            colors: [Color(0xFF69F0AE), Color(0xFF00E5FF)]),
         borderRadius: BorderRadius.circular(24),
       ),
       child: Column(
@@ -740,47 +775,6 @@ class _CompletedBanner extends StatelessWidget {
   }
 }
 
-// ─── Abort Dialog ─────────────────────────────────────────────────────────────
-class _AbortDialog extends StatelessWidget {
-  const _AbortDialog();
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: AppTheme.cardBg,
-      shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      title: const Text('🚨 Abort Challenge?',
-          style: TextStyle(
-              color: Colors.white, fontWeight: FontWeight.w700)),
-      content: const Text(
-        'Aborting early requires a ₹99 penalty payment via Google Play.\n\n'
-        'The challenge will ONLY be removed after a SUCCESSFUL payment. '
-        'If payment fails or is cancelled, the lock stays active.',
-        style: TextStyle(
-            color: Color(0xFFCCCCDD), fontSize: 14, height: 1.5),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: const Text('Keep Going',
-              style: TextStyle(color: Color(0xFF6666AA))),
-        ),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFFFF6B9D),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
-          ),
-          onPressed: () => Navigator.pop(context, true),
-          child: const Text('Pay ₹99 & Abort',
-              style: TextStyle(fontWeight: FontWeight.w700)),
-        ),
-      ],
-    );
-  }
-}
-
 // ─── Data model ───────────────────────────────────────────────────────────────
 class _ChallengePreset {
   final String emoji;
@@ -789,7 +783,6 @@ class _ChallengePreset {
   final Duration duration;
   final int targetSteps;
   final Color color;
-
   const _ChallengePreset({
     required this.emoji,
     required this.title,
