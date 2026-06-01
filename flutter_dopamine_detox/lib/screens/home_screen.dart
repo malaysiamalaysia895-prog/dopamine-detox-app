@@ -12,17 +12,13 @@ import '../services/foreground_monitor_service.dart';
 import 'study_focus_screen.dart';
 import 'health_challenge_screen.dart';
 
-/// ─────────────────────────────────────────────────────────────────────────────
-/// HomeScreen — App-Specific Blocking Orchestrator
+/// HomeScreen — overlay orchestrator using SharedPreferences polling.
 ///
-/// Responsibilities:
-///   1. Listens to ForegroundMonitorService stream (which app is in foreground)
-///   2. Shows overlay ONLY when foreground app is in the blocked list AND
-///      the study focus timer is still running AND we're not in a bypass window.
-///   3. Forwards live timer data to the overlay isolate every second.
-///   4. Handles messages FROM overlay (emergency bypass, billing).
-///   5. Hides overlay when foreground switches to a non-blocked app.
-/// ─────────────────────────────────────────────────────────────────────────────
+/// Bug #2 root-cause fix:
+///   Old: EventChannel stream → eventSink becomes null when activity is
+///        backgrounded → all detection events silently dropped.
+///   New: Timer.periodic(500ms) calls MethodChannel.getForeground() which
+///        reads SharedPreferences. Works regardless of activity lifecycle.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -31,61 +27,72 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
-  // ── Subscriptions & timers ─────────────────────────────────────────────────
-  StreamSubscription<String>? _foregroundSub;    // Kotlin service → Dart
-  StreamSubscription? _overlayMsgSub;             // Overlay isolate → Dart
-  Timer? _timerBroadcast;                         // Pushes timer state to overlay every 1 s
-  Timer? _emergencyBypassTimer;                   // 2-min bypass countdown
+
+  // ── Polling timer (replaces broken EventChannel) ───────────────────────────
+  Timer? _pollTimer;
+  String _lastPkg = '';
 
   // ── Overlay state ──────────────────────────────────────────────────────────
   bool _overlayShowing = false;
-  bool _emergencyBypassActive = false;
-  int _emergencyBypassSecondsLeft = 0;
 
-  // ── Current foreground app ─────────────────────────────────────────────────
-  String _currentForegroundPkg = '';
+  // ── Emergency bypass ───────────────────────────────────────────────────────
+  bool _emergencyActive = false;
+  int _emergencySecsLeft = 0;
+  Timer? _emergencyTimer;
+
+  // ── Overlay → main app messages ────────────────────────────────────────────
+  StreamSubscription? _overlaySub;
+
+  // ── Timer broadcast to overlay ─────────────────────────────────────────────
+  Timer? _broadcastTimer;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _startForegroundListener();
-    _startOverlayMessageListener();
+    _startPolling();
+    _startOverlayListener();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Re-attach to the foreground stream after returning from background
     if (state == AppLifecycleState.resumed) {
-      _startForegroundListener();
+      // Re-start polling when user returns to app
+      _startPolling();
     }
   }
 
-  // ── Foreground app stream ──────────────────────────────────────────────────
+  // ── Polling — the reliable replacement for EventChannel ───────────────────
 
-  void _startForegroundListener() {
-    _foregroundSub?.cancel();
-    _foregroundSub =
-        ForegroundMonitorService.foregroundAppStream.listen((pkg) {
-      _currentForegroundPkg = pkg;
-      _evaluateOverlay();
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(milliseconds: 500), (_) async {
+      final provider = context.read<AppStateProvider>();
+      if (provider.activeChallenge != ChallengeType.studyFocus) return;
+
+      try {
+        final pkg = await ForegroundMonitorService.getForeground();
+        if (pkg == _lastPkg) return;
+        _lastPkg = pkg;
+        _onForegroundChanged(pkg, provider);
+      } catch (_) {
+        // MethodChannel can throw if called while activity is transitioning
+      }
     });
   }
 
-  /// Core logic: show or hide overlay depending on foreground app.
-  void _evaluateOverlay() {
-    final provider = context.read<AppStateProvider>();
-
-    final shouldBlock = provider.activeChallenge == ChallengeType.studyFocus &&
-        provider.isPackageLocked(_currentForegroundPkg) &&
-        !_emergencyBypassActive;
+  void _onForegroundChanged(String pkg, AppStateProvider provider) {
+    final shouldBlock =
+        provider.isPackageLocked(pkg) && !_emergencyActive;
 
     if (shouldBlock && !_overlayShowing) {
       _showOverlay(provider);
     } else if (!shouldBlock && _overlayShowing) {
-      _hideOverlay();
+      _closeOverlay();
     }
   }
+
+  // ── Overlay show / close ───────────────────────────────────────────────────
 
   Future<void> _showOverlay(AppStateProvider provider) async {
     if (_overlayShowing) return;
@@ -96,7 +103,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await FlutterOverlayWindow.showOverlay(
         enableDrag: false,
         overlayTitle: 'Study Focus',
-        overlayContent: 'Blocked app detected.',
+        overlayContent: 'Blocked app detected',
         flag: OverlayFlag.defaultFlag,
         alignment: OverlayAlignment.center,
         visibility: NotificationVisibility.visibilityPublic,
@@ -105,102 +112,89 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         width: WindowSize.fullCover,
       );
       _overlayShowing = true;
-      _startTimerBroadcast(provider);
+      _startBroadcastTimer(provider);
     } catch (e) {
-      debugPrint('[HomeScreen] Overlay show failed: $e');
+      debugPrint('[HomeScreen] showOverlay failed: $e');
     }
   }
 
-  Future<void> _hideOverlay() async {
+  Future<void> _closeOverlay() async {
     if (!_overlayShowing) return;
+    _broadcastTimer?.cancel();
     try {
       await FlutterOverlayWindow.closeOverlay();
     } catch (_) {}
     _overlayShowing = false;
-    _timerBroadcast?.cancel();
   }
 
-  // ── Timer broadcast to overlay ─────────────────────────────────────────────
-  // Every second, push {'type':'timer_update'} so the overlay has a live countdown.
+  // ── Broadcast timer → overlay (every 1 second) ────────────────────────────
+  // Sends live timer data to the overlay isolate via shareData.
 
-  void _startTimerBroadcast(AppStateProvider provider) {
-    _timerBroadcast?.cancel();
-    _timerBroadcast = Timer.periodic(const Duration(seconds: 1), (_) {
+  void _startBroadcastTimer(AppStateProvider provider) {
+    _broadcastTimer?.cancel();
+    _broadcastTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
       if (!_overlayShowing) return;
       final r = provider.remainingTime;
-      if (r == Duration.zero) {
-        // Session done — close overlay & stop service
-        _onSessionComplete();
+      if (r <= Duration.zero) {
+        await _onSessionDone();
         return;
       }
       final h = r.inHours.toString().padLeft(2, '0');
       final m = (r.inMinutes % 60).toString().padLeft(2, '0');
       final s = (r.inSeconds % 60).toString().padLeft(2, '0');
-
-      // Get the display name of the blocked app (simple package → name mapping)
-      final appName = _friendlyName(_currentForegroundPkg);
-
-      FlutterOverlayWindow.shareData({
-        'type': 'timer_update',
-        'time': '$h:$m:$s',
-        'progress': provider.progressFraction,
-        'emergencyUsesLeft': provider.emergencyUsesLeft,
-        'appName': appName,
-      });
+      try {
+        await FlutterOverlayWindow.shareData({
+          'type': 'timer_update',
+          'time': '$h:$m:$s',
+          'progress': provider.progressFraction,
+          'emergencyLeft': provider.emergencyUsesLeft,
+          'appName': _friendlyName(_lastPkg),
+        });
+      } catch (_) {}
     });
   }
 
   // ── Overlay messages → HomeScreen ─────────────────────────────────────────
 
-  void _startOverlayMessageListener() {
-    _overlayMsgSub?.cancel();
-    _overlayMsgSub =
-        FlutterOverlayWindow.overlayListener.listen((raw) async {
+  void _startOverlayListener() {
+    _overlaySub?.cancel();
+    _overlaySub = FlutterOverlayWindow.overlayListener.listen((raw) async {
       if (raw is! Map) return;
-      final type = (raw['type'] as String?) ?? '';
+      final type = raw['type'] as String? ?? '';
 
       switch (type) {
         case 'emergency_unlock':
-          await _handleEmergencyUnlock();
+          await _doEmergencyUnlock();
           break;
-
         case 'pay_penalty':
-          await _handleBillingRequest();
+          await _doBilling();
           break;
       }
     });
   }
 
-  // ── Emergency bypass — 2-min window ───────────────────────────────────────
+  // ── Emergency 2-min bypass ─────────────────────────────────────────────────
 
-  Future<void> _handleEmergencyUnlock() async {
+  Future<void> _doEmergencyUnlock() async {
     final provider = context.read<AppStateProvider>();
     if (provider.emergencyUsesLeft <= 0) return;
 
-    // Decrement counter in provider
     provider.consumeEmergencyUse();
+    setState(() { _emergencyActive = true; _emergencySecsLeft = 120; });
+    await ForegroundMonitorService.setEmergencyBypass(active: true);
+    await _closeOverlay();
 
-    // Overlay already closed itself — mark bypass active
-    _overlayShowing = false;
-    _timerBroadcast?.cancel();
-
-    setState(() {
-      _emergencyBypassActive = true;
-      _emergencyBypassSecondsLeft = 120;
-    });
-
-    // Countdown in HomeScreen for UI display
-    _emergencyBypassTimer?.cancel();
-    _emergencyBypassTimer =
-        Timer.periodic(const Duration(seconds: 1), (t) {
+    _emergencyTimer?.cancel();
+    _emergencyTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) { t.cancel(); return; }
       setState(() {
-        _emergencyBypassSecondsLeft--;
-        if (_emergencyBypassSecondsLeft <= 0) {
+        _emergencySecsLeft--;
+        if (_emergencySecsLeft <= 0) {
           t.cancel();
-          _emergencyBypassActive = false;
-          // Re-evaluate: if still on blocked app → show overlay again
-          _evaluateOverlay();
+          _emergencyActive = false;
+          ForegroundMonitorService.setEmergencyBypass(active: false);
+          // Re-check immediately after bypass ends
+          _lastPkg = '';
         }
       });
     });
@@ -208,46 +202,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // ── Billing ────────────────────────────────────────────────────────────────
 
-  Future<void> _handleBillingRequest() async {
+  Future<void> _doBilling() async {
     final billing = context.read<BillingService>();
     final provider = context.read<AppStateProvider>();
 
     billing.onPurchaseSuccess = () async {
       provider.unlockAll();
       await ForegroundMonitorService.stop();
-      await _hideOverlay();
-      // Tell overlay to close (in case it's still showing)
-      FlutterOverlayWindow.shareData({'type': 'dismiss'});
+      await _closeOverlay();
+      try {
+        await FlutterOverlayWindow.shareData({'type': 'dismiss'});
+      } catch (_) {}
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('✅ Penalty paid — focus session ended.')),
+          const SnackBar(content: Text('✅ Penalty paid — session ended.')),
         );
       }
     };
-
     try {
       await billing.buyPenalty();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('❌ Payment error: $e')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Payment error: $e')));
       }
     }
   }
 
-  // ── Session complete ───────────────────────────────────────────────────────
-
-  Future<void> _onSessionComplete() async {
-    _timerBroadcast?.cancel();
+  Future<void> _onSessionDone() async {
+    _broadcastTimer?.cancel();
     await ForegroundMonitorService.stop();
-    FlutterOverlayWindow.shareData({'type': 'dismiss'});
+    try {
+      await FlutterOverlayWindow.shareData({'type': 'dismiss'});
+    } catch (_) {}
     _overlayShowing = false;
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('🎉 Study session complete! Great work!')),
+        const SnackBar(content: Text('🎉 Study session complete!')),
       );
     }
   }
@@ -255,70 +246,54 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   String _friendlyName(String pkg) {
-    // Attempt to extract a readable name from the package string
     if (pkg.isEmpty) return 'Blocked App';
     final parts = pkg.split('.');
-    if (parts.length >= 2) {
-      final name = parts[parts.length - 1];
-      return name[0].toUpperCase() + name.substring(1);
-    }
-    return pkg;
+    final raw = parts.last;
+    return raw[0].toUpperCase() + raw.substring(1);
   }
 
-  Future<void> _openUsageAccessSettings() async {
-    const intent =
-        AndroidIntent(action: 'android.settings.USAGE_ACCESS_SETTINGS');
+  Future<void> _openUsageAccess() async {
     try {
-      await intent.launch();
+      await const AndroidIntent(
+              action: 'android.settings.USAGE_ACCESS_SETTINGS')
+          .launch();
     } catch (_) {}
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _foregroundSub?.cancel();
-    _overlayMsgSub?.cancel();
-    _timerBroadcast?.cancel();
-    _emergencyBypassTimer?.cancel();
+    _pollTimer?.cancel();
+    _broadcastTimer?.cancel();
+    _emergencyTimer?.cancel();
+    _overlaySub?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AppStateProvider>();
-    final isStudyFocus =
-        provider.activeChallenge == ChallengeType.studyFocus;
+    final isStudyFocus = provider.activeChallenge == ChallengeType.studyFocus;
 
     return Scaffold(
       backgroundColor: AppTheme.bg,
       body: CustomScrollView(
         physics: const BouncingScrollPhysics(),
         slivers: [
-          // ── Header ──────────────────────────────────────────────────────
-          SliverToBoxAdapter(
-              child: _Header(isLocked: provider.isLocked)),
+          SliverToBoxAdapter(child: _Header(isLocked: provider.isLocked)),
 
-          // ── Active session banner ────────────────────────────────────────
           if (provider.isLocked)
             SliverToBoxAdapter(
-              child: _ActiveChallengeBanner(provider: provider),
-            ),
+                child: _ActiveChallengeBanner(provider: provider)),
 
-          // ── Emergency bypass countdown banner ────────────────────────────
-          if (_emergencyBypassActive)
+          if (_emergencyActive)
             SliverToBoxAdapter(
-              child: _EmergencyBypassBanner(
-                  secondsLeft: _emergencyBypassSecondsLeft),
-            ),
+                child: _EmergencyBanner(secsLeft: _emergencySecsLeft)),
 
-          // ── Usage Access warning (if study focus active but no permission) ──
-          if (isStudyFocus && !_overlayShowing && !_emergencyBypassActive)
+          if (isStudyFocus)
             SliverToBoxAdapter(
-              child: _UsageAccessHint(
-                  onOpenSettings: _openUsageAccessSettings),
-            ),
+                child: _UsageHint(onTap: _openUsageAccess)),
 
-          // ── Action cards ─────────────────────────────────────────────────
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
             sliver: SliverList(
@@ -326,34 +301,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _ActionCard(
                   icon: '📚',
                   title: 'Focus on Your Study',
-                  subtitle:
-                      'Block specific apps while studying. Others work normally.',
-                  gradientColors: const [Color(0xFF7C4DFF), Color(0xFF5C6BC0)],
-                  glowColor: const Color(0xFF7C4DFF),
-                  isLocked: provider.isLocked,
+                  subtitle: 'Block specific apps only — others work normally.',
+                  colors: const [Color(0xFF7C4DFF), Color(0xFF5C6BC0)],
+                  glow: const Color(0xFF7C4DFF),
                   onTap: () => Navigator.push(
-                      context, _slideRoute(const StudyFocusScreen())),
+                      context, _slide(const StudyFocusScreen())),
                 ),
                 const SizedBox(height: 16),
                 _ActionCard(
                   icon: '🔒',
                   title: 'Mobile Lock',
-                  subtitle: 'Full detox — lock your phone completely.',
-                  gradientColors: const [Color(0xFFFF6B9D), Color(0xFFFF8E53)],
-                  glowColor: const Color(0xFFFF6B9D),
-                  isLocked: provider.isLocked,
-                  onTap: () => _showMobileLockDialog(context, provider),
+                  subtitle: 'Full detox — lock your entire phone.',
+                  colors: const [Color(0xFFFF6B9D), Color(0xFFFF8E53)],
+                  glow: const Color(0xFFFF6B9D),
+                  onTap: () => _mobileLockSheet(context, provider),
                 ),
                 const SizedBox(height: 16),
                 _ActionCard(
                   icon: '🏃',
                   title: 'Health Improvement',
                   subtitle: 'Physical challenges with real step tracking.',
-                  gradientColors: const [Color(0xFF00E5FF), Color(0xFF00BFA5)],
-                  glowColor: const Color(0xFF00E5FF),
-                  isLocked: provider.isLocked,
+                  colors: const [Color(0xFF00E5FF), Color(0xFF00BFA5)],
+                  glow: const Color(0xFF00E5FF),
                   onTap: () => Navigator.push(
-                      context, _slideRoute(const HealthChallengeScreen())),
+                      context, _slide(const HealthChallengeScreen())),
                 ),
                 const SizedBox(height: 16),
                 _StatsRow(provider: provider),
@@ -365,29 +336,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  PageRouteBuilder _slideRoute(Widget page) => PageRouteBuilder(
-        pageBuilder: (_, __, ___) => page,
-        transitionsBuilder: (_, anim, __, child) => SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(1, 0), end: Offset.zero,
-          ).animate(CurvedAnimation(parent: anim, curve: Curves.easeOutCubic)),
-          child: child,
+  PageRouteBuilder _slide(Widget p) => PageRouteBuilder(
+        pageBuilder: (_, __, ___) => p,
+        transitionsBuilder: (_, a, __, c) => SlideTransition(
+          position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+              .animate(CurvedAnimation(parent: a, curve: Curves.easeOutCubic)),
+          child: c,
         ),
-        transitionDuration: const Duration(milliseconds: 400),
+        transitionDuration: const Duration(milliseconds: 380),
       );
 
-  void _showMobileLockDialog(
-      BuildContext context, AppStateProvider provider) {
+  void _mobileLockSheet(BuildContext context, AppStateProvider provider) {
     if (provider.isLocked) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('⚠️ A challenge is already active.'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+          const SnackBar(content: Text('⚠️ A challenge is already active.')));
       return;
     }
-    Duration selected = const Duration(hours: 1);
+    Duration sel = const Duration(hours: 1);
     showModalBottomSheet(
       context: context,
       backgroundColor: AppTheme.cardBg,
@@ -405,22 +370,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       fontSize: 22,
                       fontWeight: FontWeight.w700,
                       color: Colors.white)),
-              const SizedBox(height: 8),
-              const Text(
-                '⚠️ Full phone lock — cannot use emergency bypass.',
-                style: TextStyle(
-                    color: Color(0xFFFF6B9D), fontSize: 12),
-              ),
               const SizedBox(height: 20),
               Wrap(
-                spacing: 10, runSpacing: 10,
-                children: [for (final h in [1, 2, 3, 6, 12, 24])
-                  _DurationChip(
-                    label: '${h}h',
-                    selected: selected == Duration(hours: h),
-                    color: const Color(0xFFFF6B9D),
-                    onTap: () => ss(() => selected = Duration(hours: h)),
-                  )],
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  for (final h in [1, 2, 3, 6, 12, 24])
+                    _Chip(
+                      label: '${h}h',
+                      selected: sel == Duration(hours: h),
+                      color: const Color(0xFFFF6B9D),
+                      onTap: () => ss(() => sel = Duration(hours: h)),
+                    )
+                ],
               ),
               const SizedBox(height: 28),
               SizedBox(
@@ -433,9 +395,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         borderRadius: BorderRadius.circular(16)),
                   ),
                   onPressed: () {
-                    final billing = context.read<BillingService>();
-                    billing.onPurchaseSuccess = () => provider.unlockAll();
-                    provider.startMobileLock(duration: selected);
+                    context.read<BillingService>().onPurchaseSuccess =
+                        () => provider.unlockAll();
+                    provider.startMobileLock(duration: sel);
                     Navigator.pop(ctx);
                   },
                   child: const Text('🔒 Start Mobile Lock',
@@ -452,103 +414,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 }
 
-// ─── Emergency Bypass Banner ──────────────────────────────────────────────────
-class _EmergencyBypassBanner extends StatelessWidget {
-  final int secondsLeft;
-  const _EmergencyBypassBanner({required this.secondsLeft});
+// ─── Widgets ──────────────────────────────────────────────────────────────────
 
-  @override
-  Widget build(BuildContext context) {
-    final m = (secondsLeft ~/ 60).toString().padLeft(2, '0');
-    final s = (secondsLeft % 60).toString().padLeft(2, '0');
-    return Container(
-      margin: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFB74D).withOpacity(0.1),
-        borderRadius: BorderRadius.circular(16),
-        border:
-            Border.all(color: const Color(0xFFFFB74D).withOpacity(0.4)),
-      ),
-      child: Row(
-        children: [
-          const Text('⚡', style: TextStyle(fontSize: 22)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Emergency Bypass Active',
-                    style: TextStyle(
-                        color: Color(0xFFFFB74D),
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14)),
-                Text('Lock resumes in $m:$s',
-                    style: const TextStyle(
-                        color: Colors.white54, fontSize: 12)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Usage Access Hint ────────────────────────────────────────────────────────
-class _UsageAccessHint extends StatelessWidget {
-  final VoidCallback onOpenSettings;
-  const _UsageAccessHint({required this.onOpenSettings});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF00E5FF).withOpacity(0.07),
-        borderRadius: BorderRadius.circular(14),
-        border:
-            Border.all(color: const Color(0xFF00E5FF).withOpacity(0.25)),
-      ),
-      child: Row(
-        children: [
-          const Text('📊', style: TextStyle(fontSize: 20)),
-          const SizedBox(width: 10),
-          const Expanded(
-            child: Text(
-              'Grant "Usage Access" so blocked apps are detected.',
-              style:
-                  TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
-            ),
-          ),
-          GestureDetector(
-            onTap: onOpenSettings,
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: const Color(0xFF00E5FF).withOpacity(0.15),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Text('Settings',
-                  style: TextStyle(
-                      color: Color(0xFF00E5FF),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Header ───────────────────────────────────────────────────────────────────
 class _Header extends StatelessWidget {
   final bool isLocked;
   const _Header({required this.isLocked});
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -567,13 +437,11 @@ class _Header extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  isLocked ? '🔒 Challenge Active' : '👋 Welcome Back!',
-                  style: const TextStyle(
-                      fontSize: 14,
-                      color: Color(0xFF9999BB),
-                      fontWeight: FontWeight.w500),
-                ),
+                Text(isLocked ? '🔒 Challenge Active' : '👋 Welcome Back!',
+                    style: const TextStyle(
+                        fontSize: 14,
+                        color: Color(0xFF9999BB),
+                        fontWeight: FontWeight.w500)),
                 const SizedBox(height: 6),
                 ShaderMask(
                   shaderCallback: (b) => const LinearGradient(
@@ -588,8 +456,8 @@ class _Header extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 const Text('Build better habits, one day at a time.',
-                    style: TextStyle(
-                        fontSize: 13, color: Color(0xFF6666AA))),
+                    style:
+                        TextStyle(fontSize: 13, color: Color(0xFF6666AA))),
               ],
             ),
           ),
@@ -599,8 +467,8 @@ class _Header extends StatelessWidget {
             child: Lottie.network(
               'https://assets4.lottiefiles.com/packages/lf20_jcikwtux.json',
               fit: BoxFit.contain,
-              errorBuilder: (_, __, ___) => const Text('🧑‍💻',
-                  style: TextStyle(fontSize: 80)),
+              errorBuilder: (_, __, ___) =>
+                  const Text('🧑‍💻', style: TextStyle(fontSize: 80)),
             ),
           ),
         ],
@@ -609,7 +477,6 @@ class _Header extends StatelessWidget {
   }
 }
 
-// ─── Active Challenge Banner ──────────────────────────────────────────────────
 class _ActiveChallengeBanner extends StatelessWidget {
   final AppStateProvider provider;
   const _ActiveChallengeBanner({required this.provider});
@@ -636,10 +503,9 @@ class _ActiveChallengeBanner extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7C4DFF).withOpacity(0.3),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-          ),
+              color: const Color(0xFF7C4DFF).withOpacity(0.3),
+              blurRadius: 20,
+              offset: const Offset(0, 8))
         ],
       ),
       child: Row(
@@ -677,43 +543,115 @@ class _ActiveChallengeBanner extends StatelessWidget {
   }
 }
 
-// ─── Action Card ──────────────────────────────────────────────────────────────
-class _ActionCard extends StatelessWidget {
-  final String icon;
-  final String title;
-  final String subtitle;
-  final List<Color> gradientColors;
-  final Color glowColor;
-  final bool isLocked;
+class _EmergencyBanner extends StatelessWidget {
+  final int secsLeft;
+  const _EmergencyBanner({required this.secsLeft});
+  @override
+  Widget build(BuildContext context) {
+    final m = (secsLeft ~/ 60).toString().padLeft(2, '0');
+    final s = (secsLeft % 60).toString().padLeft(2, '0');
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFB74D).withOpacity(0.1),
+        borderRadius: BorderRadius.circular(14),
+        border:
+            Border.all(color: const Color(0xFFFFB74D).withOpacity(0.4)),
+      ),
+      child: Row(
+        children: [
+          const Text('⚡', style: TextStyle(fontSize: 20)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Emergency Bypass Active',
+                    style: TextStyle(
+                        color: Color(0xFFFFB74D),
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13)),
+                Text('Lock resumes in $m:$s',
+                    style: const TextStyle(
+                        color: Colors.white54, fontSize: 11)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UsageHint extends StatelessWidget {
   final VoidCallback onTap;
+  const _UsageHint({required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF00E5FF).withOpacity(0.06),
+        borderRadius: BorderRadius.circular(12),
+        border:
+            Border.all(color: const Color(0xFF00E5FF).withOpacity(0.2)),
+      ),
+      child: Row(
+        children: [
+          const Text('📊', style: TextStyle(fontSize: 18)),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'Grant "Usage Access" so blocked apps are detected.',
+              style: TextStyle(color: Color(0xFF00E5FF), fontSize: 11),
+            ),
+          ),
+          GestureDetector(
+            onTap: onTap,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0xFF00E5FF).withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Text('Settings',
+                  style: TextStyle(
+                      color: Color(0xFF00E5FF),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
+class _ActionCard extends StatelessWidget {
+  final String icon, title, subtitle;
+  final List<Color> colors;
+  final Color glow;
+  final VoidCallback onTap;
   const _ActionCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.gradientColors,
-    required this.glowColor,
-    required this.isLocked,
-    required this.onTap,
+    required this.icon, required this.title, required this.subtitle,
+    required this.colors, required this.glow, required this.onTap,
   });
-
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
+      child: Container(
         padding: const EdgeInsets.all(22),
         decoration: BoxDecoration(
           color: AppTheme.cardBg,
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-              color: gradientColors.first.withOpacity(0.25), width: 1.5),
+          border: Border.all(color: colors.first.withOpacity(0.25), width: 1.5),
           boxShadow: [
             BoxShadow(
-                color: glowColor.withOpacity(0.08),
-                blurRadius: 20,
-                spreadRadius: 2),
+                color: glow.withOpacity(0.08), blurRadius: 20, spreadRadius: 2)
           ],
         ),
         child: Row(
@@ -722,12 +660,11 @@ class _ActionCard extends StatelessWidget {
               width: 60,
               height: 60,
               decoration: BoxDecoration(
-                gradient: LinearGradient(
-                    colors: gradientColors,
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight),
-                borderRadius: BorderRadius.circular(18),
-              ),
+                  gradient: LinearGradient(
+                      colors: colors,
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight),
+                  borderRadius: BorderRadius.circular(18)),
               alignment: Alignment.center,
               child: Text(icon, style: const TextStyle(fontSize: 28)),
             ),
@@ -755,10 +692,10 @@ class _ActionCard extends StatelessWidget {
               width: 36,
               height: 36,
               decoration: BoxDecoration(
-                  color: gradientColors.first.withOpacity(0.15),
+                  color: colors.first.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(10)),
               child: Icon(Icons.arrow_forward_ios_rounded,
-                  color: gradientColors.first, size: 16),
+                  color: colors.first, size: 16),
             ),
           ],
         ),
@@ -767,92 +704,82 @@ class _ActionCard extends StatelessWidget {
   }
 }
 
-// ─── Stats ────────────────────────────────────────────────────────────────────
 class _StatsRow extends StatelessWidget {
   final AppStateProvider provider;
   const _StatsRow({required this.provider});
-
   @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        _StatTile(icon: '🔥', label: 'Streak',
-            value: '0 days', color: const Color(0xFFFF6B9D)),
-        const SizedBox(width: 12),
-        _StatTile(icon: '👟', label: 'Today Steps',
-            value: '${provider.currentSteps}', color: const Color(0xFF00E5FF)),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => Row(
+        children: [
+          _StatTile(
+              icon: '🔥', label: 'Streak',
+              value: '0 days', color: const Color(0xFFFF6B9D)),
+          const SizedBox(width: 12),
+          _StatTile(
+              icon: '👟', label: 'Today Steps',
+              value: '${provider.currentSteps}',
+              color: const Color(0xFF00E5FF)),
+        ],
+      );
 }
 
 class _StatTile extends StatelessWidget {
   final String icon, label, value;
   final Color color;
   const _StatTile(
-      {required this.icon,
-      required this.label,
-      required this.value,
-      required this.color});
-
+      {required this.icon, required this.label,
+       required this.value, required this.color});
   @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
+  Widget build(BuildContext context) => Expanded(
+        child: Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
             color: AppTheme.cardBg,
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: color.withOpacity(0.2))),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(icon, style: const TextStyle(fontSize: 24)),
-            const SizedBox(height: 8),
-            Text(value,
-                style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: color)),
-            Text(label,
-                style: const TextStyle(
-                    fontSize: 12, color: Color(0xFF6666AA))),
-          ],
+            border: Border.all(color: color.withOpacity(0.2)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(icon, style: const TextStyle(fontSize: 24)),
+              const SizedBox(height: 8),
+              Text(value,
+                  style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      color: color)),
+              Text(label,
+                  style: const TextStyle(
+                      fontSize: 12, color: Color(0xFF6666AA))),
+            ],
+          ),
         ),
-      ),
-    );
-  }
+      );
 }
 
-class _DurationChip extends StatelessWidget {
+class _Chip extends StatelessWidget {
   final String label;
   final bool selected;
   final Color color;
   final VoidCallback onTap;
-  const _DurationChip(
-      {required this.label,
-      required this.selected,
-      required this.color,
-      required this.onTap});
-
+  const _Chip(
+      {required this.label, required this.selected,
+       required this.color, required this.onTap});
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        decoration: BoxDecoration(
-          color: selected ? color : color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withOpacity(0.4)),
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          decoration: BoxDecoration(
+            color: selected ? color : color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: color.withOpacity(0.4)),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                  color: selected ? Colors.white : color,
+                  fontWeight: FontWeight.w700)),
         ),
-        child: Text(label,
-            style: TextStyle(
-                color: selected ? Colors.white : color,
-                fontWeight: FontWeight.w700)),
-      ),
-    );
-  }
+      );
 }

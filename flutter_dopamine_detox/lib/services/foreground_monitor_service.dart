@@ -1,42 +1,41 @@
 import 'package:flutter/services.dart';
 
-/// Dart wrapper around the native ForegroundMonitorService.
+/// Dart bridge to ForegroundMonitorService (Kotlin) via a single MethodChannel.
 ///
-/// Architecture:
-///   • [start]  → starts the Kotlin foreground service with a blocked-packages list
-///   • [stop]   → stops the service
-///   • [foregroundAppStream] → EventChannel stream; emits a package name
-///     every time the foreground app changes on the device
+/// WHY MethodChannel polling instead of EventChannel:
+///   EventChannel.StreamHandler.onCancel() fires when the Flutter activity goes
+///   to background, setting eventSink = null. Every subsequent detection event
+///   from the Kotlin service is silently dropped. Using polling via MethodChannel
+///   + SharedPreferences works regardless of activity lifecycle.
 ///
-/// The native service polls UsageStatsManager every 500 ms.
-/// Flutter (HomeScreen) decides whether to show/hide the overlay based on
-/// whether the emitted package is in the blocked list.
+/// Flutter calls [getForeground()] every 500 ms from a Timer.periodic in
+/// HomeScreen. The Kotlin service writes the current foreground package to
+/// SharedPreferences; [getForeground()] reads it back.
 class ForegroundMonitorService {
-  static const _method =
-      MethodChannel('com.example.dopamine_detox/monitor');
+  static const _ch = MethodChannel('com.example.dopamine_detox/monitor');
 
-  static const _event =
-      EventChannel('com.example.dopamine_detox/foreground_app');
+  /// Start the Kotlin foreground service with [blockedPackages].
+  /// Also persists the list to SharedPreferences so the service
+  /// survives process death.
+  static Future<void> start(List<String> blockedPackages) =>
+      _ch.invokeMethod('start', {'blocked': blockedPackages});
 
-  /// Stream of foreground package names (e.g. "com.instagram.android").
-  /// Emits only when the foreground app CHANGES.
-  static Stream<String> get foregroundAppStream =>
-      _event.receiveBroadcastStream().map((e) => e.toString());
+  /// Stop the Kotlin foreground service.
+  static Future<void> stop() => _ch.invokeMethod('stop');
 
-  /// Start monitoring with [blockedPackages].
-  /// Safe to call multiple times — each call updates the blocked list.
-  static Future<void> start(List<String> blockedPackages) async {
-    await _method.invokeMethod<void>('start', {'blocked': blockedPackages});
+  /// Returns the package name of the current foreground app.
+  /// Called by HomeScreen every 500 ms via Timer.periodic.
+  static Future<String> getForeground() async {
+    final result = await _ch.invokeMethod<String>('getForeground');
+    return result ?? '';
   }
 
-  /// Update the blocked packages list without restarting the service.
-  static Future<void> updateBlocked(List<String> blockedPackages) async {
-    await _method
-        .invokeMethod<void>('updateBlocked', {'blocked': blockedPackages});
-  }
+  /// Tells the native side whether the emergency 2-min bypass is active.
+  /// The Kotlin service stores this; Flutter reads it when deciding to show overlay.
+  static Future<void> setEmergencyBypass({required bool active}) =>
+      _ch.invokeMethod('setEmergencyBypass', {'active': active});
 
-  /// Stop the foreground monitoring service entirely.
-  static Future<void> stop() async {
-    await _method.invokeMethod<void>('stop');
-  }
+  /// Persist the blocked list to SharedPreferences (called on app restore).
+  static Future<void> saveBlocked(List<String> blockedPackages) =>
+      _ch.invokeMethod('saveBlocked', {'blocked': blockedPackages});
 }

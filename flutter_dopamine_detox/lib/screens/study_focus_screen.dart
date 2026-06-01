@@ -1,6 +1,5 @@
 import 'package:android_intent_plus/android_intent_plus.dart';
 import 'package:device_apps/device_apps.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:provider/provider.dart';
@@ -11,15 +10,20 @@ import '../services/billing_service.dart';
 import '../services/foreground_monitor_service.dart';
 import 'home_screen.dart';
 
-// ─── Background isolate: load apps without blocking UI ───────────────────────
-Future<List<Application>> _loadAppsInBackground(bool withIcons) {
-  return DeviceApps.getInstalledApplications(
-    includeAppIcons: withIcons,
-    includeSystemApps: true,
-    onlyAppsWithLaunchIntent: true,
-  );
-}
-
+/// StudyFocusScreen — app selection + start focus.
+///
+/// Bug #1 fix — why compute() failed:
+///   DeviceApps.getInstalledApplications() is a Flutter platform channel call.
+///   Platform channels can ONLY run on the main Dart isolate.
+///   compute() spawns a background Dart isolate → platform channel call throws
+///   MissingPluginException or hangs indefinitely.
+///   Fix: plain async/await on the main isolate. Flutter's event loop is
+///   cooperative — the async call yields to the UI thread between steps,
+///   so the spinner renders fine while the list loads.
+///
+/// Bug #4 fix — multiple timers:
+///   provider.isLocked hard-blocks the Start button AND disables all
+///   form inputs (duration chips + app checkboxes).
 class StudyFocusScreen extends StatefulWidget {
   const StudyFocusScreen({super.key});
 
@@ -32,19 +36,19 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
 
   // ── App list ───────────────────────────────────────────────────────────────
   List<Application> _apps = [];
-  bool _loadingPhase1 = true;
-  bool _loadingIcons = false;
+  bool _loadingApps = true;
+  bool _loadingIcons = false;  // second pass to load icons
   String? _loadError;
 
   // ── Selection ──────────────────────────────────────────────────────────────
   final Set<String> _selected = {};
-  Duration _selectedDuration = const Duration(hours: 1);
+  Duration _duration = const Duration(hours: 1);
 
-  // ── Permissions ────────────────────────────────────────────────────────────
+  // ── Permission flags ───────────────────────────────────────────────────────
   bool _overlayGranted = false;
   bool _permChecked = false;
 
-  // ── UI state ───────────────────────────────────────────────────────────────
+  // ── UI ─────────────────────────────────────────────────────────────────────
   bool _starting = false;
 
   @override
@@ -61,10 +65,10 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
 
   Future<void> _init() async {
     await _checkOverlay();
-    await _loadPhase1();
+    await _loadApps();
   }
 
-  // ── Permission ─────────────────────────────────────────────────────────────
+  // ── Overlay permission check ───────────────────────────────────────────────
 
   Future<void> _checkOverlay() async {
     final g = await FlutterOverlayWindow.isPermissionGranted();
@@ -77,59 +81,76 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
   }
 
   Future<void> _openUsageAccess() async {
-    const intent =
-        AndroidIntent(action: 'android.settings.USAGE_ACCESS_SETTINGS');
-    try { await intent.launch(); } catch (_) {}
+    try {
+      await const AndroidIntent(
+              action: 'android.settings.USAGE_ACCESS_SETTINGS')
+          .launch();
+    } catch (_) {}
   }
 
-  // ── App loading — two-phase ────────────────────────────────────────────────
+  // ── App loading — plain async on main isolate ─────────────────────────────
+  // Bug #1 fix: NO compute(). Just await the platform channel call directly.
+  // The spinner is shown via setState before the call, and hidden after.
 
-  Future<void> _loadPhase1() async {
-    setState(() { _loadingPhase1 = true; _loadError = null; });
+  Future<void> _loadApps() async {
+    setState(() { _loadingApps = true; _loadError = null; });
+
     try {
-      final apps = await compute(_loadAppsInBackground, false);
-      _sort(apps);
-      if (mounted) {
-        setState(() {
-          _apps = apps;
-          _loadingPhase1 = false;
-          _loadingIcons = true;
-        });
-      }
-      _loadPhase2(); // fire-and-forget
+      // Phase 1: load without icons — fast (~1–2 seconds)
+      final phase1 = await DeviceApps.getInstalledApplications(
+        includeAppIcons: false,
+        includeSystemApps: true,          // ALL apps including system ones
+        onlyAppsWithLaunchIntent: true,   // only launchable apps
+      );
+      _sortApps(phase1);
+
+      if (!mounted) return;
+      setState(() {
+        _apps = phase1;
+        _loadingApps = false;
+        _loadingIcons = true;  // second pass coming
+      });
+
+      // Phase 2: reload WITH icons — heavier, but now shows list first
+      final phase2 = await DeviceApps.getInstalledApplications(
+        includeAppIcons: true,
+        includeSystemApps: true,
+        onlyAppsWithLaunchIntent: true,
+      );
+      _sortApps(phase2);
+
+      if (!mounted) return;
+      setState(() {
+        _apps = phase2;
+        _loadingIcons = false;
+      });
+
     } catch (e) {
-      if (mounted) setState(() { _loadingPhase1 = false; _loadError = '$e'; });
+      if (mounted) {
+        setState(() { _loadingApps = false; _loadError = '$e'; });
+      }
     }
   }
 
-  Future<void> _loadPhase2() async {
-    try {
-      final apps = await compute(_loadAppsInBackground, true);
-      _sort(apps);
-      if (mounted) setState(() { _apps = apps; _loadingIcons = false; });
-    } catch (_) {
-      if (mounted) setState(() => _loadingIcons = false);
-    }
-  }
-
-  void _sort(List<Application> apps) {
-    apps.sort((a, b) {
+  void _sortApps(List<Application> list) {
+    list.sort((a, b) {
       if (a.systemApp != b.systemApp) return a.systemApp ? 1 : -1;
       return a.appName.toLowerCase().compareTo(b.appName.toLowerCase());
     });
   }
 
-  // ── Start focus ────────────────────────────────────────────────────────────
+  // ── Start focus — Bug #4: hard lock once started ───────────────────────────
 
   Future<void> _start() async {
     final provider = context.read<AppStateProvider>();
 
+    // ── Hard guard: cannot start if already locked ────────────────────────────
     if (provider.isLocked) {
-      _snack('⚠️ A challenge is already active.');
+      _snack('⚠️ A challenge is already running. Wait for it to finish.');
       return;
     }
     if (_selected.isEmpty) {
-      _snack('Please select at least one app to block.');
+      _snack('Select at least one app to block.');
       return;
     }
     if (!_overlayGranted) {
@@ -140,31 +161,29 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
 
     setState(() => _starting = true);
 
-    // Wire billing callback
-    final billing = context.read<BillingService>();
-    billing.onPurchaseSuccess = () {
+    // Wire billing
+    context.read<BillingService>().onPurchaseSuccess = () {
       provider.unlockAll();
       ForegroundMonitorService.stop();
     };
 
-    // Save state & start wall-clock timer
+    // Persist state (wall-clock timer starts here)
     provider.startStudyFocus(
       packages: _selected.toList(),
-      duration: _selectedDuration,
+      duration: _duration,
     );
 
-    // Start the native Kotlin foreground monitor service
+    // Start Kotlin foreground monitoring service
     await ForegroundMonitorService.start(_selected.toList());
 
     if (mounted) {
       setState(() => _starting = false);
-      // Navigate to HomeScreen — overlay is managed there
       Navigator.of(context).pushAndRemoveUntil(
         PageRouteBuilder(
           pageBuilder: (_, __, ___) => const HomeScreen(),
-          transitionsBuilder: (_, anim, __, child) =>
-              FadeTransition(opacity: anim, child: child),
-          transitionDuration: const Duration(milliseconds: 400),
+          transitionsBuilder: (_, a, __, c) =>
+              FadeTransition(opacity: a, child: c),
+          transitionDuration: const Duration(milliseconds: 350),
         ),
         (_) => false,
       );
@@ -183,20 +202,23 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AppStateProvider>();
+
+    // Bug #4: lock entire screen when a challenge is active
     final locked = provider.isLocked;
     final canStart =
-        _overlayGranted && !locked && !_starting && _selected.isNotEmpty;
+        !locked && !_starting && _overlayGranted && _selected.isNotEmpty;
 
     return Scaffold(
       backgroundColor: AppTheme.bg,
       body: CustomScrollView(
         physics: const BouncingScrollPhysics(),
         slivers: [
-          // ── App bar ────────────────────────────────────────────────────
+
+          // ── AppBar ────────────────────────────────────────────────────
           SliverAppBar(
             backgroundColor: AppTheme.bg,
             pinned: true,
-            expandedHeight: 160,
+            expandedHeight: 150,
             leading: GestureDetector(
               onTap: () => Navigator.pop(context),
               child: Container(
@@ -210,7 +232,8 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
             ),
             flexibleSpace: FlexibleSpaceBar(
               title: const Text('App-Specific Lock',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
+                  style: TextStyle(
+                      fontWeight: FontWeight.w700, fontSize: 18)),
               background: Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
@@ -220,31 +243,31 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
                   ),
                 ),
                 child: const Center(
-                    child: Text('📚', style: TextStyle(fontSize: 60))),
+                    child: Text('📚', style: TextStyle(fontSize: 56))),
               ),
             ),
           ),
 
-          // ── How it works card ──────────────────────────────────────────
+          // ── Info card ─────────────────────────────────────────────────
           SliverToBoxAdapter(
             child: Container(
-              margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-              padding: const EdgeInsets.all(16),
+              margin: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+              padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 color: const Color(0xFF7C4DFF).withOpacity(0.08),
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(
-                    color: const Color(0xFF7C4DFF).withOpacity(0.25)),
+                    color: const Color(0xFF7C4DFF).withOpacity(0.2)),
               ),
               child: const Row(
                 children: [
-                  Text('💡', style: TextStyle(fontSize: 22)),
-                  SizedBox(width: 12),
+                  Text('💡', style: TextStyle(fontSize: 20)),
+                  SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'Only the apps you select will be blocked.\n'
+                      'Only the selected apps will be blocked. '
                       'All other apps work normally. '
-                      'Opening a blocked app shows the lock overlay.',
+                      'The overlay appears ONLY when you open a blocked app.',
                       style: TextStyle(
                           color: Color(0xFFCCCCDD),
                           fontSize: 12,
@@ -256,11 +279,11 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
             ),
           ),
 
-          // ── Already locked warning ─────────────────────────────────────
+          // ── Active lock warning (Bug #4) ──────────────────────────────
           if (locked)
             SliverToBoxAdapter(
               child: Container(
-                margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
                   color: const Color(0xFFFF6B9D).withOpacity(0.08),
@@ -269,107 +292,198 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
                       color: const Color(0xFFFF6B9D).withOpacity(0.3)),
                 ),
                 child: const Text(
-                  '🔒 A challenge is already active. Complete or pay penalty first.',
+                  '🔒 A session is already active.\n'
+                  'Wait for the timer to reach 00:00 or pay the ₹99 penalty to stop early.',
                   style: TextStyle(
                       color: Color(0xFFFF6B9D),
                       fontSize: 13,
-                      fontWeight: FontWeight.w600),
+                      fontWeight: FontWeight.w600,
+                      height: 1.4),
                 ),
               ),
             ),
 
-          // ── Overlay permission banner ──────────────────────────────────
+          // ── Permissions ───────────────────────────────────────────────
           if (_permChecked && !_overlayGranted)
             SliverToBoxAdapter(
               child: _PermBanner(
                 icon: '🪟',
-                title: '"Display Over Other Apps" Required',
+                title: '"Display Over Apps" Permission',
                 subtitle:
-                    'Without this, the lock screen cannot appear over blocked apps.',
+                    'Required for the lock screen to appear over blocked apps.',
                 color: const Color(0xFFFF6B9D),
                 onTap: _requestOverlay,
               ),
             ),
 
-          // ── Usage access banner ────────────────────────────────────────
           SliverToBoxAdapter(
             child: _PermBanner(
               icon: '📊',
-              title: 'Usage Access Required',
+              title: 'Usage Access Permission',
               subtitle:
-                  'Tap to open Settings → Usage Access → Enable for Dopamine Detox.',
+                  'Opens Settings → Usage Access. Enable for Dopamine Detox.',
               color: const Color(0xFFFFB74D),
               onTap: _openUsageAccess,
             ),
           ),
 
-          // ── Duration picker ────────────────────────────────────────────
+          // ── Duration picker — disabled when locked ────────────────────
           SliverToBoxAdapter(
-            child: _DurationSection(
-              selected: _selectedDuration,
-              enabled: !locked,
-              onChanged:
-                  locked ? null : (d) => setState(() => _selectedDuration = d),
+            child: Opacity(
+              opacity: locked ? 0.35 : 1.0,
+              child: IgnorePointer(
+                ignoring: locked,
+                child: _DurationPicker(
+                  selected: _duration,
+                  onChanged: (d) => setState(() => _duration = d),
+                ),
+              ),
             ),
           ),
 
-          // ── App list header ────────────────────────────────────────────
+          // ── App list header ───────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+              padding: const EdgeInsets.fromLTRB(20, 6, 20, 8),
               child: Row(
                 children: [
-                  const Text('Select Apps to Block',
+                  const Text('Apps to Block',
                       style: TextStyle(
                           color: Colors.white,
                           fontSize: 18,
                           fontWeight: FontWeight.w700)),
                   const Spacer(),
-                  if (_loadingIcons)
-                    const _LoadingBadge(),
+                  if (_loadingIcons) ...[
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Color(0xFF00E5FF)),
+                    ),
+                    const SizedBox(width: 5),
+                    const Text('Loading icons…',
+                        style: TextStyle(
+                            color: Color(0xFF00E5FF), fontSize: 11)),
+                  ],
                   if (_selected.isNotEmpty) ...[
                     const SizedBox(width: 8),
-                    _CountBadge(count: _selected.length),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppTheme.primary.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text('${_selected.length} selected',
+                          style: const TextStyle(
+                              color: AppTheme.primary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600)),
+                    ),
                   ],
                 ],
               ),
             ),
           ),
 
-          // ── App list body ──────────────────────────────────────────────
-          if (_loadingPhase1)
-            const SliverFillRemaining(child: _LoadingState())
+          // ── App list ──────────────────────────────────────────────────
+          if (_loadingApps)
+            const SliverFillRemaining(
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(color: AppTheme.primary),
+                    SizedBox(height: 14),
+                    Text('Loading all installed apps…',
+                        style: TextStyle(
+                            color: Colors.white54, fontSize: 14)),
+                    SizedBox(height: 4),
+                    Text('This may take a few seconds.',
+                        style: TextStyle(
+                            color: Colors.white24, fontSize: 12)),
+                  ],
+                ),
+              ),
+            )
           else if (_loadError != null)
             SliverToBoxAdapter(
-              child: _ErrorState(
-                error: _loadError!,
-                onRetry: _loadPhase1,
-                onSettings: _openUsageAccess,
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  children: [
+                    const Text('⚠️', style: TextStyle(fontSize: 44)),
+                    const SizedBox(height: 10),
+                    Text('Could not load apps:\n$_loadError',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 13)),
+                    const SizedBox(height: 14),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ElevatedButton(
+                            onPressed: _loadApps,
+                            child: const Text('Retry')),
+                        const SizedBox(width: 10),
+                        OutlinedButton(
+                          onPressed: _openUsageAccess,
+                          style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFFFFB74D),
+                              side: const BorderSide(
+                                  color: Color(0xFFFFB74D))),
+                          child: const Text('Usage Settings'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             )
           else if (_apps.isEmpty)
             SliverToBoxAdapter(
-              child: _EmptyState(onSettings: _openUsageAccess),
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  children: [
+                    const Text('📭', style: TextStyle(fontSize: 44)),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'No apps found.\n\nPlease grant "Usage Access" permission.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: 14,
+                          height: 1.5),
+                    ),
+                    const SizedBox(height: 14),
+                    ElevatedButton(
+                        onPressed: _openUsageAccess,
+                        child: const Text('Open Usage Access Settings')),
+                  ],
+                ),
+              ),
             )
           else
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (ctx, i) {
                     final app = _apps[i];
                     final sel = _selected.contains(app.packageName);
-                    return _AppTile(
-                      app: app,
-                      isSelected: sel,
-                      disabled: locked,
-                      onTap: locked
-                          ? null
-                          : () => setState(() {
-                                sel
-                                    ? _selected.remove(app.packageName)
-                                    : _selected.add(app.packageName);
-                              }),
+                    return Opacity(
+                      opacity: locked ? 0.35 : 1.0,
+                      child: _AppTile(
+                        app: app,
+                        isSelected: sel,
+                        onTap: locked
+                            ? null
+                            : () => setState(() => sel
+                                ? _selected.remove(app.packageName)
+                                : _selected.add(app.packageName)),
+                      ),
                     );
                   },
                   childCount: _apps.length,
@@ -382,9 +496,9 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
       // ── Start button ───────────────────────────────────────────────────
       bottomNavigationBar: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
           child: GestureDetector(
-            onTap: (canStart && !_starting) ? _start : null,
+            onTap: canStart ? _start : null,
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               height: 60,
@@ -416,7 +530,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
                           color: Colors.white, strokeWidth: 2.5))
                   : Text(
                       locked
-                          ? '🔒 Challenge Already Active'
+                          ? '🔒 Session Already Active'
                           : !_overlayGranted
                               ? '⚠️ Grant Overlay Permission First'
                               : _selected.isEmpty
@@ -445,260 +559,160 @@ class _PermBanner extends StatelessWidget {
     required this.color, required this.onTap,
   });
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.07),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(
-        children: [
-          Text(icon, style: const TextStyle(fontSize: 22)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title,
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+        padding: const EdgeInsets.all(13),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.07),
+          borderRadius: BorderRadius.circular(13),
+          border: Border.all(color: color.withOpacity(0.28)),
+        ),
+        child: Row(
+          children: [
+            Text(icon, style: const TextStyle(fontSize: 20)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: TextStyle(
+                          color: color,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12)),
+                  Text(subtitle,
+                      style: const TextStyle(
+                          color: Colors.white54, fontSize: 11)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: onTap,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                    color: color.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(8)),
+                child: Text('Grant',
                     style: TextStyle(
-                        color: color, fontWeight: FontWeight.w700, fontSize: 12)),
-                Text(subtitle,
-                    style: const TextStyle(color: Colors.white54, fontSize: 11)),
-              ],
+                        color: color,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11)),
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: onTap,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                  color: color.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(8)),
-              child: Text('Grant',
-                  style: TextStyle(
-                      color: color, fontWeight: FontWeight.w700, fontSize: 11)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+          ],
+        ),
+      );
 }
 
-// ─── Duration Section ─────────────────────────────────────────────────────────
-class _DurationSection extends StatelessWidget {
+// ─── Duration Picker ──────────────────────────────────────────────────────────
+class _DurationPicker extends StatelessWidget {
   final Duration selected;
-  final bool enabled;
-  final ValueChanged<Duration>? onChanged;
-  const _DurationSection(
-      {required this.selected, required this.enabled, required this.onChanged});
+  final ValueChanged<Duration> onChanged;
+  const _DurationPicker({required this.selected, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
     final opts = [
       const Duration(minutes: 25), const Duration(minutes: 45),
-      const Duration(hours: 1), const Duration(hours: 2),
-      const Duration(hours: 3), const Duration(hours: 4),
+      const Duration(hours: 1),    const Duration(hours: 2),
+      const Duration(hours: 3),    const Duration(hours: 4),
     ];
     String label(Duration d) =>
         d.inMinutes < 60 ? '${d.inMinutes}m' : '${d.inHours}h';
 
-    return Opacity(
-      opacity: enabled ? 1.0 : 0.4,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Lock Duration',
-                style: TextStyle(
-                    color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 10, runSpacing: 10,
-              children: opts.map((d) => GestureDetector(
-                onTap: enabled ? () => onChanged?.call(d) : null,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 20, vertical: 11),
-                  decoration: BoxDecoration(
-                    color: selected == d
-                        ? AppTheme.primary
-                        : AppTheme.primary.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                        color: AppTheme.primary.withOpacity(0.4)),
-                  ),
-                  child: Text(label(d),
-                      style: TextStyle(
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Lock Duration',
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700)),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: opts
+                .map((d) => GestureDetector(
+                      onTap: () => onChanged(d),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 11),
+                        decoration: BoxDecoration(
                           color: selected == d
-                              ? Colors.white : AppTheme.primary,
-                          fontWeight: FontWeight.w700)),
-                ),
-              )).toList(),
-            ),
-          ],
-        ),
+                              ? AppTheme.primary
+                              : AppTheme.primary.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                              color: AppTheme.primary.withOpacity(0.4)),
+                        ),
+                        child: Text(label(d),
+                            style: TextStyle(
+                                color: selected == d
+                                    ? Colors.white
+                                    : AppTheme.primary,
+                                fontWeight: FontWeight.w700)),
+                      ),
+                    ))
+                .toList(),
+          ),
+        ],
       ),
     );
   }
 }
 
-// ─── Loading / Error / Empty states ──────────────────────────────────────────
-class _LoadingState extends StatelessWidget {
-  const _LoadingState();
-  @override
-  Widget build(BuildContext context) => const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(color: AppTheme.primary),
-            SizedBox(height: 14),
-            Text('Loading apps…',
-                style: TextStyle(color: Colors.white54, fontSize: 14)),
-            SizedBox(height: 4),
-            Text('May take a few seconds.',
-                style: TextStyle(color: Colors.white24, fontSize: 12)),
-          ],
-        ),
-      );
-}
-
-class _ErrorState extends StatelessWidget {
-  final String error;
-  final VoidCallback onRetry, onSettings;
-  const _ErrorState(
-      {required this.error, required this.onRetry, required this.onSettings});
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.all(28),
-        child: Column(children: [
-          const Text('⚠️', style: TextStyle(fontSize: 44)),
-          const SizedBox(height: 10),
-          Text('Could not load apps:\n$error',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white54, fontSize: 13)),
-          const SizedBox(height: 16),
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            ElevatedButton(onPressed: onRetry, child: const Text('Retry')),
-            const SizedBox(width: 10),
-            OutlinedButton(
-              onPressed: onSettings,
-              style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFFFFB74D),
-                  side: const BorderSide(color: Color(0xFFFFB74D))),
-              child: const Text('Usage Settings'),
-            ),
-          ]),
-        ]),
-      );
-}
-
-class _EmptyState extends StatelessWidget {
-  final VoidCallback onSettings;
-  const _EmptyState({required this.onSettings});
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.all(28),
-        child: Column(children: [
-          const Text('📭', style: TextStyle(fontSize: 44)),
-          const SizedBox(height: 10),
-          const Text(
-            'No apps found.\n\nGrant "Usage Access" permission so the app can read your installed apps.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white54, fontSize: 14, height: 1.5),
-          ),
-          const SizedBox(height: 14),
-          ElevatedButton(
-              onPressed: onSettings,
-              child: const Text('Open Usage Access Settings')),
-        ]),
-      );
-}
-
-class _LoadingBadge extends StatelessWidget {
-  const _LoadingBadge();
-  @override
-  Widget build(BuildContext context) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 12, height: 12,
-            child: CircularProgressIndicator(
-                strokeWidth: 2, color: const Color(0xFF00E5FF)),
-          ),
-          const SizedBox(width: 5),
-          const Text('Loading icons…',
-              style: TextStyle(color: Color(0xFF00E5FF), fontSize: 11)),
-        ],
-      );
-}
-
-class _CountBadge extends StatelessWidget {
-  final int count;
-  const _CountBadge({required this.count});
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-            color: AppTheme.primary.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(10)),
-        child: Text('$count selected',
-            style: const TextStyle(
-                color: AppTheme.primary,
-                fontSize: 12,
-                fontWeight: FontWeight.w600)),
-      );
-}
-
 // ─── App Tile ─────────────────────────────────────────────────────────────────
 class _AppTile extends StatelessWidget {
   final Application app;
-  final bool isSelected, disabled;
+  final bool isSelected;
   final VoidCallback? onTap;
   const _AppTile(
-      {required this.app, required this.isSelected,
-       required this.disabled, required this.onTap});
+      {required this.app, required this.isSelected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final icon = app is ApplicationWithIcon ? app as ApplicationWithIcon : null;
-    return Opacity(
-      opacity: disabled ? 0.4 : 1.0,
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          margin: const EdgeInsets.only(bottom: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
+    final icon =
+        app is ApplicationWithIcon ? app as ApplicationWithIcon : null;
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        margin: const EdgeInsets.only(bottom: 8),
+        padding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? AppTheme.primary.withOpacity(0.14)
+              : AppTheme.cardBg,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
             color: isSelected
-                ? AppTheme.primary.withOpacity(0.15)
-                : AppTheme.cardBg,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isSelected
-                  ? AppTheme.primary.withOpacity(0.5)
-                  : Colors.white.withOpacity(0.06),
-            ),
+                ? AppTheme.primary.withOpacity(0.5)
+                : Colors.white.withOpacity(0.06),
           ),
-          child: Row(children: [
-            // App icon
+        ),
+        child: Row(
+          children: [
+            // Icon
             ClipRRect(
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(9),
               child: icon != null
                   ? Image.memory(icon.icon,
-                      width: 44, height: 44, fit: BoxFit.cover,
+                      width: 42,
+                      height: 42,
+                      fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => _placeholder())
                   : _placeholder(),
             ),
-            const SizedBox(width: 14),
-            // Name + package
+            const SizedBox(width: 12),
+            // Text
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -707,42 +721,46 @@ class _AppTile extends StatelessWidget {
                       style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w600,
-                          fontSize: 15)),
+                          fontSize: 14)),
                   Text(app.packageName,
                       style: const TextStyle(
-                          color: Color(0xFF6666AA), fontSize: 11),
+                          color: Color(0xFF6666AA), fontSize: 10),
                       overflow: TextOverflow.ellipsis),
                 ],
               ),
             ),
             // Checkbox
             AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: 26, height: 26,
+              duration: const Duration(milliseconds: 180),
+              width: 24,
+              height: 24,
               decoration: BoxDecoration(
-                color: isSelected ? AppTheme.primary : Colors.transparent,
-                borderRadius: BorderRadius.circular(8),
+                color:
+                    isSelected ? AppTheme.primary : Colors.transparent,
+                borderRadius: BorderRadius.circular(7),
                 border: Border.all(
                   color: isSelected
                       ? AppTheme.primary
-                      : Colors.white.withOpacity(0.3),
+                      : Colors.white.withOpacity(0.28),
                   width: 2,
                 ),
               ),
               child: isSelected
-                  ? const Icon(Icons.check, color: Colors.white, size: 16)
+                  ? const Icon(Icons.check, color: Colors.white, size: 15)
                   : null,
             ),
-          ]),
+          ],
         ),
       ),
     );
   }
 
   Widget _placeholder() => Container(
-        width: 44, height: 44,
+        width: 42,
+        height: 42,
         decoration: BoxDecoration(
-            color: AppTheme.surface, borderRadius: BorderRadius.circular(10)),
-        child: const Icon(Icons.android, color: Colors.white38, size: 24),
+            color: AppTheme.surface,
+            borderRadius: BorderRadius.circular(9)),
+        child: const Icon(Icons.android, color: Colors.white38, size: 22),
       );
 }
