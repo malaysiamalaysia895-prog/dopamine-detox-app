@@ -22,15 +22,25 @@ jobs:
         with:
           channel: 'stable'
           
-      - name: Auto-Find Project and Build
+      - name: Auto-Find Project, Fix Android, and Build
         run: |
           echo "Dhoondh raha hoon pubspec.yaml kahan hai..."
           PUBSPEC=$(find . -name "pubspec.yaml" | head -n 1)
           DIR=$(dirname "$PUBSPEC")
           echo "Folder mil gaya yahan: $DIR"
           cd "$DIR"
+          
+          # Pehle packages download karein
           flutter pub get
+          
+          # YEH NAYI COMMAND HAI JO ERROR FIX KAREGI
+          echo "Replit ki missing Android files ko naya bana raha hoon..."
+          flutter create .
+          
+          # Ab final APK banayega
           flutter build apk --release
+          
+          # APK ko bahar nikalne ke liye
           mkdir -p $GITHUB_WORKSPACE/output
           find build -name "*.apk" -exec cp {} $GITHUB_WORKSPACE/output/ \;
         
