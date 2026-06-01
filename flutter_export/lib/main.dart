@@ -8,6 +8,7 @@
 // 1. android/app/src/main/AndroidManifest.xml
 //    Inside <manifest>:
 //      <uses-permission android:name="android.permission.INTERNET"/>
+//      <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 //    Inside <application>:
 //      <meta-data
 //        android:name="com.google.android.gms.ads.APPLICATION_ID"
@@ -27,8 +28,7 @@
 // 3. android/app/build.gradle:
 //      defaultConfig { minSdkVersion 21 }
 //
-// 4. Add audio assets to pubspec.yaml (already listed there).
-//    Place .mp3 files in assets/audio/:
+// 4. Place .mp3 files in assets/audio/:
 //      bgm_garage.mp3, bgm_office.mp3, bgm_silicon.mp3,
 //      bgm_megacorp.mp3, bgm_universe.mp3,
 //      spawn_pop.mp3, merge_snap.mp3, error_buzz.mp3,
@@ -45,6 +45,7 @@ import 'screens/level_map_screen.dart';
 import 'screens/game_board_screen.dart';
 import 'services/audio_manager.dart';
 import 'services/ad_manager.dart';
+import 'services/network_gate.dart';
 import 'models/models.dart';
 
 void main() async {
@@ -58,12 +59,11 @@ void main() async {
 
   // ── Immersive full-screen ───────────────────────────────────────────────────
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor:            Colors.transparent,
-    statusBarIconBrightness:   Brightness.light,
-    navigationBarColor:        Colors.black,
+    statusBarColor:              Colors.transparent,
+    statusBarIconBrightness:     Brightness.light,
+    navigationBarColor:          Colors.black,
     navigationBarIconBrightness: Brightness.light,
   ));
-
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
   // ── AdMob SDK ───────────────────────────────────────────────────────────────
@@ -76,6 +76,8 @@ void main() async {
     const ProviderScope(child: TechTycoonMergeApp()),
   );
 }
+
+// ─── App ──────────────────────────────────────────────────────────────────────
 
 class TechTycoonMergeApp extends StatelessWidget {
   const TechTycoonMergeApp({super.key});
@@ -94,12 +96,14 @@ class TechTycoonMergeApp extends StatelessWidget {
         useMaterial3: true,
         fontFamily: 'Roboto',
       ),
-      home: const _AppRoot(),
+      // NetworkGate wraps the entire game tree.
+      // Any offline state → un-dismissible blocking screen.
+      home: const NetworkGate(child: _AppRoot()),
     );
   }
 }
 
-// ─── App Root — Switches between map and game ─────────────────────────────────
+// ─── App Root — switches between Level Map and Game Board ─────────────────────
 
 class _AppRoot extends ConsumerWidget {
   const _AppRoot();
@@ -110,8 +114,8 @@ class _AppRoot extends ConsumerWidget {
 
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 400),
-      transitionBuilder: (child, animation) => FadeTransition(
-        opacity: animation, child: child),
+      transitionBuilder: (child, animation) =>
+          FadeTransition(opacity: animation, child: child),
       child: switch (screen) {
         AppScreen.map  => const LevelMapScreen(key: ValueKey('map')),
         AppScreen.game => const GameBoardScreen(key: ValueKey('game')),

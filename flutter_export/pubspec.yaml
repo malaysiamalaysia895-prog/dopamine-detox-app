@@ -13,6 +13,7 @@ dependencies:
   google_mobile_ads: ^5.1.0
   audioplayers: ^6.0.0
   shared_preferences: ^2.3.2
+  connectivity_plus: ^6.0.3
 
 dev_dependencies:
   flutter_test:
