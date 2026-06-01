@@ -3,14 +3,21 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:installed_apps/installed_apps.dart';
-import 'package:installed_apps/app_info.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:provider/provider.dart';
 
 import '../main.dart';
 import '../providers/app_state_provider.dart';
 import '../services/billing_service.dart';
+
+// The native method channel — shared with the app monitor service.
+// We piggyback on the same channel to call getInstalledApps(), which uses
+// PackageManager.queryIntentActivities(MAIN+LAUNCHER, MATCH_ALL) so ALL
+// launchable apps (Instagram, Facebook, WhatsApp, etc.) are always returned.
+const _kMonitorChannel =
+    MethodChannel('com.example.dopamine_detox/app_monitor');
 
 class StudyFocusScreen extends StatefulWidget {
   const StudyFocusScreen({super.key});
@@ -21,10 +28,11 @@ class StudyFocusScreen extends StatefulWidget {
 
 class _StudyFocusScreenState extends State<StudyFocusScreen> {
   // ── App list ───────────────────────────────────────────────────────────────
-  List<AppInfo> _installedApps = [];
+  // Phase 1: name + packageName from native Kotlin (fast, no icons).
+  //   Format: {"name": "Instagram", "packageName": "com.instagram.android"}
+  List<Map<String, String>> _installedApps = [];
 
-  // Icons stored separately — loaded in a second pass so the list appears fast.
-  // Key: packageName → icon bytes.
+  // Phase 2: icons loaded in background via installed_apps package.
   Map<String, Uint8List> _appIcons = {};
 
   final Set<String> _selectedPackages = {};
@@ -35,14 +43,13 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
 
-  List<AppInfo> get _filteredApps {
+  List<Map<String, String>> get _filteredApps {
     if (_searchQuery.isEmpty) return _installedApps;
     final q = _searchQuery.toLowerCase();
-    return _installedApps
-        .where((a) =>
-            a.name.toLowerCase().contains(q) ||
-            a.packageName.toLowerCase().contains(q))
-        .toList();
+    return _installedApps.where((a) {
+      return (a['name'] ?? '').toLowerCase().contains(q) ||
+          (a['packageName'] ?? '').toLowerCase().contains(q);
+    }).toList();
   }
 
   // ── Permissions ────────────────────────────────────────────────────────────
@@ -69,8 +76,9 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
     if (!overlayGranted) await FlutterOverlayWindow.requestPermission();
     final overlayNow = await FlutterOverlayWindow.isPermissionGranted();
 
-    // Check PACKAGE_USAGE_STATS — Android-specific special permission.
-    // We probe it by attempting to load apps; no runtime dialog exists for it.
+    // PACKAGE_USAGE_STATS is a special permission that can only be granted by
+    // the user in Settings > Digital Wellbeing > App Timer > Special Access.
+    // We probe it by trying the native hasUsageStatsPermission call.
     final usageNow = await _checkUsageStatsGranted();
 
     setState(() {
@@ -84,8 +92,9 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
 
   Future<bool> _checkUsageStatsGranted() async {
     try {
-      final apps = await InstalledApps.getInstalledApps(false, true);
-      return apps.isNotEmpty;
+      final result = await _kMonitorChannel
+          .invokeMethod<bool>('hasUsageStatsPermission');
+      return result ?? false;
     } catch (_) {
       return false;
     }
@@ -94,42 +103,46 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
   Future<void> _openUsageAccessSettings() async {
     if (Platform.isAndroid) {
       const intent = AndroidIntent(
-        action: 'android.settings.USAGE_ACCESS_SETTINGS',
-      );
+          action: 'android.settings.USAGE_ACCESS_SETTINGS');
       await intent.launch();
     }
   }
 
-  // ── App loading (two-phase) ────────────────────────────────────────────────
+  // ── Two-phase app loading ──────────────────────────────────────────────────
   //
-  // Phase 1 — fast: load package names + app names WITHOUT icons.
-  //   The list appears instantly with an Android icon fallback.
+  // Phase 1 (fast):  Call native Kotlin getInstalledApps() which uses
+  //   PackageManager.queryIntentActivities(MAIN+LAUNCHER, MATCH_ALL).
+  //   Returns app names + package names in ~50–200 ms, no icons.
+  //   The list is displayed immediately with an Android-icon fallback.
+  //   Instagram, Facebook, etc. are ALWAYS in this list.
   //
-  // Phase 2 — background: load the same list WITH icons and populate
-  //   _appIcons. The list updates smoothly as icons arrive.
+  // Phase 2 (background):  installed_apps loads icons for visible apps.
+  //   Updates the icon map; tiles refresh smoothly as icons arrive.
 
   Future<void> _loadApps() async {
     setState(() => _loadingApps = true);
 
-    // Give the UI one frame to render the loading spinner before the
-    // heavy platform channel call starts. Without this, the spinner never
-    // appears and the screen looks frozen.
+    // Yield one frame so the loading spinner actually renders before the
+    // platform channel call begins. Without this, the UI looks frozen.
     await Future.delayed(const Duration(milliseconds: 32));
 
     try {
-      // Phase 1: No icons — fast (~200–400 ms vs 3–8 s with icons)
-      final apps = await InstalledApps.getInstalledApps(false, true);
-      apps.sort((a, b) =>
-          a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      // ── Phase 1: Native — guaranteed full list ─────────────────────────
+      final raw = await _kMonitorChannel.invokeMethod('getInstalledApps');
+      final apps = (raw as List)
+          .map((e) => Map<String, String>.from(e as Map))
+          .toList();
 
       if (mounted) {
         setState(() {
           _installedApps = apps;
           _loadingApps = false;
+          // Update usage stats flag while we're here
+          if (apps.isNotEmpty) _usageGranted = true;
         });
       }
 
-      // Phase 2: Load icons in the background — does NOT block the UI.
+      // ── Phase 2: Icons in background ──────────────────────────────────
       _loadIconsInBackground();
     } catch (e) {
       if (mounted) setState(() => _loadingApps = false);
@@ -149,23 +162,26 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
       for (final a in withIcons) {
         if (a.icon != null) map[a.packageName] = a.icon!;
       }
-      setState(() => _appIcons = map);
+      if (mounted) setState(() => _appIcons = map);
     } catch (_) {
       // Icons are cosmetic — silently ignore failures.
     }
   }
 
-  // ── Start focus ────────────────────────────────────────────────────────────
+  // ── Start focus session ────────────────────────────────────────────────────
 
   Future<void> _startFocus() async {
     final provider = context.read<AppStateProvider>();
 
-    // ── State lock guard ─────────────────────────────────────────────────────
+    // ── State lock guard ────────────────────────────────────────────────────
     // Prevents starting a second session while one is already running.
+    // AppStateProvider.startStudyFocus() also has this guard but we show
+    // feedback here so the user knows why nothing happened.
     if (provider.isLocked) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('A session is already active. Wait for it to end.')),
+            content:
+                Text('A session is already active. Wait for it to end.')),
       );
       return;
     }
@@ -179,13 +195,10 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
     }
 
     if (!_overlayGranted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text(
-                '⚠️ "Display over other apps" permission is required.')),
-      );
       await FlutterOverlayWindow.requestPermission();
-      return;
+      final granted = await FlutterOverlayWindow.isPermissionGranted();
+      setState(() => _overlayGranted = granted);
+      if (!granted) return;
     }
 
     final billing = context.read<BillingService>();
@@ -204,9 +217,9 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
       duration: _selectedDuration,
     );
 
-    // The background AppMonitorService (started by main.dart's provider
-    // listener) will show the overlay whenever a locked app is opened.
-    // We just navigate back — no overlay shown here.
+    // The AppMonitorService (started by main.dart's provider listener) will
+    // show the overlay whenever a locked app is opened. Navigator.pop() is
+    // safe here — no overlay shown at this point.
     if (mounted) Navigator.pop(context);
   }
 
@@ -258,7 +271,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
             ),
           ),
 
-          // ── Active session banner (state lock) ────────────────────────
+          // ── Active session banner (state lock UI) ─────────────────────
           if (isStudyActive)
             SliverToBoxAdapter(
               child: _ActiveSessionBanner(provider: provider),
@@ -278,8 +291,8 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
                       color: const Color(0xFFFF6B9D),
                       onTap: () async {
                         await FlutterOverlayWindow.requestPermission();
-                        final g =
-                            await FlutterOverlayWindow.isPermissionGranted();
+                        final g = await FlutterOverlayWindow
+                            .isPermissionGranted();
                         setState(() => _overlayGranted = g);
                       },
                     ),
@@ -294,6 +307,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
                         await _openUsageAccessSettings();
                         final g = await _checkUsageStatsGranted();
                         setState(() => _usageGranted = g);
+                        if (g) await _loadApps();
                       },
                     ),
                 ],
@@ -309,7 +323,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
               ),
             ),
 
-          // ── App list header (hidden when session active) ───────────────
+          // ── App list header ───────────────────────────────────────────
           if (!isStudyActive)
             SliverToBoxAdapter(
               child: Padding(
@@ -352,7 +366,8 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
                   controller: _searchController,
                   onChanged: (v) =>
                       setState(() => _searchQuery = v.trim()),
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  style:
+                      const TextStyle(color: Colors.white, fontSize: 14),
                   decoration: InputDecoration(
                     hintText: 'Search apps...',
                     hintStyle: const TextStyle(color: Colors.white38),
@@ -395,101 +410,93 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
 
           // ── App list ──────────────────────────────────────────────────
           if (!isStudyActive)
-            _loadingApps
-                ? SliverFillRemaining(
-                    child: Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const CircularProgressIndicator(
-                              color: AppTheme.primary),
-                          const SizedBox(height: 16),
-                          const Text('Loading installed apps...',
-                              style: TextStyle(color: Colors.white54)),
-                        ],
+            if (_loadingApps)
+              SliverFillRemaining(
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const CircularProgressIndicator(
+                          color: AppTheme.primary),
+                      const SizedBox(height: 16),
+                      const Text('Loading installed apps...',
+                          style: TextStyle(color: Colors.white54)),
+                    ],
+                  ),
+                ),
+              )
+            else if (_installedApps.isEmpty)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Column(
+                    children: [
+                      const Text('📭', style: TextStyle(fontSize: 48)),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'No apps found.\nPlease grant Usage Access permission.',
+                        textAlign: TextAlign.center,
+                        style:
+                            TextStyle(color: Colors.white54, fontSize: 14),
                       ),
-                    ),
-                  )
-                : _installedApps.isEmpty
-                    ? SliverToBoxAdapter(
-                        child: Padding(
-                          padding: const EdgeInsets.all(32),
-                          child: Column(
-                            children: [
-                              const Text('📭',
-                                  style: TextStyle(fontSize: 48)),
-                              const SizedBox(height: 12),
-                              const Text(
-                                'No apps found.\nPlease grant Usage Access permission.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    color: Colors.white54,
-                                    fontSize: 14),
-                              ),
-                              const SizedBox(height: 16),
-                              ElevatedButton(
-                                onPressed: _openUsageAccessSettings,
-                                child: const Text(
-                                    'Open Usage Access Settings'),
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    : _filteredApps.isEmpty
-                        ? SliverToBoxAdapter(
-                            child: Padding(
-                              padding: const EdgeInsets.all(40),
-                              child: Column(
-                                children: [
-                                  const Text('🔍',
-                                      style: TextStyle(fontSize: 40)),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    'No apps match "$_searchQuery"',
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                        color: Colors.white54,
-                                        fontSize: 14),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )
-                        : SliverPadding(
-                            padding:
-                                const EdgeInsets.fromLTRB(16, 0, 16, 120),
-                            sliver: SliverList(
-                              delegate: SliverChildBuilderDelegate(
-                                (ctx, index) {
-                                  final app = _filteredApps[index];
-                                  final isSelected = _selectedPackages
-                                      .contains(app.packageName);
-                                  return _AppTile(
-                                    app: app,
-                                    icon: _appIcons[app.packageName],
-                                    isSelected: isSelected,
-                                    onTap: () {
-                                      setState(() {
-                                        if (isSelected) {
-                                          _selectedPackages
-                                              .remove(app.packageName);
-                                        } else {
-                                          _selectedPackages
-                                              .add(app.packageName);
-                                        }
-                                      });
-                                    },
-                                  );
-                                },
-                                childCount: _filteredApps.length,
-                              ),
-                            ),
-                          ),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: _openUsageAccessSettings,
+                        child: const Text('Open Usage Access Settings'),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else if (_filteredApps.isEmpty)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.all(40),
+                  child: Column(
+                    children: [
+                      const Text('🔍', style: TextStyle(fontSize: 40)),
+                      const SizedBox(height: 12),
+                      Text(
+                        'No apps match "$_searchQuery"',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 14),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
+                sliver: SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (ctx, index) {
+                      final app = _filteredApps[index];
+                      final pkg = app['packageName'] ?? '';
+                      final isSelected = _selectedPackages.contains(pkg);
+                      return _AppTile(
+                        name: app['name'] ?? pkg,
+                        packageName: pkg,
+                        icon: _appIcons[pkg],
+                        isSelected: isSelected,
+                        onTap: () => setState(() {
+                          if (isSelected) {
+                            _selectedPackages.remove(pkg);
+                          } else {
+                            _selectedPackages.add(pkg);
+                          }
+                        }),
+                      );
+                    },
+                    childCount: _filteredApps.length,
+                  ),
+                ),
+              ),
         ],
       ),
 
-      // ── Start button (hidden when session active) ───────────────────────
+      // ── Start button (hidden when session active) ─────────────────────
       bottomNavigationBar: isStudyActive
           ? null
           : SafeArea(
@@ -505,11 +512,11 @@ class _StudyFocusScreenState extends State<StudyFocusScreen> {
                         colors: _overlayGranted
                             ? [
                                 const Color(0xFF7C4DFF),
-                                const Color(0xFF5C6BC0)
+                                const Color(0xFF5C6BC0),
                               ]
                             : [
                                 Colors.grey.shade700,
-                                Colors.grey.shade600
+                                Colors.grey.shade600,
                               ],
                       ),
                       borderRadius: BorderRadius.circular(18),
@@ -559,8 +566,7 @@ class _ActiveSessionBanner extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF7C4DFF), Color(0xFF5C6BC0)],
-        ),
+            colors: [Color(0xFF7C4DFF), Color(0xFF5C6BC0)]),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
@@ -572,29 +578,25 @@ class _ActiveSessionBanner extends StatelessWidget {
       ),
       child: Column(
         children: [
-          const Text(
-            '🔒 Session Active',
-            style: TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w800),
-          ),
+          const Text('🔒 Session Active',
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800)),
           const SizedBox(height: 4),
           const Text(
-            'A focus session is running. You cannot start\na new one until this timer reaches 00:00.',
+            'A focus session is running. You cannot start\n'
+            'a new one until this timer reaches 00:00:00.',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.white70, fontSize: 12),
           ),
           const SizedBox(height: 16),
-          Text(
-            '$h:$m:$s',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 48,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 3,
-            ),
-          ),
+          Text('$h:$m:$s',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 48,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 3)),
           const SizedBox(height: 12),
           ClipRRect(
             borderRadius: BorderRadius.circular(4),
@@ -606,9 +608,10 @@ class _ActiveSessionBanner extends StatelessWidget {
               minHeight: 5,
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Text(
-            '${provider.lockedPackages.length} app${provider.lockedPackages.length == 1 ? '' : 's'} locked',
+            '${provider.lockedPackages.length} app'
+            '${provider.lockedPackages.length == 1 ? '' : 's'} locked',
             style: const TextStyle(color: Colors.white60, fontSize: 12),
           ),
         ],
@@ -735,8 +738,7 @@ class _DurationSection extends StatelessWidget {
                               : AppTheme.primary.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                              color:
-                                  AppTheme.primary.withOpacity(0.4)),
+                              color: AppTheme.primary.withOpacity(0.4)),
                         ),
                         child: Text(
                           label(d),
@@ -759,13 +761,15 @@ class _DurationSection extends StatelessWidget {
 
 // ─── App Tile ─────────────────────────────────────────────────────────────────
 class _AppTile extends StatelessWidget {
-  final AppInfo app;
-  final Uint8List? icon; // Pre-fetched icon bytes; null = show fallback
+  final String name;
+  final String packageName;
+  final Uint8List? icon;
   final bool isSelected;
   final VoidCallback onTap;
 
   const _AppTile({
-    required this.app,
+    required this.name,
+    required this.packageName,
     required this.icon,
     required this.isSelected,
     required this.onTap,
@@ -810,12 +814,12 @@ class _AppTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(app.name,
+                  Text(name,
                       style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w600,
                           fontSize: 15)),
-                  Text(app.packageName,
+                  Text(packageName,
                       style: const TextStyle(
                           color: Color(0xFF6666AA), fontSize: 11),
                       overflow: TextOverflow.ellipsis),
@@ -827,9 +831,7 @@ class _AppTile extends StatelessWidget {
               width: 26,
               height: 26,
               decoration: BoxDecoration(
-                color: isSelected
-                    ? AppTheme.primary
-                    : Colors.transparent,
+                color: isSelected ? AppTheme.primary : Colors.transparent,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: isSelected
@@ -839,8 +841,7 @@ class _AppTile extends StatelessWidget {
                 ),
               ),
               child: isSelected
-                  ? const Icon(Icons.check,
-                      color: Colors.white, size: 16)
+                  ? const Icon(Icons.check, color: Colors.white, size: 16)
                   : null,
             ),
           ],

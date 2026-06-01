@@ -231,6 +231,15 @@ class AppStateProvider extends ChangeNotifier {
     _emergencyUsesToday++;
     _emergencyUnlockActive = true;
     _emergencyRemaining = const Duration(minutes: 2);
+
+    // Persist the wall-clock end time so AppMonitorService can enforce the
+    // 2-minute window natively — no Dart timer dependency.
+    // Key: "flutter.emergencyEndEpochMs" in FlutterSharedPreferences.
+    final endMs = DateTime.now()
+        .add(const Duration(minutes: 2))
+        .millisecondsSinceEpoch;
+    _prefs.setInt('emergencyEndEpochMs', endMs);
+
     _persistState();
     notifyListeners();
 
@@ -252,6 +261,8 @@ class AppStateProvider extends ChangeNotifier {
   void _deactivateEmergencyUnlock() {
     _emergencyUnlockActive = false;
     _emergencyRemaining = const Duration(minutes: 2);
+    // Clear the native emergency window so AppMonitorService resumes blocking
+    _prefs.setInt('emergencyEndEpochMs', 0);
     notifyListeners();
   }
 
@@ -265,6 +276,8 @@ class AppStateProvider extends ChangeNotifier {
     _lockedPackages = [];
     _remainingTime = Duration.zero;
     _challengeStartTime = null;
+    // Clear native emergency window flag on full unlock
+    _prefs.setInt('emergencyEndEpochMs', 0);
     _persistState();
     notifyListeners();
   }

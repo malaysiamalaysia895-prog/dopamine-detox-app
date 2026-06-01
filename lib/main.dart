@@ -123,9 +123,11 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
           }
           break;
         case 'onBlockedAppLeft':
-          // Optionally close overlay when user leaves blocked app.
-          // We leave this as a no-op; the overlay stays until
-          // emergency/penalty/timer-end so the user can't sneak back.
+          // User navigated away from the blocked app (pressed home, back, etc.)
+          // Close the overlay so the rest of the phone remains usable.
+          // The overlay will reappear the moment the blocked app returns to
+          // the foreground (detected by AppMonitorService's next poll).
+          await FlutterOverlayWindow.closeOverlay();
           break;
       }
     });
