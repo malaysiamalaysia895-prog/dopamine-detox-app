@@ -15,27 +15,43 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-      
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-      
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.0'
           channel: 'stable'
 
-      - name: Fix Android Folder (Kotlin 1.9.0 Fix)
+      - name: Master Override (Force Kotlin 1.9.24 on all plugins)
         run: |
           rm -rf android
           flutter create --platforms android --project-name dopamine_detox .
-          # Pedometer 3.0.0 ke liye Kotlin 1.9.0 ko fix karna
-          sed -i -E 's/id "org.jetbrains.kotlin.android" version "[^"]+"/id "org.jetbrains.kotlin.android" version "1.9.0"/g' android/settings.gradle || true
-          sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.0"/g' android/build.gradle || true
+
+          # Step 1: Root level par naya Kotlin set karna
+          sed -i -E 's/id "org.jetbrains.kotlin.android" version "[^"]+"/id "org.jetbrains.kotlin.android" version "1.9.24"/g' android/settings.gradle || true
           
+          # Step 2: Sabhi purane packages (jaise pedometer) ko force karna
+          cat <<'EOF' >> android/build.gradle
+          
+          subprojects {
+              buildscript {
+                  configurations.all {
+                      resolutionStrategy.eachDependency { DependencyResolveDetails details ->
+                          if (details.requested.group == 'org.jetbrains.kotlin' && details.requested.name.contains('kotlin-gradle-plugin')) {
+                              details.useVersion "1.9.24"
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
+
       - name: Install Packages
         run: flutter pub get
 
