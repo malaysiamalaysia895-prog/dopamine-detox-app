@@ -14,7 +14,7 @@
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions"/>
 
-    <!-- Query ALL installed packages (required for device_apps to list every app) -->
+    <!-- Query ALL installed packages (required for installed_apps to list every app) -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission"/>
 
@@ -78,7 +78,7 @@
             android:value="2"/>
     </application>
 
-    <!-- Required so device_apps can see ALL installed apps on Android 11+ -->
+    <!-- Required so installed_apps can see ALL installed apps on Android 11+ -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN"/>

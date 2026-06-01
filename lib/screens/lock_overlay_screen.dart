@@ -29,9 +29,10 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
   double _progress = 0.0;
 
   // ── Emergency unlock ───────────────────────────────────────────────────────
+  // _emergencyActive and _emergencyRemainingSeconds are pushed from the main
+  // app via timer_update messages — the overlay never manages its own timer.
   bool _emergencyActive = false;
-  Duration _emergencyRemaining = const Duration(minutes: 2);
-  Timer? _emergencyTimer;
+  int _emergencyRemainingSeconds = 120;
 
   // ── Long-press progress ────────────────────────────────────────────────────
   double _longPressProgress = 0.0;
@@ -75,7 +76,13 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
             _emergencyUsesLeft = data['emergencyUsesLeft'] as int? ?? 10;
             _isMobileLock = data['isMobileLock'] as bool? ?? false;
             _progress = (data['progress'] as num?)?.toDouble() ?? 0.0;
+            _emergencyActive = data['emergencyActive'] as bool? ?? false;
+            _emergencyRemainingSeconds =
+                data['emergencyRemainingSeconds'] as int? ?? 120;
           });
+          // If emergency is active the overlay should be closed — the main app
+          // closes it, but close defensively here too in case of race condition.
+          if (_emergencyActive) FlutterOverlayWindow.closeOverlay();
         }
         break;
 
@@ -126,41 +133,15 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
   void _triggerEmergencyUnlock() {
     if (_emergencyUsesLeft <= 0 || _isMobileLock) return;
 
-    // Notify main app to decrement daily count + unlock for 2 min
+    // Tell the main app to:
+    //   1. Decrement the daily emergency count in AppStateProvider
+    //   2. Schedule re-showing this overlay after 2 minutes
+    // The main app handles re-activation because timers in the overlay
+    // isolate are killed when the overlay closes.
     FlutterOverlayWindow.shareData({'type': 'emergency_unlock_requested'});
 
-    setState(() {
-      _emergencyActive = true;
-      _emergencyUsesLeft = (_emergencyUsesLeft - 1).clamp(0, 10);
-      _emergencyRemaining = const Duration(minutes: 2);
-    });
-
-    // Close overlay so user can use phone for 2 min
+    // Close overlay — user gets 2 minutes free. Main app re-opens us.
     FlutterOverlayWindow.closeOverlay();
-
-    // Re-show overlay after 2 min
-    _emergencyTimer?.cancel();
-    _emergencyTimer = Timer(const Duration(minutes: 2), _reActivateOverlay);
-  }
-
-  Future<void> _reActivateOverlay() async {
-    setState(() {
-      _emergencyActive = false;
-      _emergencyRemaining = const Duration(minutes: 2);
-    });
-    try {
-      await FlutterOverlayWindow.showOverlay(
-        enableDrag: false,
-        overlayTitle: 'Challenge Active',
-        overlayContent: 'Kripya apna challenge complete karein.',
-        flag: OverlayFlag.defaultFlag,
-        alignment: OverlayAlignment.center,
-        visibility: NotificationVisibility.visibilityPublic,
-        positionGravity: PositionGravity.auto,
-        height: WindowSize.fullCover,
-        width: WindowSize.fullCover,
-      );
-    } catch (_) {}
   }
 
   // ── Penalty billing ────────────────────────────────────────────────────────
@@ -220,7 +201,6 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
   @override
   void dispose() {
     _pulseCtrl.dispose();
-    _emergencyTimer?.cancel();
     _longPressTimer?.cancel();
     super.dispose();
   }

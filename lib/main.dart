@@ -8,11 +8,11 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 
 import 'providers/app_state_provider.dart';
 import 'screens/onboarding_screen.dart';
-import 'screens/home_screen.dart';
 import 'screens/lock_overlay_screen.dart';
 import 'services/billing_service.dart';
 
-/// Overlay entry-point — separate isolate, must stay minimal.
+/// Overlay entry-point — runs in a SEPARATE Flutter isolate.
+/// Must stay minimal — no Provider, no shared state.
 @pragma('vm:entry-point')
 void overlayMain() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -43,7 +43,6 @@ Future<void> main() async {
         ChangeNotifierProvider(create: (_) => AppStateProvider(prefs)),
         Provider<BillingService>.value(value: billingService),
       ],
-      // Onboarding always shows on every launch — no isOnboarded gate.
       child: const DopamineDetoxApp(),
     ),
   );
@@ -60,6 +59,12 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
   bool _hasInternet = true;
   late StreamSubscription<List<ConnectivityResult>> _connectivitySub;
 
+  // ── Overlay bridge ────────────────────────────────────────────────────────
+  // The main app is the single source of truth for timer state.
+  // It broadcasts to the overlay every second and handles all overlay messages.
+  StreamSubscription<dynamic>? _overlayMsgSub;
+  Timer? _overlayBroadcastTimer;
+
   @override
   void initState() {
     super.initState();
@@ -73,7 +78,124 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
           r == ConnectivityResult.ethernet);
       if (mounted) setState(() => _hasInternet = ok);
     });
+
+    // Overlay bridge must start after the first frame so Provider context is ready.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initOverlayBridge());
   }
+
+  // ── Overlay bridge ─────────────────────────────────────────────────────────
+
+  void _initOverlayBridge() {
+    final provider = context.read<AppStateProvider>();
+    final billing = context.read<BillingService>();
+
+    // ── Global billing success handler ─────────────────────────────────────
+    // Covers billing triggered from both the overlay AND individual screens.
+    // Individual screens that previously set onPurchaseSuccess can still
+    // override this, but this acts as a safe fallback.
+    billing.onPurchaseSuccess = () {
+      provider.unlockAll();
+      // Tell overlay to close; also close it forcefully in case message drops.
+      FlutterOverlayWindow.shareData({'type': 'unlock'});
+      FlutterOverlayWindow.closeOverlay();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('✅ Penalty paid — lock removed.')),
+        );
+      }
+    };
+
+    // ── Listen to messages FROM the overlay ────────────────────────────────
+    _overlayMsgSub =
+        FlutterOverlayWindow.overlayListener.listen(_handleOverlayMessage);
+
+    // ── Broadcast timer state TO the overlay every second ─────────────────
+    // Without this, the overlay always shows "--:--:--".
+    _overlayBroadcastTimer =
+        Timer.periodic(const Duration(seconds: 1), (_) {
+      _broadcastTimerState(provider);
+    });
+  }
+
+  /// Receives messages sent by the overlay widget via FlutterOverlayWindow.shareData().
+  void _handleOverlayMessage(dynamic data) {
+    if (data is! Map) return;
+    final type = data['type'] as String? ?? '';
+    final provider = context.read<AppStateProvider>();
+    final billing = context.read<BillingService>();
+
+    switch (type) {
+      // User long-pressed the emergency unlock button in the overlay.
+      case 'emergency_unlock_requested':
+        final activated = provider.activateEmergencyUnlock();
+        if (activated) {
+          // Main app re-shows the overlay after the 2-min emergency window.
+          // We do this here (not in the overlay isolate) because the overlay
+          // widget is disposed when the overlay closes — its timers die with it.
+          Future.delayed(const Duration(minutes: 2), () async {
+            if (provider.isLocked && !provider.emergencyUnlockActive) {
+              await _showOverlayWindow();
+            }
+          });
+        }
+        break;
+
+      // User tapped "Pay ₹99" on the overlay — trigger Google Play billing.
+      case 'open_billing':
+        billing.buyPenalty().catchError((e) {
+          debugPrint('[OverlayBridge] billing error: $e');
+        });
+        break;
+
+      // Overlay requesting current state (e.g. after re-open).
+      case 'request_state':
+        _broadcastTimerState(provider);
+        break;
+    }
+  }
+
+  /// Sends the current timer/challenge state to the overlay.
+  /// Called every second by _overlayBroadcastTimer.
+  void _broadcastTimerState(AppStateProvider provider) {
+    if (!provider.isLocked) return;
+    final r = provider.remainingTime;
+    final h = r.inHours.toString().padLeft(2, '0');
+    final m = (r.inMinutes % 60).toString().padLeft(2, '0');
+    final s = (r.inSeconds % 60).toString().padLeft(2, '0');
+
+    FlutterOverlayWindow.shareData({
+      'type': 'timer_update',
+      'time': '$h:$m:$s',
+      'emergencyUsesLeft': provider.emergencyUsesLeft,
+      'isMobileLock':
+          provider.activeChallenge == ChallengeType.mobileLock,
+      'progress': provider.progressFraction,
+      'emergencyActive': provider.emergencyUnlockActive,
+      'emergencyRemainingSeconds':
+          provider.emergencyRemaining.inSeconds,
+    });
+  }
+
+  /// Shows the full-screen overlay window.
+  static Future<void> _showOverlayWindow() async {
+    try {
+      await FlutterOverlayWindow.showOverlay(
+        enableDrag: false,
+        overlayTitle: 'Challenge Active',
+        overlayContent: 'Kripya apna challenge complete karein.',
+        flag: OverlayFlag.defaultFlag,
+        alignment: OverlayAlignment.center,
+        visibility: NotificationVisibility.visibilityPublic,
+        positionGravity: PositionGravity.auto,
+        height: WindowSize.fullCover,
+        width: WindowSize.fullCover,
+      );
+    } catch (e) {
+      debugPrint('[OverlayBridge] showOverlay error: $e');
+    }
+  }
+
+  // ── Connectivity ───────────────────────────────────────────────────────────
 
   Future<void> _checkConnectivity() async {
     final results = await Connectivity().checkConnectivity();
@@ -87,6 +209,8 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
   @override
   void dispose() {
     _connectivitySub.cancel();
+    _overlayMsgSub?.cancel();
+    _overlayBroadcastTimer?.cancel();
     super.dispose();
   }
 
@@ -96,7 +220,6 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
       title: 'Dopamine Detox',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme(),
-      // Onboarding shows every time the app opens
       home: Stack(
         children: [
           const OnboardingScreen(),
