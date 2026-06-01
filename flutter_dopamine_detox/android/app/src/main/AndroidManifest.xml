@@ -2,46 +2,57 @@
     xmlns:tools="http://schemas.android.com/tools"
     package="com.example.dopamine_detox">
 
-    <!-- ── Network ─────────────────────────────────────────────────────────── -->
+    <!-- ── Network ──────────────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
 
-    <!-- ── Overlay (Display over other apps) ──────────────────────────────── -->
+    <!-- ── Overlay (Display over other apps) ────────────────────────────────── -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 
-    <!-- ── UsageStats — foreground app detection ──────────────────────────── -->
+    <!-- ── UsageStats — foreground app detection ────────────────────────────── -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions"/>
 
-    <!-- ── Query all packages — device_apps full list on Android 11+ ─────── -->
+    <!-- ── Query all packages — CRITICAL for Android 11+ ───────────────────── -->
+    <!-- Without this, device_apps cannot see Instagram, Facebook, etc.         -->
+    <!-- Even with <queries> block below, this permission is required for full  -->
+    <!-- package enumeration. It is combined, not one-or-the-other.            -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission"/>
 
-    <!-- ── Google Play Billing ─────────────────────────────────────────────── -->
+    <!-- ── Google Play Billing ──────────────────────────────────────────────── -->
     <uses-permission android:name="com.android.vending.BILLING"/>
 
-    <!-- ── Pedometer ───────────────────────────────────────────────────────── -->
+    <!-- ── Pedometer ─────────────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION"/>
     <uses-permission android:name="android.permission.BODY_SENSORS"/>
 
-    <!-- ── Foreground services ─────────────────────────────────────────────── -->
+    <!-- ── Foreground services ──────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <!-- Android 14: must declare specific foreground service type -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
 
-    <!-- ── Boot / wake ─────────────────────────────────────────────────────── -->
+    <!-- ── Battery optimisation exemption ───────────────────────────────────── -->
+    <!-- Required so MIUI / OneUI / ColorOS do not kill our foreground service. -->
+    <!-- The app must call ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS at setup. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+
+    <!-- ── Boot / wake ───────────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
 
+    <!-- ── Application ───────────────────────────────────────────────────────── -->
+    <!-- android:name=".App" replaces ${applicationName} so our pre-warmed        -->
+    <!-- FlutterEngine is initialised in Application.onCreate().                  -->
     <application
+        android:name=".App"
         android:label="Dopamine Detox"
-        android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true"
         android:requestLegacyExternalStorage="true">
 
-        <!-- ── Main activity ──────────────────────────────────────────────── -->
+        <!-- ── Main activity ────────────────────────────────────────────────── -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -59,31 +70,44 @@
             </intent-filter>
         </activity>
 
-        <!-- ── Foreground Monitor Service (app-specific blocking) ─────────── -->
+        <!-- ── Foreground Monitor Service ───────────────────────────────────── -->
+        <!-- stopWithTask="false" → survives when user swipes app from recents   -->
+        <!-- foregroundServiceType="specialUse" required on Android 14           -->
         <service
             android:name=".ForegroundMonitorService"
             android:exported="false"
             android:foregroundServiceType="specialUse"
             android:stopWithTask="false">
-            <!-- specialUse metadata required for Android 14 -->
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="foreground app monitor for study focus"/>
+                android:value="foreground app monitor for study focus blocking"/>
         </service>
 
-        <!-- ── flutter_overlay_window service ─────────────────────────────── -->
+        <!-- ── flutter_overlay_window OverlayService ────────────────────────── -->
         <service
             android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice"/>
 
-        <!-- ── Flutter v2 embedding ───────────────────────────────────────── -->
+        <!-- ── Boot Receiver — restores service after device reboot ──────────── -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- ── Flutter v2 embedding ─────────────────────────────────────────── -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
+
     </application>
 
-    <!-- ── Package visibility (Android 11+) ─────────────────────────────── -->
+    <!-- ── Package visibility (Android 11+) ─────────────────────────────────── -->
+    <!-- Combined with QUERY_ALL_PACKAGES this ensures ALL apps are enumerable.  -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN"/>

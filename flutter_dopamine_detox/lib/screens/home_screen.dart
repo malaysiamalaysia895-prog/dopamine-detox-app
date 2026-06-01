@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:android_intent_plus/android_intent_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:lottie/lottie.dart';
 import 'package:provider/provider.dart';
@@ -12,13 +13,18 @@ import '../services/foreground_monitor_service.dart';
 import 'study_focus_screen.dart';
 import 'health_challenge_screen.dart';
 
-/// HomeScreen — overlay orchestrator using SharedPreferences polling.
+/// HomeScreen
 ///
-/// Bug #2 root-cause fix:
-///   Old: EventChannel stream → eventSink becomes null when activity is
-///        backgrounded → all detection events silently dropped.
-///   New: Timer.periodic(500ms) calls MethodChannel.getForeground() which
-///        reads SharedPreferences. Works regardless of activity lifecycle.
+/// Responsibilities:
+///   1. Poll SharedPreferences every 500ms for foreground package (fallback
+///      layer — ForegroundMonitorService is the primary overlay trigger).
+///   2. Broadcast live timer data to the overlay every 1 second.
+///   3. Handle overlay→main messages: emergency_unlock, pay_penalty.
+///   4. Show emergency bypass countdown.
+///
+/// The overlay is now ALSO triggered by ForegroundMonitorService directly
+/// via the cached FlutterEngine / overlay_control channel (main.dart).
+/// HomeScreen polling is a secondary layer for when the app is in foreground.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -28,23 +34,24 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
-  // ── Polling timer (replaces broken EventChannel) ───────────────────────────
+  static const _monitorCh =
+      MethodChannel('com.example.dopamine_detox/monitor');
+
+  // ── Polling ────────────────────────────────────────────────────────────────
   Timer? _pollTimer;
   String _lastPkg = '';
 
   // ── Overlay state ──────────────────────────────────────────────────────────
   bool _overlayShowing = false;
+  Timer? _broadcastTimer;
 
   // ── Emergency bypass ───────────────────────────────────────────────────────
   bool _emergencyActive = false;
-  int _emergencySecsLeft = 0;
+  int  _emergencySecsLeft = 0;
   Timer? _emergencyTimer;
 
-  // ── Overlay → main app messages ────────────────────────────────────────────
+  // ── Overlay messages ───────────────────────────────────────────────────────
   StreamSubscription? _overlaySub;
-
-  // ── Timer broadcast to overlay ─────────────────────────────────────────────
-  Timer? _broadcastTimer;
 
   @override
   void initState() {
@@ -52,17 +59,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _startPolling();
     _startOverlayListener();
+    // If a session is already active on restore, start broadcast timer
+    // immediately so the overlay (if showing) receives updated timestamps.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final provider = context.read<AppStateProvider>();
+      if (provider.isLocked) _startBroadcastTimer(provider);
+    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Re-start polling when user returns to app
+      _lastPkg = '';   // force re-evaluation on resume
       _startPolling();
+    }
+    if (state == AppLifecycleState.paused) {
+      // Keep broadcast timer running even when HomeScreen is in background.
+      // ForegroundMonitorService now handles primary detection, but
+      // the broadcast timer still feeds the overlay's live countdown.
     }
   }
 
-  // ── Polling — the reliable replacement for EventChannel ───────────────────
+  // ── Secondary polling (HomeScreen in foreground) ───────────────────────────
 
   void _startPolling() {
     _pollTimer?.cancel();
@@ -71,13 +89,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (provider.activeChallenge != ChallengeType.studyFocus) return;
 
       try {
-        final pkg = await ForegroundMonitorService.getForeground();
+        final pkg = await _monitorCh.invokeMethod<String>('getForeground')
+            ?? '';
         if (pkg == _lastPkg) return;
         _lastPkg = pkg;
         _onForegroundChanged(pkg, provider);
-      } catch (_) {
-        // MethodChannel can throw if called while activity is transitioning
-      }
+      } catch (_) {}
     });
   }
 
@@ -121,6 +138,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _closeOverlay() async {
     if (!_overlayShowing) return;
     _broadcastTimer?.cancel();
+    _broadcastTimer = null;
     try {
       await FlutterOverlayWindow.closeOverlay();
     } catch (_) {}
@@ -128,12 +146,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   // ── Broadcast timer → overlay (every 1 second) ────────────────────────────
-  // Sends live timer data to the overlay isolate via shareData.
+  // Sends live countdown + progress to the overlay Flutter isolate.
 
   void _startBroadcastTimer(AppStateProvider provider) {
     _broadcastTimer?.cancel();
     _broadcastTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-      if (!_overlayShowing) return;
       final r = provider.remainingTime;
       if (r <= Duration.zero) {
         await _onSessionDone();
@@ -154,14 +171,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  // ── Overlay messages → HomeScreen ─────────────────────────────────────────
+  // ── Overlay → HomeScreen messages ─────────────────────────────────────────
 
   void _startOverlayListener() {
     _overlaySub?.cancel();
     _overlaySub = FlutterOverlayWindow.overlayListener.listen((raw) async {
       if (raw is! Map) return;
       final type = raw['type'] as String? ?? '';
-
       switch (type) {
         case 'emergency_unlock':
           await _doEmergencyUnlock();
@@ -173,19 +189,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  // ── Emergency 2-min bypass ─────────────────────────────────────────────────
+  // ── Emergency 2-minute bypass ─────────────────────────────────────────────
+  // Hides overlay for exactly 120 seconds. After 2 min, re-enables blocking.
 
   Future<void> _doEmergencyUnlock() async {
     final provider = context.read<AppStateProvider>();
     if (provider.emergencyUsesLeft <= 0) return;
 
     provider.consumeEmergencyUse();
-    setState(() { _emergencyActive = true; _emergencySecsLeft = 120; });
     await ForegroundMonitorService.setEmergencyBypass(active: true);
+
+    setState(() {
+      _emergencyActive = true;
+      _emergencySecsLeft = 120;
+    });
+
+    // Close overlay (called once — overlay does NOT call closeOverlay() itself,
+    // fixing the double-close bug).
     await _closeOverlay();
 
     _emergencyTimer?.cancel();
-    _emergencyTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+    _emergencyTimer =
+        Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) { t.cancel(); return; }
       setState(() {
         _emergencySecsLeft--;
@@ -193,8 +218,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           t.cancel();
           _emergencyActive = false;
           ForegroundMonitorService.setEmergencyBypass(active: false);
-          // Re-check immediately after bypass ends
-          _lastPkg = '';
+          _lastPkg = ''; // force re-check on next poll
         }
       });
     });
@@ -203,13 +227,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // ── Billing ────────────────────────────────────────────────────────────────
 
   Future<void> _doBilling() async {
-    final billing = context.read<BillingService>();
+    final billing  = context.read<BillingService>();
     final provider = context.read<AppStateProvider>();
 
     billing.onPurchaseSuccess = () async {
       provider.unlockAll();
       await ForegroundMonitorService.stop();
-      await _closeOverlay();
+      _broadcastTimer?.cancel();
+      _broadcastTimer = null;
+      _overlayShowing = false;
+      // Tell overlay to close itself
       try {
         await FlutterOverlayWindow.shareData({'type': 'dismiss'});
       } catch (_) {}
@@ -219,6 +246,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
       }
     };
+
     try {
       await billing.buyPenalty();
     } catch (e) {
@@ -231,6 +259,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _onSessionDone() async {
     _broadcastTimer?.cancel();
+    _broadcastTimer = null;
     await ForegroundMonitorService.stop();
     try {
       await FlutterOverlayWindow.shareData({'type': 'dismiss'});
@@ -248,7 +277,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _friendlyName(String pkg) {
     if (pkg.isEmpty) return 'Blocked App';
     final parts = pkg.split('.');
-    final raw = parts.last;
+    final raw   = parts.last;
     return raw[0].toUpperCase() + raw.substring(1);
   }
 
@@ -257,6 +286,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await const AndroidIntent(
               action: 'android.settings.USAGE_ACCESS_SETTINGS')
           .launch();
+    } catch (_) {}
+  }
+
+  Future<void> _requestBatteryOptExempt() async {
+    try {
+      await _monitorCh.invokeMethod('requestBatteryOptExempt');
     } catch (_) {}
   }
 
@@ -273,14 +308,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AppStateProvider>();
-    final isStudyFocus = provider.activeChallenge == ChallengeType.studyFocus;
+    final isStudyFocus =
+        provider.activeChallenge == ChallengeType.studyFocus;
 
     return Scaffold(
       backgroundColor: AppTheme.bg,
       body: CustomScrollView(
         physics: const BouncingScrollPhysics(),
         slivers: [
-          SliverToBoxAdapter(child: _Header(isLocked: provider.isLocked)),
+          SliverToBoxAdapter(
+              child: _Header(isLocked: provider.isLocked)),
 
           if (provider.isLocked)
             SliverToBoxAdapter(
@@ -294,6 +331,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             SliverToBoxAdapter(
                 child: _UsageHint(onTap: _openUsageAccess)),
 
+          // Battery optimisation banner (shows once per session)
+          SliverToBoxAdapter(
+            child: _BatteryOptBanner(onTap: _requestBatteryOptExempt),
+          ),
+
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
             sliver: SliverList(
@@ -301,7 +343,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _ActionCard(
                   icon: '📚',
                   title: 'Focus on Your Study',
-                  subtitle: 'Block specific apps only — others work normally.',
+                  subtitle: 'Block specific apps — others work normally.',
                   colors: const [Color(0xFF7C4DFF), Color(0xFF5C6BC0)],
                   glow: const Color(0xFF7C4DFF),
                   onTap: () => Navigator.push(
@@ -311,7 +353,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _ActionCard(
                   icon: '🔒',
                   title: 'Mobile Lock',
-                  subtitle: 'Full detox — lock your entire phone.',
+                  subtitle: 'Full detox — lock the entire phone.',
                   colors: const [Color(0xFFFF6B9D), Color(0xFFFF8E53)],
                   glow: const Color(0xFFFF6B9D),
                   onTap: () => _mobileLockSheet(context, provider),
@@ -339,8 +381,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   PageRouteBuilder _slide(Widget p) => PageRouteBuilder(
         pageBuilder: (_, __, ___) => p,
         transitionsBuilder: (_, a, __, c) => SlideTransition(
-          position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
-              .animate(CurvedAnimation(parent: a, curve: Curves.easeOutCubic)),
+          position:
+              Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+                  .animate(CurvedAnimation(
+                      parent: a, curve: Curves.easeOutCubic)),
           child: c,
         ),
         transitionDuration: const Duration(milliseconds: 380),
@@ -372,15 +416,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       color: Colors.white)),
               const SizedBox(height: 20),
               Wrap(
-                spacing: 10,
-                runSpacing: 10,
+                spacing: 10, runSpacing: 10,
                 children: [
                   for (final h in [1, 2, 3, 6, 12, 24])
                     _Chip(
                       label: '${h}h',
                       selected: sel == Duration(hours: h),
                       color: const Color(0xFFFF6B9D),
-                      onTap: () => ss(() => sel = Duration(hours: h)),
+                      onTap: () =>
+                          ss(() => sel = Duration(hours: h)),
                     )
                 ],
               ),
@@ -437,7 +481,8 @@ class _Header extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(isLocked ? '🔒 Challenge Active' : '👋 Welcome Back!',
+                Text(
+                    isLocked ? '🔒 Challenge Active' : '👋 Welcome Back!',
                     style: const TextStyle(
                         fontSize: 14,
                         color: Color(0xFF9999BB),
@@ -456,8 +501,8 @@ class _Header extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 const Text('Build better habits, one day at a time.',
-                    style:
-                        TextStyle(fontSize: 13, color: Color(0xFF6666AA))),
+                    style: TextStyle(
+                        fontSize: 13, color: Color(0xFF6666AA))),
               ],
             ),
           ),
@@ -482,8 +527,8 @@ class _ActiveChallengeBanner extends StatelessWidget {
   const _ActiveChallengeBanner({required this.provider});
 
   String get _title => switch (provider.activeChallenge) {
-        ChallengeType.studyFocus => '📚 Study Focus Active',
-        ChallengeType.mobileLock => '🔒 Mobile Lock Active',
+        ChallengeType.studyFocus     => '📚 Study Focus Active',
+        ChallengeType.mobileLock     => '🔒 Mobile Lock Active',
         ChallengeType.healthChallenge => '🏃 Health Challenge Active',
         _ => '',
       };
@@ -572,7 +617,7 @@ class _EmergencyBanner extends StatelessWidget {
                         color: Color(0xFFFFB74D),
                         fontWeight: FontWeight.w700,
                         fontSize: 13)),
-                Text('Lock resumes in $m:$s',
+                Text('Lock re-activates in $m:$s',
                     style: const TextStyle(
                         color: Colors.white54, fontSize: 11)),
               ],
@@ -588,38 +633,92 @@ class _UsageHint extends StatelessWidget {
   final VoidCallback onTap;
   const _UsageHint({required this.onTap});
   @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+        padding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF00E5FF).withOpacity(0.06),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color: const Color(0xFF00E5FF).withOpacity(0.2)),
+        ),
+        child: Row(
+          children: [
+            const Text('📊', style: TextStyle(fontSize: 18)),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'Grant "Usage Access" so blocked apps are detected.',
+                style: TextStyle(color: Color(0xFF00E5FF), fontSize: 11),
+              ),
+            ),
+            GestureDetector(
+              onTap: onTap,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00E5FF).withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text('Settings',
+                    style: TextStyle(
+                        color: Color(0xFF00E5FF),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+class _BatteryOptBanner extends StatefulWidget {
+  final VoidCallback onTap;
+  const _BatteryOptBanner({required this.onTap});
+  @override
+  State<_BatteryOptBanner> createState() => _BatteryOptBannerState();
+}
+
+class _BatteryOptBannerState extends State<_BatteryOptBanner> {
+  bool _dismissed = false;
+  @override
   Widget build(BuildContext context) {
+    if (_dismissed) return const SizedBox.shrink();
     return Container(
       margin: const EdgeInsets.fromLTRB(20, 0, 20, 10),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF00E5FF).withOpacity(0.06),
+        color: const Color(0xFFFF6B9D).withOpacity(0.06),
         borderRadius: BorderRadius.circular(12),
-        border:
-            Border.all(color: const Color(0xFF00E5FF).withOpacity(0.2)),
+        border: Border.all(
+            color: const Color(0xFFFF6B9D).withOpacity(0.2)),
       ),
       child: Row(
         children: [
-          const Text('📊', style: TextStyle(fontSize: 18)),
+          const Text('🔋', style: TextStyle(fontSize: 18)),
           const SizedBox(width: 8),
           const Expanded(
             child: Text(
-              'Grant "Usage Access" so blocked apps are detected.',
-              style: TextStyle(color: Color(0xFF00E5FF), fontSize: 11),
+              'Exclude from battery optimisation so monitoring survives on all ROMs.',
+              style: TextStyle(color: Color(0xFFFF6B9D), fontSize: 11),
             ),
           ),
           GestureDetector(
-            onTap: onTap,
+            onTap: () {
+              widget.onTap();
+              setState(() => _dismissed = true);
+            },
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
-                color: const Color(0xFF00E5FF).withOpacity(0.15),
+                color: const Color(0xFFFF6B9D).withOpacity(0.15),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Text('Settings',
+              child: const Text('Allow',
                   style: TextStyle(
-                      color: Color(0xFF00E5FF),
+                      color: Color(0xFFFF6B9D),
                       fontSize: 11,
                       fontWeight: FontWeight.w700)),
             ),
@@ -640,68 +739,67 @@ class _ActionCard extends StatelessWidget {
     required this.colors, required this.glow, required this.onTap,
   });
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(22),
-        decoration: BoxDecoration(
-          color: AppTheme.cardBg,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: colors.first.withOpacity(0.25), width: 1.5),
-          boxShadow: [
-            BoxShadow(
-                color: glow.withOpacity(0.08), blurRadius: 20, spreadRadius: 2)
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 60,
-              height: 60,
-              decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                      colors: colors,
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight),
-                  borderRadius: BorderRadius.circular(18)),
-              alignment: Alignment.center,
-              child: Text(icon, style: const TextStyle(fontSize: 28)),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 5),
-                  Text(subtitle,
-                      style: const TextStyle(
-                          color: Color(0xFF8888AA),
-                          fontSize: 12,
-                          height: 1.4)),
-                ],
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(22),
+          decoration: BoxDecoration(
+            color: AppTheme.cardBg,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+                color: colors.first.withOpacity(0.25), width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                  color: glow.withOpacity(0.08),
+                  blurRadius: 20,
+                  spreadRadius: 2)
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 60, height: 60,
+                decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                        colors: colors,
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight),
+                    borderRadius: BorderRadius.circular(18)),
+                alignment: Alignment.center,
+                child: Text(icon, style: const TextStyle(fontSize: 28)),
               ),
-            ),
-            const SizedBox(width: 12),
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                  color: colors.first.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10)),
-              child: Icon(Icons.arrow_forward_ios_rounded,
-                  color: colors.first, size: 16),
-            ),
-          ],
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 5),
+                    Text(subtitle,
+                        style: const TextStyle(
+                            color: Color(0xFF8888AA),
+                            fontSize: 12,
+                            height: 1.4)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Container(
+                width: 36, height: 36,
+                decoration: BoxDecoration(
+                    color: colors.first.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10)),
+                child: Icon(Icons.arrow_forward_ios_rounded,
+                    color: colors.first, size: 16),
+              ),
+            ],
+          ),
         ),
-      ),
-    );
-  }
+      );
 }
 
 class _StatsRow extends StatelessWidget {

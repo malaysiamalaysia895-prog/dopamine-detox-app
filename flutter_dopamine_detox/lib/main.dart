@@ -8,11 +8,11 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 
 import 'providers/app_state_provider.dart';
 import 'screens/onboarding_screen.dart';
-import 'screens/home_screen.dart';
 import 'screens/lock_overlay_screen.dart';
 import 'services/billing_service.dart';
 
-/// Overlay entry-point — separate isolate, must stay minimal.
+/// Overlay entry-point — runs in a SEPARATE Flutter engine isolate.
+/// Must be minimal: no Provider, no BillingService, no main app state.
 @pragma('vm:entry-point')
 void overlayMain() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,7 +35,15 @@ Future<void> main() async {
 
   final prefs = await SharedPreferences.getInstance();
   final billingService = BillingService();
+  // init() may return false in pre-warmed background context — that's safe;
+  // it retries when buyPenalty() is first called.
   await billingService.init();
+
+  // ── Global overlay_control channel ─────────────────────────────────────────
+  // ForegroundMonitorService calls these methods via the pre-warmed
+  // FlutterEngine (App.kt) even when MainActivity is destroyed.
+  // Registering here (outside HomeScreen) means the handler is always alive.
+  _registerOverlayControlChannel(prefs);
 
   runApp(
     MultiProvider(
@@ -43,12 +51,77 @@ Future<void> main() async {
         ChangeNotifierProvider(create: (_) => AppStateProvider(prefs)),
         Provider<BillingService>.value(value: billingService),
       ],
-      // Onboarding always shows on every launch — no isOnboarded gate.
       child: const DopamineDetoxApp(),
     ),
   );
 }
 
+/// Registers the MethodChannel that ForegroundMonitorService calls from Kotlin
+/// to show/close the overlay. This must be at app level (not inside a widget)
+/// so it survives navigation and Activity destruction.
+void _registerOverlayControlChannel(SharedPreferences prefs) {
+  const ch = MethodChannel('com.example.dopamine_detox/overlay_control');
+  ch.setMethodCallHandler((call) async {
+    switch (call.method) {
+
+      case 'showOverlay':
+        final granted = await FlutterOverlayWindow.isPermissionGranted();
+        if (!granted) return;
+        try {
+          await FlutterOverlayWindow.showOverlay(
+            enableDrag: false,
+            overlayTitle: 'Study Focus',
+            overlayContent: 'Blocked app detected',
+            flag: OverlayFlag.defaultFlag,
+            alignment: OverlayAlignment.center,
+            visibility: NotificationVisibility.visibilityPublic,
+            positionGravity: PositionGravity.auto,
+            height: WindowSize.fullCover,
+            width: WindowSize.fullCover,
+          );
+          // Feed initial timer data from SharedPreferences so overlay
+          // shows correct time immediately (even if HomeScreen is gone).
+          _broadcastTimerToOverlay(prefs);
+        } catch (_) {}
+        break;
+
+      case 'closeOverlay':
+        try {
+          await FlutterOverlayWindow.closeOverlay();
+        } catch (_) {}
+        break;
+    }
+  });
+}
+
+/// Reads wall-clock timer state from SharedPreferences and sends one
+/// timer_update shareData to the overlay. Called each time the overlay
+/// is shown from native code.
+void _broadcastTimerToOverlay(SharedPreferences prefs) {
+  final startMs   = prefs.getInt('startEpochMs') ?? 0;
+  final durSecs   = prefs.getInt('durationSecs') ?? 0;
+  if (startMs == 0 || durSecs == 0) return;
+
+  final start     = DateTime.fromMillisecondsSinceEpoch(startMs);
+  final elapsed   = DateTime.now().difference(start);
+  final remaining = Duration(seconds: durSecs) - elapsed;
+  if (remaining.isNegative) return;
+
+  final h = remaining.inHours.toString().padLeft(2, '0');
+  final m = (remaining.inMinutes % 60).toString().padLeft(2, '0');
+  final s = (remaining.inSeconds % 60).toString().padLeft(2, '0');
+  final progress = elapsed.inSeconds / durSecs;
+
+  FlutterOverlayWindow.shareData({
+    'type': 'timer_update',
+    'time': '$h:$m:$s',
+    'progress': progress.clamp(0.0, 1.0),
+    'emergencyLeft': 10,
+    'appName': 'Blocked App',
+  });
+}
+
+// ─── Main App ──────────────────────────────────────────────────────────────────
 class DopamineDetoxApp extends StatefulWidget {
   const DopamineDetoxApp({super.key});
 
@@ -96,7 +169,6 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
       title: 'Dopamine Detox',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme(),
-      // Onboarding shows every time the app opens
       home: Stack(
         children: [
           const OnboardingScreen(),
@@ -179,7 +251,7 @@ class _NoInternetOverlay extends StatelessWidget {
   }
 }
 
-/// Overlay window mini-app (separate isolate).
+/// Overlay mini-app — separate Flutter engine, separate isolate.
 class OverlayApp extends StatelessWidget {
   const OverlayApp({super.key});
 
@@ -195,12 +267,12 @@ class OverlayApp extends StatelessWidget {
 
 // ─── Global Theme ─────────────────────────────────────────────────────────────
 class AppTheme {
-  static const Color primary = Color(0xFF7C4DFF);
-  static const Color secondary = Color(0xFF00E5FF);
-  static const Color accent = Color(0xFFFF6B9D);
-  static const Color bg = Color(0xFF0D0D1A);
-  static const Color surface = Color(0xFF1A1A2E);
-  static const Color cardBg = Color(0xFF16213E);
+  static const Color primary    = Color(0xFF7C4DFF);
+  static const Color secondary  = Color(0xFF00E5FF);
+  static const Color accent     = Color(0xFFFF6B9D);
+  static const Color bg         = Color(0xFF0D0D1A);
+  static const Color surface    = Color(0xFF1A1A2E);
+  static const Color cardBg     = Color(0xFF16213E);
   static const Color glassWhite = Color(0x1AFFFFFF);
 
   static ThemeData darkTheme() {

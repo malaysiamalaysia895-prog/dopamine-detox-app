@@ -10,20 +10,30 @@ import '../services/billing_service.dart';
 import '../services/foreground_monitor_service.dart';
 import 'home_screen.dart';
 
-/// StudyFocusScreen — app selection + start focus.
+/// StudyFocusScreen
 ///
-/// Bug #1 fix — why compute() failed:
-///   DeviceApps.getInstalledApplications() is a Flutter platform channel call.
-///   Platform channels can ONLY run on the main Dart isolate.
-///   compute() spawns a background Dart isolate → platform channel call throws
-///   MissingPluginException or hangs indefinitely.
-///   Fix: plain async/await on the main isolate. Flutter's event loop is
-///   cooperative — the async call yields to the UI thread between steps,
-///   so the spinner renders fine while the list loads.
+/// App loading strategy — WHY the previous version froze and missed apps:
 ///
-/// Bug #4 fix — multiple timers:
-///   provider.isLocked hard-blocks the Start button AND disables all
-///   form inputs (duration chips + app checkboxes).
+///   FREEZE: DeviceApps.getInstalledApplications(includeAppIcons: true) encodes
+///   every app icon as PNG bytes synchronously in Java before returning. On a
+///   phone with 80–150 apps this can take 8–15 seconds. Even though Dart awaits
+///   the call, the Android platform thread is fully occupied, so Flutter cannot
+///   pump frames → the spinner itself freezes.
+///
+///   MISSING APPS (Instagram, Facebook etc.): On Android 11+ (API 30+) the OS
+///   enforces package visibility filtering. Apps are hidden unless the manifest
+///   declares either QUERY_ALL_PACKAGES permission OR <queries> entries for those
+///   specific packages. Both are now present in AndroidManifest.xml.
+///
+///   FIX — three-phase progressive loading:
+///     Phase 1 (fast, ~0.5–1 s): getInstalledApplications(includeAppIcons: false)
+///             → display the full list immediately, user can start selecting.
+///     Phase 2 (background enrichment): for each app call DeviceApps.getApp()
+///             individually WITH icon, then setState() → icons fill in one by one
+///             without blocking the UI thread for the entire batch.
+///
+///   Bug #4 — multiple timers: provider.isLocked is checked at the start of
+///   _start() AND the entire form is wrapped in IgnorePointer when locked.
 class StudyFocusScreen extends StatefulWidget {
   const StudyFocusScreen({super.key});
 
@@ -35,20 +45,26 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
     with WidgetsBindingObserver {
 
   // ── App list ───────────────────────────────────────────────────────────────
-  List<Application> _apps = [];
-  bool _loadingApps = true;
-  bool _loadingIcons = false;  // second pass to load icons
+  // We keep a mutable map so individual apps can be updated with icons
+  // progressively (phase 2) without rebuilding the whole list.
+  final Map<String, Application> _apps = {};
+  List<String> _orderedPkgs = [];       // display order
+  bool _loadingPhase1 = true;
+  int  _iconsLoaded   = 0;
+  int  _totalApps     = 0;
   String? _loadError;
 
-  // ── Selection ──────────────────────────────────────────────────────────────
+  // Cancelled when the widget is disposed, stopping icon loading if user leaves
+  bool _disposed = false;
+
+  // ── Selection & settings ───────────────────────────────────────────────────
   final Set<String> _selected = {};
   Duration _duration = const Duration(hours: 1);
 
-  // ── Permission flags ───────────────────────────────────────────────────────
+  // ── Permissions ────────────────────────────────────────────────────────────
   bool _overlayGranted = false;
-  bool _permChecked = false;
+  bool _permChecked    = false;
 
-  // ── UI ─────────────────────────────────────────────────────────────────────
   bool _starting = false;
 
   @override
@@ -68,7 +84,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
     await _loadApps();
   }
 
-  // ── Overlay permission check ───────────────────────────────────────────────
+  // ── Overlay permission ─────────────────────────────────────────────────────
 
   Future<void> _checkOverlay() async {
     final g = await FlutterOverlayWindow.isPermissionGranted();
@@ -88,63 +104,85 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
     } catch (_) {}
   }
 
-  // ── App loading — plain async on main isolate ─────────────────────────────
-  // Bug #1 fix: NO compute(). Just await the platform channel call directly.
-  // The spinner is shown via setState before the call, and hidden after.
+  // ── Three-phase app loading ────────────────────────────────────────────────
 
   Future<void> _loadApps() async {
-    setState(() { _loadingApps = true; _loadError = null; });
+    if (!mounted) return;
+    setState(() {
+      _loadingPhase1 = true;
+      _loadError     = null;
+      _apps.clear();
+      _orderedPkgs.clear();
+      _iconsLoaded = 0;
+      _totalApps   = 0;
+    });
 
     try {
-      // Phase 1: load without icons — fast (~1–2 seconds)
+      // ── Phase 1: fast list, no icons (~0.5–1 s) ──────────────────────────
+      // MUST run on main isolate — platform channel restriction.
+      // UI shows spinner → list appears immediately after this await.
       final phase1 = await DeviceApps.getInstalledApplications(
         includeAppIcons: false,
-        includeSystemApps: true,          // ALL apps including system ones
-        onlyAppsWithLaunchIntent: true,   // only launchable apps
+        includeSystemApps: true,         // show ALL apps, including system
+        onlyAppsWithLaunchIntent: true,  // only launchable (has launcher icon)
       );
+
       _sortApps(phase1);
 
-      if (!mounted) return;
+      if (!mounted || _disposed) return;
       setState(() {
-        _apps = phase1;
-        _loadingApps = false;
-        _loadingIcons = true;  // second pass coming
+        _loadingPhase1 = false;
+        _totalApps     = phase1.length;
+        for (final a in phase1) {
+          _apps[a.packageName] = a;
+          _orderedPkgs.add(a.packageName);
+        }
       });
 
-      // Phase 2: reload WITH icons — heavier, but now shows list first
-      final phase2 = await DeviceApps.getInstalledApplications(
-        includeAppIcons: true,
-        includeSystemApps: true,
-        onlyAppsWithLaunchIntent: true,
-      );
-      _sortApps(phase2);
+      // ── Phase 2: enrich with icons one-by-one ────────────────────────────
+      // Loading all icons in one call blocks the Java thread for 8–15s.
+      // Loading them individually is slower overall but non-blocking —
+      // each getApp() call is fast (~5–20 ms) and yields between calls.
+      for (final pkg in List<String>.from(_orderedPkgs)) {
+        if (_disposed || !mounted) break;
 
-      if (!mounted) return;
-      setState(() {
-        _apps = phase2;
-        _loadingIcons = false;
-      });
+        try {
+          final withIcon = await DeviceApps.getApp(pkg, true);
+          if (withIcon != null && mounted && !_disposed) {
+            setState(() {
+              _apps[pkg] = withIcon;
+              _iconsLoaded++;
+            });
+          }
+        } catch (_) {
+          // Icon load failed for this app — skip, keep the icon-less entry
+        }
+
+        // Yield to the event loop between apps so the UI stays responsive
+        await Future.delayed(Duration.zero);
+      }
 
     } catch (e) {
       if (mounted) {
-        setState(() { _loadingApps = false; _loadError = '$e'; });
+        setState(() { _loadingPhase1 = false; _loadError = '$e'; });
       }
     }
   }
 
   void _sortApps(List<Application> list) {
     list.sort((a, b) {
+      // User-installed apps first, then system apps, both alphabetical
       if (a.systemApp != b.systemApp) return a.systemApp ? 1 : -1;
       return a.appName.toLowerCase().compareTo(b.appName.toLowerCase());
     });
   }
 
-  // ── Start focus — Bug #4: hard lock once started ───────────────────────────
+  // ── Start focus — hard lock guard ─────────────────────────────────────────
 
   Future<void> _start() async {
     final provider = context.read<AppStateProvider>();
 
-    // ── Hard guard: cannot start if already locked ────────────────────────────
+    // Bug #4 fix: hard guard — no second timer while one is running
     if (provider.isLocked) {
       _snack('⚠️ A challenge is already running. Wait for it to finish.');
       return;
@@ -161,19 +199,16 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
 
     setState(() => _starting = true);
 
-    // Wire billing
     context.read<BillingService>().onPurchaseSuccess = () {
       provider.unlockAll();
       ForegroundMonitorService.stop();
     };
 
-    // Persist state (wall-clock timer starts here)
     provider.startStudyFocus(
       packages: _selected.toList(),
       duration: _duration,
     );
 
-    // Start Kotlin foreground monitoring service
     await ForegroundMonitorService.start(_selected.toList());
 
     if (mounted) {
@@ -195,6 +230,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
 
   @override
   void dispose() {
+    _disposed = true;
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -202,11 +238,13 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AppStateProvider>();
+    final locked   = provider.isLocked;
 
-    // Bug #4: lock entire screen when a challenge is active
-    final locked = provider.isLocked;
     final canStart =
         !locked && !_starting && _overlayGranted && _selected.isNotEmpty;
+
+    // Progress of icon loading (shown in header)
+    final iconPct = _totalApps == 0 ? 0.0 : _iconsLoaded / _totalApps;
 
     return Scaffold(
       backgroundColor: AppTheme.bg,
@@ -214,7 +252,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
         physics: const BouncingScrollPhysics(),
         slivers: [
 
-          // ── AppBar ────────────────────────────────────────────────────
+          // ── AppBar ─────────────────────────────────────────────────────
           SliverAppBar(
             backgroundColor: AppTheme.bg,
             pinned: true,
@@ -248,7 +286,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
             ),
           ),
 
-          // ── Info card ─────────────────────────────────────────────────
+          // ── Info ───────────────────────────────────────────────────────
           SliverToBoxAdapter(
             child: Container(
               margin: const EdgeInsets.fromLTRB(16, 14, 16, 0),
@@ -265,9 +303,9 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
                   SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'Only the selected apps will be blocked. '
-                      'All other apps work normally. '
-                      'The overlay appears ONLY when you open a blocked app.',
+                      'Only selected apps are blocked. '
+                      'All others remain usable. '
+                      'Overlay appears ONLY when you open a blocked app.',
                       style: TextStyle(
                           color: Color(0xFFCCCCDD),
                           fontSize: 12,
@@ -279,7 +317,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
             ),
           ),
 
-          // ── Active lock warning (Bug #4) ──────────────────────────────
+          // ── Active lock warning ────────────────────────────────────────
           if (locked)
             SliverToBoxAdapter(
               child: Container(
@@ -293,7 +331,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
                 ),
                 child: const Text(
                   '🔒 A session is already active.\n'
-                  'Wait for the timer to reach 00:00 or pay the ₹99 penalty to stop early.',
+                  'Wait for 00:00 or pay the ₹99 penalty to stop early.',
                   style: TextStyle(
                       color: Color(0xFFFF6B9D),
                       fontSize: 13,
@@ -303,7 +341,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
               ),
             ),
 
-          // ── Permissions ───────────────────────────────────────────────
+          // ── Permissions ────────────────────────────────────────────────
           if (_permChecked && !_overlayGranted)
             SliverToBoxAdapter(
               child: _PermBanner(
@@ -321,13 +359,13 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
               icon: '📊',
               title: 'Usage Access Permission',
               subtitle:
-                  'Opens Settings → Usage Access. Enable for Dopamine Detox.',
+                  'Settings → Usage Access → enable Dopamine Detox.',
               color: const Color(0xFFFFB74D),
               onTap: _openUsageAccess,
             ),
           ),
 
-          // ── Duration picker — disabled when locked ────────────────────
+          // ── Duration picker ────────────────────────────────────────────
           SliverToBoxAdapter(
             child: Opacity(
               opacity: locked ? 0.35 : 1.0,
@@ -341,7 +379,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
             ),
           ),
 
-          // ── App list header ───────────────────────────────────────────
+          // ── App list header ────────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 6, 20, 8),
@@ -353,18 +391,26 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
                           fontSize: 18,
                           fontWeight: FontWeight.w700)),
                   const Spacer(),
-                  if (_loadingIcons) ...[
-                    const SizedBox(
-                      width: 12,
-                      height: 12,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Color(0xFF00E5FF)),
+                  // Icon loading progress
+                  if (!_loadingPhase1 && _iconsLoaded < _totalApps) ...[
+                    SizedBox(
+                      width: 60,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(2),
+                        child: LinearProgressIndicator(
+                          value: iconPct,
+                          backgroundColor:
+                              const Color(0xFF00E5FF).withOpacity(0.15),
+                          valueColor: const AlwaysStoppedAnimation<Color>(
+                              Color(0xFF00E5FF)),
+                          minHeight: 3,
+                        ),
+                      ),
                     ),
-                    const SizedBox(width: 5),
-                    const Text('Loading icons…',
-                        style: TextStyle(
-                            color: Color(0xFF00E5FF), fontSize: 11)),
+                    const SizedBox(width: 6),
+                    Text('$_iconsLoaded/$_totalApps',
+                        style: const TextStyle(
+                            color: Color(0xFF00E5FF), fontSize: 10)),
                   ],
                   if (_selected.isNotEmpty) ...[
                     const SizedBox(width: 8),
@@ -387,8 +433,8 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
             ),
           ),
 
-          // ── App list ──────────────────────────────────────────────────
-          if (_loadingApps)
+          // ── App list body ──────────────────────────────────────────────
+          if (_loadingPhase1)
             const SliverFillRemaining(
               child: Center(
                 child: Column(
@@ -396,13 +442,15 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
                   children: [
                     CircularProgressIndicator(color: AppTheme.primary),
                     SizedBox(height: 14),
-                    Text('Loading all installed apps…',
+                    Text('Loading installed apps…',
                         style: TextStyle(
                             color: Colors.white54, fontSize: 14)),
                     SizedBox(height: 4),
-                    Text('This may take a few seconds.',
-                        style: TextStyle(
-                            color: Colors.white24, fontSize: 12)),
+                    Text(
+                      'First load only — takes ~1 second.',
+                      style: TextStyle(
+                          color: Colors.white24, fontSize: 12),
+                    ),
                   ],
                 ),
               ),
@@ -441,7 +489,7 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
                 ),
               ),
             )
-          else if (_apps.isEmpty)
+          else if (_orderedPkgs.isEmpty)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.all(28),
@@ -450,7 +498,8 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
                     const Text('📭', style: TextStyle(fontSize: 44)),
                     const SizedBox(height: 10),
                     const Text(
-                      'No apps found.\n\nPlease grant "Usage Access" permission.',
+                      'No apps found.\n\nPlease grant "Usage Access" permission '
+                      'and restart the app.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                           color: Colors.white54,
@@ -460,7 +509,16 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
                     const SizedBox(height: 14),
                     ElevatedButton(
                         onPressed: _openUsageAccess,
-                        child: const Text('Open Usage Access Settings')),
+                        child: const Text('Open Usage Access')),
+                    const SizedBox(height: 8),
+                    OutlinedButton(
+                      onPressed: _loadApps,
+                      style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF00E5FF),
+                          side: const BorderSide(
+                              color: Color(0xFF00E5FF))),
+                      child: const Text('Retry'),
+                    ),
                   ],
                 ),
               ),
@@ -471,22 +529,26 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (ctx, i) {
-                    final app = _apps[i];
-                    final sel = _selected.contains(app.packageName);
+                    final pkg = _orderedPkgs[i];
+                    final app = _apps[pkg];
+                    if (app == null) return const SizedBox.shrink();
+                    final sel = _selected.contains(pkg);
                     return Opacity(
                       opacity: locked ? 0.35 : 1.0,
-                      child: _AppTile(
-                        app: app,
-                        isSelected: sel,
-                        onTap: locked
-                            ? null
-                            : () => setState(() => sel
-                                ? _selected.remove(app.packageName)
-                                : _selected.add(app.packageName)),
+                      child: IgnorePointer(
+                        ignoring: locked,
+                        child: _AppTile(
+                          app: app,
+                          isSelected: sel,
+                          onTap: () => setState(() =>
+                              sel
+                                  ? _selected.remove(pkg)
+                                  : _selected.add(pkg)),
+                        ),
                       ),
                     );
                   },
-                  childCount: _apps.length,
+                  childCount: _orderedPkgs.length,
                 ),
               ),
             ),
@@ -507,14 +569,18 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
                   colors: canStart
                       ? [const Color(0xFF7C4DFF), const Color(0xFF5C6BC0)]
                       : locked
-                          ? [const Color(0xFFFF6B9D), const Color(0xFFFF8E53)]
+                          ? [
+                              const Color(0xFFFF6B9D),
+                              const Color(0xFFFF8E53)
+                            ]
                           : [Colors.grey.shade800, Colors.grey.shade700],
                 ),
                 borderRadius: BorderRadius.circular(18),
                 boxShadow: canStart
                     ? [
                         BoxShadow(
-                          color: const Color(0xFF7C4DFF).withOpacity(0.4),
+                          color:
+                              const Color(0xFF7C4DFF).withOpacity(0.4),
                           blurRadius: 20,
                           offset: const Offset(0, 8),
                         )
@@ -549,7 +615,8 @@ class _StudyFocusScreenState extends State<StudyFocusScreen>
   }
 }
 
-// ─── Permission Banner ────────────────────────────────────────────────────────
+// ─── Widgets ──────────────────────────────────────────────────────────────────
+
 class _PermBanner extends StatelessWidget {
   final String icon, title, subtitle;
   final Color color;
@@ -590,8 +657,8 @@ class _PermBanner extends StatelessWidget {
             GestureDetector(
               onTap: onTap,
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
                     color: color.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(8)),
@@ -607,18 +674,21 @@ class _PermBanner extends StatelessWidget {
       );
 }
 
-// ─── Duration Picker ──────────────────────────────────────────────────────────
 class _DurationPicker extends StatelessWidget {
   final Duration selected;
   final ValueChanged<Duration> onChanged;
-  const _DurationPicker({required this.selected, required this.onChanged});
+  const _DurationPicker(
+      {required this.selected, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
     final opts = [
-      const Duration(minutes: 25), const Duration(minutes: 45),
-      const Duration(hours: 1),    const Duration(hours: 2),
-      const Duration(hours: 3),    const Duration(hours: 4),
+      const Duration(minutes: 25),
+      const Duration(minutes: 45),
+      const Duration(hours: 1),
+      const Duration(hours: 2),
+      const Duration(hours: 3),
+      const Duration(hours: 4),
     ];
     String label(Duration d) =>
         d.inMinutes < 60 ? '${d.inMinutes}m' : '${d.inHours}h';
@@ -650,7 +720,8 @@ class _DurationPicker extends StatelessWidget {
                               : AppTheme.primary.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                              color: AppTheme.primary.withOpacity(0.4)),
+                              color:
+                                  AppTheme.primary.withOpacity(0.4)),
                         ),
                         child: Text(label(d),
                             style: TextStyle(
@@ -668,13 +739,14 @@ class _DurationPicker extends StatelessWidget {
   }
 }
 
-// ─── App Tile ─────────────────────────────────────────────────────────────────
 class _AppTile extends StatelessWidget {
   final Application app;
   final bool isSelected;
   final VoidCallback? onTap;
   const _AppTile(
-      {required this.app, required this.isSelected, required this.onTap});
+      {required this.app,
+       required this.isSelected,
+       required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -700,19 +772,20 @@ class _AppTile extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // Icon
+            // App icon — shows placeholder until phase-2 icon arrives
             ClipRRect(
               borderRadius: BorderRadius.circular(9),
               child: icon != null
-                  ? Image.memory(icon.icon,
+                  ? Image.memory(
+                      icon.icon,
                       width: 42,
                       height: 42,
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => _placeholder())
+                      errorBuilder: (_, __, ___) => _placeholder(),
+                    )
                   : _placeholder(),
             ),
             const SizedBox(width: 12),
-            // Text
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -735,8 +808,7 @@ class _AppTile extends StatelessWidget {
               width: 24,
               height: 24,
               decoration: BoxDecoration(
-                color:
-                    isSelected ? AppTheme.primary : Colors.transparent,
+                color: isSelected ? AppTheme.primary : Colors.transparent,
                 borderRadius: BorderRadius.circular(7),
                 border: Border.all(
                   color: isSelected
@@ -746,7 +818,8 @@ class _AppTile extends StatelessWidget {
                 ),
               ),
               child: isSelected
-                  ? const Icon(Icons.check, color: Colors.white, size: 15)
+                  ? const Icon(Icons.check,
+                      color: Colors.white, size: 15)
                   : null,
             ),
           ],
@@ -761,6 +834,7 @@ class _AppTile extends StatelessWidget {
         decoration: BoxDecoration(
             color: AppTheme.surface,
             borderRadius: BorderRadius.circular(9)),
-        child: const Icon(Icons.android, color: Colors.white38, size: 22),
+        child:
+            const Icon(Icons.android, color: Colors.white38, size: 22),
       );
 }

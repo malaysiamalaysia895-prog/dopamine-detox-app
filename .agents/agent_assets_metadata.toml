@@ -48,3 +48,9 @@ id = "kK-lV2utUWLffnjgWFS_o"
 uri = "file://flutter_dopamine_detox_v6_fixed.tar.gz"
 type = "unspecified"
 title = "Dopamine Detox v6 — All 5 Bugs Fixed"
+
+[[outputs]]
+id = "wN-4RcoBE0RnmqnHK5V5O"
+uri = "file://flutter_dopamine_detox_v7_final.tar.gz"
+type = "unspecified"
+title = "Dopamine Detox v7 — Final Verified Build"

@@ -12,12 +12,19 @@ import '../main.dart';
 ///
 /// Messages FROM main app → overlay:
 ///   {'type': 'timer_update', 'time': 'HH:MM:SS', 'progress': 0.0…1.0,
-///    'emergencyUsesLeft': 0…10, 'appName': 'Instagram'}
+///    'emergencyLeft': 0…10, 'appName': 'Instagram'}
 ///   {'type': 'dismiss'}   — close overlay (timer done or penalty paid)
 ///
 /// Messages FROM overlay → main app:
 ///   {'type': 'emergency_unlock'}  — user long-pressed emergency button
 ///   {'type': 'pay_penalty'}       — user tapped ₹99 penalty button
+///
+/// BUG FIXES vs previous version:
+///   1. StreamSubscription from overlayListener is now stored and cancelled
+///      in dispose() → fixes the memory leak.
+///   2. _activateEmergencyUnlock() no longer calls closeOverlay() directly.
+///      The main app calls _closeOverlay() via its own listener. Calling
+///      closeOverlay() from BOTH sides caused a double-close crash.
 /// ─────────────────────────────────────────────────────────────────────────────
 class LockOverlayScreen extends StatefulWidget {
   const LockOverlayScreen({super.key});
@@ -35,10 +42,15 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
   int _emergencyUsesLeft = 10;
   String _blockedAppName = 'Blocked App';
 
+  // ── Listener subscription — MUST be cancelled in dispose() ────────────────
+  // Bug fix: previous version never stored or cancelled this, causing a leak.
+  StreamSubscription? _messageSub;
+
   // ── Long-press emergency progress ─────────────────────────────────────────
   double _longPressProgress = 0.0;
   Timer? _longPressTimer;
   bool _longPressing = false;
+  bool _emergencyFired = false;   // guard: prevents double-fire
 
   // ── Billing state ──────────────────────────────────────────────────────────
   bool _billingLoading = false;
@@ -63,8 +75,8 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
       CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
     );
 
-    // Listen for messages from the main app isolate
-    FlutterOverlayWindow.overlayListener.listen(_onMessage);
+    // Bug fix: store the subscription so we can cancel it in dispose().
+    _messageSub = FlutterOverlayWindow.overlayListener.listen(_onMessage);
   }
 
   void _onMessage(dynamic raw) {
@@ -76,14 +88,17 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
         if (mounted) {
           setState(() {
             _timeDisplay = (raw['time'] as String?) ?? '--:--:--';
-            _progress = ((raw['progress'] as num?) ?? 0.0).toDouble();
-            _emergencyUsesLeft = (raw['emergencyUsesLeft'] as int?) ?? 10;
-            _blockedAppName = (raw['appName'] as String?) ?? 'Blocked App';
+            _progress    = ((raw['progress'] as num?) ?? 0.0).toDouble();
+            _emergencyUsesLeft =
+                (raw['emergencyLeft'] as int?) ?? _emergencyUsesLeft;
+            _blockedAppName =
+                (raw['appName'] as String?) ?? _blockedAppName;
           });
         }
         break;
 
       case 'dismiss':
+        // Main app confirmed overlay should close (penalty paid or timer done)
         FlutterOverlayWindow.closeOverlay();
         break;
     }
@@ -92,9 +107,10 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
   // ── Long-press emergency unlock ────────────────────────────────────────────
 
   void _onLongPressStart(LongPressStartDetails _) {
-    if (_emergencyUsesLeft <= 0) return;
+    if (_emergencyUsesLeft <= 0 || _emergencyFired) return;
     _longPressing = true;
     _longPressProgress = 0.0;
+    _emergencyFired = false;
 
     _longPressTimer =
         Timer.periodic(const Duration(milliseconds: 30), (t) {
@@ -105,7 +121,7 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
       }
       if (mounted) {
         setState(() {
-          _longPressProgress += 30 / 2000; // fills in 2 seconds
+          _longPressProgress += 30 / 2000; // fills in exactly 2 seconds
           if (_longPressProgress >= 1.0) {
             t.cancel();
             _longPressProgress = 1.0;
@@ -118,16 +134,27 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
   }
 
   void _onLongPressEnd(LongPressEndDetails _) {
+    if (_emergencyFired) return;
     _longPressing = false;
     _longPressTimer?.cancel();
     if (mounted) setState(() => _longPressProgress = 0.0);
   }
 
   void _activateEmergencyUnlock() {
-    // Tell main app to handle the bypass logic (decrement count, hide overlay for 2 min)
+    if (_emergencyFired) return;
+    _emergencyFired = true;
+
+    // Tell the main app to handle bypass logic (decrement count, hide overlay
+    // for 2 minutes via its own _doEmergencyUnlock → _closeOverlay).
+    // BUG FIX: Do NOT call FlutterOverlayWindow.closeOverlay() here.
+    // The main app's _doEmergencyUnlock() already calls _closeOverlay(),
+    // which calls FlutterOverlayWindow.closeOverlay(). Calling it from both
+    // sides simultaneously causes a crash on the second call.
     FlutterOverlayWindow.shareData({'type': 'emergency_unlock'});
-    // Close overlay immediately — main app will re-show it after 2 min if needed
-    FlutterOverlayWindow.closeOverlay();
+
+    // Reset guard after short delay so it can be used again if needed
+    Future.delayed(const Duration(seconds: 3),
+        () => _emergencyFired = false);
   }
 
   // ── ₹99 Penalty billing ────────────────────────────────────────────────────
@@ -143,8 +170,8 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(20)),
         title: const Text('💳 Pay ₹99 to Unlock?',
-            style:
-                TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+            style: TextStyle(
+                color: Colors.white, fontWeight: FontWeight.w700)),
         content: const Text(
           'This will end your focus session early.\n\n'
           'Payment of ₹99 via Google Play is required.\n'
@@ -175,16 +202,21 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
     if (confirmed != true) return;
 
     setState(() => _billingLoading = true);
-    // Ask main app to trigger billing
+    // Ask main app to trigger billing via Google Play.
+    // Main app sends 'dismiss' back on successful payment.
+    // Do NOT close overlay here — only dismiss after payment confirmation.
     FlutterOverlayWindow.shareData({'type': 'pay_penalty'});
-    // Main app sends 'dismiss' back on success
-    setState(() => _billingLoading = false);
+    // Reset loading after a short window (if main app doesn't respond)
+    await Future.delayed(const Duration(seconds: 5));
+    if (mounted) setState(() => _billingLoading = false);
   }
 
   @override
   void dispose() {
     _pulseCtrl.dispose();
     _longPressTimer?.cancel();
+    // Bug fix: cancel the subscription to prevent the memory leak.
+    _messageSub?.cancel();
     super.dispose();
   }
 
@@ -204,10 +236,11 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
         ),
         child: SafeArea(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 18),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 26, vertical: 18),
             child: Column(
               children: [
-                // ── Pulsing lock icon ──────────────────────────────────────
+                // ── Pulsing lock icon ────────────────────────────────────
                 ScaleTransition(
                   scale: _pulseAnim,
                   child: Container(
@@ -231,15 +264,14 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                 ),
                 const SizedBox(height: 18),
 
-                // ── Blocked app name ───────────────────────────────────────
+                // ── Blocked app name ─────────────────────────────────────
                 Text(
                   '$_blockedAppName is Blocked',
                   textAlign: TextAlign.center,
                   style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 6),
                 const Text(
@@ -250,7 +282,7 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                 ),
                 const SizedBox(height: 22),
 
-                // ── Countdown timer card ───────────────────────────────────
+                // ── Countdown timer card ─────────────────────────────────
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(
@@ -285,8 +317,9 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                         child: LinearProgressIndicator(
                           value: _progress,
                           backgroundColor: Colors.white12,
-                          valueColor: const AlwaysStoppedAnimation<Color>(
-                              Color(0xFF7C4DFF)),
+                          valueColor:
+                              const AlwaysStoppedAnimation<Color>(
+                                  Color(0xFF7C4DFF)),
                           minHeight: 6,
                         ),
                       ),
@@ -295,13 +328,12 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                 ),
                 const SizedBox(height: 18),
 
-                // ── Emergency unlock (long-press) ──────────────────────────
+                // ── Emergency unlock (long-press 2 sec) ──────────────────
                 if (_emergencyUsesLeft > 0) ...[
-                  // Uses left indicator
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Text('⚡ Emergency uses left today: ',
+                      const Text('⚡ Emergency uses left: ',
                           style: TextStyle(
                               color: Color(0xFFFFB74D), fontSize: 12)),
                       Text('$_emergencyUsesLeft / 10',
@@ -313,7 +345,6 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                   ),
                   const SizedBox(height: 8),
 
-                  // Long-press fill bar
                   if (_longPressProgress > 0)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
@@ -321,9 +352,11 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                         borderRadius: BorderRadius.circular(4),
                         child: LinearProgressIndicator(
                           value: _longPressProgress,
-                          backgroundColor: Colors.white.withOpacity(0.07),
-                          valueColor: const AlwaysStoppedAnimation<Color>(
-                              Color(0xFFFFB74D)),
+                          backgroundColor:
+                              Colors.white.withOpacity(0.07),
+                          valueColor:
+                              const AlwaysStoppedAnimation<Color>(
+                                  Color(0xFFFFB74D)),
                           minHeight: 4,
                         ),
                       ),
@@ -334,12 +367,14 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                     onLongPressEnd: _onLongPressEnd,
                     child: Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 18),
+                      padding:
+                          const EdgeInsets.symmetric(vertical: 18),
                       decoration: BoxDecoration(
                         color: const Color(0xFFFFB74D).withOpacity(0.08),
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
-                            color: const Color(0xFFFFB74D).withOpacity(0.35)),
+                            color: const Color(0xFFFFB74D)
+                                .withOpacity(0.35)),
                       ),
                       alignment: Alignment.center,
                       child: const Column(
@@ -351,16 +386,16 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                                   fontSize: 15)),
                           SizedBox(height: 4),
                           Text(
-                              'Hold 2 seconds → unlocked for 2 minutes → auto-relocks',
-                              style: TextStyle(
-                                  color: Color(0xFFFFB74D),
-                                  fontSize: 11)),
+                            'Hold 2 sec → unlocked for 2 min → auto-relocks',
+                            style: TextStyle(
+                                color: Color(0xFFFFB74D),
+                                fontSize: 11),
+                          ),
                         ],
                       ),
                     ),
                   ),
                 ] else
-                  // No uses left
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(14),
@@ -371,7 +406,7 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
                           color: Colors.redAccent.withOpacity(0.25)),
                     ),
                     child: const Text(
-                      '🚫 Emergency uses exhausted for today (10/10).\nResets at midnight.',
+                      '🚫 Emergency uses exhausted (10/10).\nResets at midnight.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                           color: Colors.redAccent,
@@ -382,15 +417,19 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
 
                 const SizedBox(height: 16),
 
-                // ── ₹99 Penalty unlock ─────────────────────────────────────
+                // ── ₹99 Penalty unlock ────────────────────────────────────
                 GestureDetector(
                   onTap: _billingLoading ? null : _onPayPenalty,
                   child: Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    padding:
+                        const EdgeInsets.symmetric(vertical: 18),
                     decoration: BoxDecoration(
                       gradient: const LinearGradient(
-                          colors: [Color(0xFFFF6B9D), Color(0xFFFF8E53)]),
+                          colors: [
+                            Color(0xFFFF6B9D),
+                            Color(0xFFFF8E53)
+                          ]),
                       borderRadius: BorderRadius.circular(16),
                       boxShadow: [
                         BoxShadow(
@@ -427,7 +466,7 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
 
                 const SizedBox(height: 14),
 
-                // ── Android 13+ help toggle ────────────────────────────────
+                // ── Android 13+ help toggle ───────────────────────────────
                 GestureDetector(
                   onTap: () =>
                       setState(() => _showHelp = !_showHelp),
@@ -456,7 +495,6 @@ class _LockOverlayScreenState extends State<LockOverlayScreen>
   }
 }
 
-// ─── Android 13+ Restricted Settings Guide ───────────────────────────────────
 class _RestrictedSettingsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
