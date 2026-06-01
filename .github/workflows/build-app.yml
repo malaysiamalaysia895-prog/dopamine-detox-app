@@ -20,7 +20,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          flutter-version: '3.19.6'
           
       - name: Auto-Find Project, Fix Android, and Build
         run: |
@@ -30,17 +30,16 @@ jobs:
           echo "Folder mil gaya yahan: $DIR"
           cd "$DIR"
           
-          # Pehle packages download karein
+          # Pehle packages ko latest version par update karein
           flutter pub get
+          flutter pub upgrade
           
-          # YEH NAYI COMMAND HAI JO ERROR FIX KAREGI
           echo "Replit ki missing Android files ko naya bana raha hoon..."
           flutter create .
           
-          # Ab final APK banayega
+          # Final APK banayega
           flutter build apk --release
           
-          # APK ko bahar nikalne ke liye
           mkdir -p $GITHUB_WORKSPACE/output
           find build -name "*.apk" -exec cp {} $GITHUB_WORKSPACE/output/ \;
         
@@ -49,3 +48,4 @@ jobs:
         with:
           name: Mera-Game-APK
           path: output/*.apk
+          
