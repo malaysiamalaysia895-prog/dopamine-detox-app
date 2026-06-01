@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:smooth_page_indicator/smooth_page_indicator.dart';
 import 'package:lottie/lottie.dart';
 
 import '../main.dart';
 import 'home_screen.dart';
 
+/// Onboarding shows on EVERY app launch.
+/// User can skip or swipe through all 6 pages.
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -14,156 +15,196 @@ class OnboardingScreen extends StatefulWidget {
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
-  final PageController _pageController = PageController();
-  int _currentPage = 0;
+  final PageController _controller = PageController();
+  int _current = 0;
 
-  final List<_OnboardingData> _pages = [
-    _OnboardingData(
-      animationUrl:
+  // ── 6 motivational quote pages ────────────────────────────────────────────
+  final List<_QuotePage> _pages = const [
+    _QuotePage(
+      emoji: '🎯',
+      lottieUrl:
           'https://assets3.lottiefiles.com/packages/lf20_wnqlfojb.json',
-      fallbackEmoji: '📚',
-      title: 'Focus on Study',
-      subtitle: 'Padhaai per focus karein,\napna focus banaye rakhein.',
-      gradientColors: [const Color(0xFF7C4DFF), const Color(0xFF00E5FF)],
+      author: 'Aristotle',
+      quote:
+          '"We are what we repeatedly do. Excellence, then, is not an act, but a habit."',
+      sub: 'Every lock you set is a vote for the person you want to become.',
+      gradientColors: [Color(0xFF7C4DFF), Color(0xFF00E5FF)],
     ),
-    _OnboardingData(
-      animationUrl:
+    _QuotePage(
+      emoji: '🔥',
+      lottieUrl:
           'https://assets6.lottiefiles.com/packages/lf20_touohxv0.json',
-      fallbackEmoji: '🎯',
-      title: 'Stay Determined',
-      subtitle: 'Apna focus banaye rakhein,\nbhatke nahi.',
-      gradientColors: [const Color(0xFF00E5FF), const Color(0xFF00BFA5)],
+      author: 'Robin Sharma',
+      quote:
+          '"Change is hard at first, messy in the middle, and gorgeous at the end."',
+      sub:
+          'Your dopamine detox starts today. The first 24 hours are the hardest.',
+      gradientColors: [Color(0xFFFF6B9D), Color(0xFFFF8E53)],
     ),
-    _OnboardingData(
-      animationUrl:
+    _QuotePage(
+      emoji: '📚',
+      lottieUrl:
           'https://assets2.lottiefiles.com/packages/lf20_qp1q7mct.json',
-      fallbackEmoji: '⛓️',
-      title: 'Break Bad Habits',
-      subtitle: 'Daru aur buri aadatein chhodein,\napni jindagi bachayein.',
-      gradientColors: [const Color(0xFFFF6B9D), const Color(0xFFFF8A65)],
+      author: 'Jim Rohn',
+      quote:
+          '"Either you run the day, or the day runs you."',
+      sub:
+          'Lock your distractions. Own your time. The future you will thank you.',
+      gradientColors: [Color(0xFF00E5FF), Color(0xFF00BFA5)],
     ),
-    _OnboardingData(
-      animationUrl:
+    _QuotePage(
+      emoji: '💪',
+      lottieUrl:
           'https://assets9.lottiefiles.com/packages/lf20_x62chJ.json',
-      fallbackEmoji: '🏃',
-      title: 'Improve Your Health',
-      subtitle: 'Apne health ka khyal rakhiye,\naaj hi shuru karein.',
-      gradientColors: [const Color(0xFF69F0AE), const Color(0xFF7C4DFF)],
+      author: 'David Goggins',
+      quote:
+          '"You are in danger of living a life so comfortable and soft that you will die without ever realising your true potential."',
+      sub: 'Set a challenge. Endure it. Become stronger.',
+      gradientColors: [Color(0xFF69F0AE), Color(0xFF7C4DFF)],
+    ),
+    _QuotePage(
+      emoji: '🧠',
+      lottieUrl:
+          'https://assets4.lottiefiles.com/packages/lf20_jcikwtux.json',
+      author: 'James Clear',
+      quote:
+          '"Every action you take is a vote for the type of person you wish to become."',
+      sub:
+          'Small daily disciplines compound into extraordinary results.',
+      gradientColors: [Color(0xFFFFB74D), Color(0xFFFF6B9D)],
+    ),
+    _QuotePage(
+      emoji: '🌅',
+      lottieUrl:
+          'https://assets3.lottiefiles.com/packages/lf20_wnqlfojb.json',
+      author: 'Winston Churchill',
+      quote:
+          '"Success is not final, failure is not fatal: it is the courage to continue that counts."',
+      sub: 'Begin your detox right now. Tap "Let\'s Go" to take control.',
+      gradientColors: [Color(0xFF7C4DFF), Color(0xFFFF6B9D)],
     ),
   ];
 
-  Future<void> _completeOnboarding() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('isOnboarded', true);
-    if (!mounted) return;
+  void _goToHome() {
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
         pageBuilder: (_, __, ___) => const HomeScreen(),
-        transitionsBuilder: (_, animation, __, child) => FadeTransition(
-          opacity: animation,
-          child: child,
-        ),
-        transitionDuration: const Duration(milliseconds: 600),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+        transitionDuration: const Duration(milliseconds: 500),
       ),
     );
   }
 
   @override
   void dispose() {
-    _pageController.dispose();
+    _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final isLast = _current == _pages.length - 1;
+
     return Scaffold(
       backgroundColor: AppTheme.bg,
       body: Stack(
         children: [
-          // Page view
+          // ── Pages ──────────────────────────────────────────────────────
           PageView.builder(
-            controller: _pageController,
+            controller: _controller,
             itemCount: _pages.length,
-            onPageChanged: (i) => setState(() => _currentPage = i),
-            itemBuilder: (context, index) =>
-                _OnboardingPage(data: _pages[index]),
+            onPageChanged: (i) => setState(() => _current = i),
+            itemBuilder: (_, i) => _PageView(page: _pages[i]),
           ),
 
-          // Skip button
+          // ── Skip button ────────────────────────────────────────────────
           Positioned(
             top: MediaQuery.of(context).padding.top + 16,
-            right: 24,
+            right: 20,
             child: GestureDetector(
-              onTap: _completeOnboarding,
+              onTap: _goToHome,
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 18, vertical: 9),
                 decoration: BoxDecoration(
-                  color: AppTheme.glassWhite,
+                  color: Colors.white.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(
                       color: Colors.white.withOpacity(0.2)),
                 ),
-                child: const Text(
-                  'Skip',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                  ),
-                ),
+                child: const Text('Skip',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13)),
               ),
             ),
           ),
 
-          // Bottom controls
+          // ── Bottom controls ────────────────────────────────────────────
           Positioned(
             left: 0,
             right: 0,
-            bottom: MediaQuery.of(context).padding.bottom + 40,
+            bottom: MediaQuery.of(context).padding.bottom + 36,
             child: Column(
               children: [
-                // Page indicator
+                // Dot indicator
                 SmoothPageIndicator(
-                  controller: _pageController,
+                  controller: _controller,
                   count: _pages.length,
                   effect: ExpandingDotsEffect(
-                    activeDotColor: _pages[_currentPage]
-                        .gradientColors
-                        .first,
-                    dotColor: Colors.white.withOpacity(0.25),
+                    activeDotColor:
+                        _pages[_current].gradientColors.first,
+                    dotColor: Colors.white.withOpacity(0.22),
                     dotHeight: 8,
                     dotWidth: 8,
                     expansionFactor: 3,
                     spacing: 6,
                   ),
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 28),
 
                 // CTA button
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 300),
-                    child: _currentPage == _pages.length - 1
-                        ? _GradientButton(
-                            key: const ValueKey('start'),
-                            label: "Let's Start!",
-                            colors: _pages[_currentPage].gradientColors,
-                            onTap: _completeOnboarding,
-                          )
-                        : _GradientButton(
-                            key: const ValueKey('next'),
-                            label: 'Next →',
-                            colors: _pages[_currentPage].gradientColors,
-                            onTap: () {
-                              _pageController.nextPage(
-                                duration:
-                                    const Duration(milliseconds: 400),
-                                curve: Curves.easeInOutCubic,
-                              );
-                            },
+                  child: GestureDetector(
+                    onTap: isLast
+                        ? _goToHome
+                        : () => _controller.nextPage(
+                              duration:
+                                  const Duration(milliseconds: 400),
+                              curve: Curves.easeInOutCubic,
+                            ),
+                    child: Container(
+                      width: double.infinity,
+                      height: 58,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: _pages[_current].gradientColors,
+                        ),
+                        borderRadius: BorderRadius.circular(18),
+                        boxShadow: [
+                          BoxShadow(
+                            color: _pages[_current]
+                                .gradientColors
+                                .first
+                                .withOpacity(0.4),
+                            blurRadius: 20,
+                            offset: const Offset(0, 8),
                           ),
+                        ],
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        isLast ? "🚀 Let's Go!" : 'Next →',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -175,11 +216,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 }
 
-// ─── Individual Onboarding Page ───────────────────────────────────────────────
-class _OnboardingPage extends StatelessWidget {
-  final _OnboardingData data;
-
-  const _OnboardingPage({required this.data});
+// ─── Individual quote page ────────────────────────────────────────────────────
+class _PageView extends StatelessWidget {
+  final _QuotePage page;
+  const _PageView({required this.page});
 
   @override
   Widget build(BuildContext context) {
@@ -189,73 +229,98 @@ class _OnboardingPage extends StatelessWidget {
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
-            data.gradientColors.first.withOpacity(0.15),
+            page.gradientColors.first.withOpacity(0.18),
             AppTheme.bg,
           ],
         ),
       ),
       child: SafeArea(
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const Spacer(flex: 1),
 
-            // Lottie animation with emoji fallback
+            // Animation / emoji
             SizedBox(
-              height: 280,
-              child: _LottieOrEmoji(
-                url: data.animationUrl,
-                emoji: data.fallbackEmoji,
+              height: 220,
+              child: Lottie.network(
+                page.lottieUrl,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => Text(
+                  page.emoji,
+                  style: const TextStyle(fontSize: 100),
+                  textAlign: TextAlign.center,
+                ),
               ),
             ),
 
             const Spacer(flex: 1),
 
-            // Decorative glass card with text
+            // Glass quote card
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 28),
+              padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Container(
-                padding: const EdgeInsets.all(28),
+                padding: const EdgeInsets.fromLTRB(24, 28, 24, 28),
                 decoration: BoxDecoration(
-                  color: AppTheme.glassWhite,
+                  color: Colors.white.withOpacity(0.06),
                   borderRadius: BorderRadius.circular(28),
                   border: Border.all(
-                    color: data.gradientColors.first.withOpacity(0.3),
+                    color:
+                        page.gradientColors.first.withOpacity(0.3),
                     width: 1.5,
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: data.gradientColors.first.withOpacity(0.1),
+                      color: page.gradientColors.first.withOpacity(0.08),
                       blurRadius: 30,
-                      spreadRadius: 5,
+                      spreadRadius: 4,
                     ),
                   ],
                 ),
                 child: Column(
                   children: [
-                    ShaderMask(
-                      shaderCallback: (bounds) => LinearGradient(
-                        colors: data.gradientColors,
-                      ).createShader(bounds),
+                    // Author badge
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 6),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                            colors: page.gradientColors),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
                       child: Text(
-                        data.title,
+                        '— ${page.author}',
                         style: const TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
                           color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.5,
                         ),
-                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+
+                    // Quote
+                    Text(
+                      page.quote,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                        height: 1.55,
                       ),
                     ),
                     const SizedBox(height: 16),
+
+                    // Sub-text
                     Text(
-                      data.subtitle,
-                      style: const TextStyle(
-                        fontSize: 17,
-                        color: Color(0xFFCCCCDD),
-                        height: 1.6,
-                      ),
+                      page.sub,
                       textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.55),
+                        fontSize: 13,
+                        height: 1.5,
+                      ),
                     ),
                   ],
                 ),
@@ -270,84 +335,21 @@ class _OnboardingPage extends StatelessWidget {
   }
 }
 
-// ─── Lottie with fallback ─────────────────────────────────────────────────────
-class _LottieOrEmoji extends StatelessWidget {
-  final String url;
-  final String emoji;
-
-  const _LottieOrEmoji({required this.url, required this.emoji});
-
-  @override
-  Widget build(BuildContext context) {
-    return Lottie.network(
-      url,
-      fit: BoxFit.contain,
-      errorBuilder: (_, __, ___) => Center(
-        child: Text(emoji, style: const TextStyle(fontSize: 120)),
-      ),
-    );
-  }
-}
-
-// ─── Gradient Button ──────────────────────────────────────────────────────────
-class _GradientButton extends StatelessWidget {
-  final String label;
-  final List<Color> colors;
-  final VoidCallback onTap;
-
-  const _GradientButton({
-    super.key,
-    required this.label,
-    required this.colors,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: double.infinity,
-        height: 60,
-        decoration: BoxDecoration(
-          gradient: LinearGradient(colors: colors),
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: [
-            BoxShadow(
-              color: colors.first.withOpacity(0.4),
-              blurRadius: 20,
-              offset: const Offset(0, 8),
-            ),
-          ],
-        ),
-        alignment: Alignment.center,
-        child: Text(
-          label,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.5,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 // ─── Data model ───────────────────────────────────────────────────────────────
-class _OnboardingData {
-  final String animationUrl;
-  final String fallbackEmoji;
-  final String title;
-  final String subtitle;
+class _QuotePage {
+  final String emoji;
+  final String lottieUrl;
+  final String author;
+  final String quote;
+  final String sub;
   final List<Color> gradientColors;
 
-  const _OnboardingData({
-    required this.animationUrl,
-    required this.fallbackEmoji,
-    required this.title,
-    required this.subtitle,
+  const _QuotePage({
+    required this.emoji,
+    required this.lottieUrl,
+    required this.author,
+    required this.quote,
+    required this.sub,
     required this.gradientColors,
   });
 }

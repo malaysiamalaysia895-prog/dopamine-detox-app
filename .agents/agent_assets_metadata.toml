@@ -24,3 +24,9 @@ id = "xnIZqygy-9GF9aQerETmH"
 uri = "file://flutter_dopamine_detox_v2.tar.gz"
 type = "unspecified"
 title = "Dopamine Detox v2 — All 5 Features Updated"
+
+[[outputs]]
+id = "RU9KM8AjaSLW6YizUQmz6"
+uri = "file://flutter_dopamine_detox_v3_FINAL.tar.gz"
+type = "unspecified"
+title = "Dopamine Detox v3 — All Features Complete"

@@ -12,7 +12,7 @@ import 'screens/home_screen.dart';
 import 'screens/lock_overlay_screen.dart';
 import 'services/billing_service.dart';
 
-/// Overlay entry point (separate isolate — must stay lean)
+/// Overlay entry-point — separate isolate, must stay minimal.
 @pragma('vm:entry-point')
 void overlayMain() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,15 +28,12 @@ Future<void> main() async {
       statusBarIconBrightness: Brightness.light,
     ),
   );
-
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
 
   final prefs = await SharedPreferences.getInstance();
-  final isOnboarded = prefs.getBool('isOnboarded') ?? false;
-
   final billingService = BillingService();
   await billingService.init();
 
@@ -46,14 +43,14 @@ Future<void> main() async {
         ChangeNotifierProvider(create: (_) => AppStateProvider(prefs)),
         Provider<BillingService>.value(value: billingService),
       ],
-      child: DopamineDetoxApp(isOnboarded: isOnboarded),
+      // Onboarding always shows on every launch — no isOnboarded gate.
+      child: const DopamineDetoxApp(),
     ),
   );
 }
 
 class DopamineDetoxApp extends StatefulWidget {
-  final bool isOnboarded;
-  const DopamineDetoxApp({super.key, required this.isOnboarded});
+  const DopamineDetoxApp({super.key});
 
   @override
   State<DopamineDetoxApp> createState() => _DopamineDetoxAppState();
@@ -66,26 +63,25 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
   @override
   void initState() {
     super.initState();
-    _checkInitialConnectivity();
-    // Listen for connectivity changes in real time
+    _checkConnectivity();
     _connectivitySub = Connectivity()
         .onConnectivityChanged
         .listen((List<ConnectivityResult> results) {
-      final connected = results.any((r) =>
+      final ok = results.any((r) =>
           r == ConnectivityResult.mobile ||
           r == ConnectivityResult.wifi ||
           r == ConnectivityResult.ethernet);
-      if (mounted) setState(() => _hasInternet = connected);
+      if (mounted) setState(() => _hasInternet = ok);
     });
   }
 
-  Future<void> _checkInitialConnectivity() async {
+  Future<void> _checkConnectivity() async {
     final results = await Connectivity().checkConnectivity();
-    final connected = results.any((r) =>
+    final ok = results.any((r) =>
         r == ConnectivityResult.mobile ||
         r == ConnectivityResult.wifi ||
         r == ConnectivityResult.ethernet);
-    if (mounted) setState(() => _hasInternet = connected);
+    if (mounted) setState(() => _hasInternet = ok);
   }
 
   @override
@@ -100,21 +96,18 @@ class _DopamineDetoxAppState extends State<DopamineDetoxApp> {
       title: 'Dopamine Detox',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme(),
+      // Onboarding shows every time the app opens
       home: Stack(
         children: [
-          // Main app content
-          widget.isOnboarded ? const HomeScreen() : const OnboardingScreen(),
-
-          // ── Blocking internet overlay ──────────────────────────────────
-          if (!_hasInternet)
-            const _NoInternetOverlay(),
+          const OnboardingScreen(),
+          if (!_hasInternet) const _NoInternetOverlay(),
         ],
       ),
     );
   }
 }
 
-// ─── No Internet Blocking Overlay ─────────────────────────────────────────────
+// ─── No-Internet Blocking Overlay ─────────────────────────────────────────────
 class _NoInternetOverlay extends StatelessWidget {
   const _NoInternetOverlay();
 
@@ -124,75 +117,58 @@ class _NoInternetOverlay extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: Container(
-          decoration: BoxDecoration(
-            color: AppTheme.bg.withOpacity(0.97),
-          ),
+          color: AppTheme.bg.withOpacity(0.97),
           child: SafeArea(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Animated icon
                 Container(
-                  width: 100,
-                  height: 100,
+                  width: 96,
+                  height: 96,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: const Color(0xFFFF6B9D).withOpacity(0.15),
+                    color: const Color(0xFFFF6B9D).withOpacity(0.1),
                     border: Border.all(
-                      color: const Color(0xFFFF6B9D).withOpacity(0.4),
-                      width: 2,
-                    ),
+                        color: const Color(0xFFFF6B9D).withOpacity(0.35),
+                        width: 2),
                   ),
-                  child: const Icon(
-                    Icons.wifi_off_rounded,
-                    color: Color(0xFFFF6B9D),
-                    size: 48,
-                  ),
+                  child: const Icon(Icons.wifi_off_rounded,
+                      color: Color(0xFFFF6B9D), size: 44),
                 ),
-                const SizedBox(height: 32),
-                const Text(
-                  'Internet Connection\nRequired',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 26,
-                    fontWeight: FontWeight.w800,
-                    height: 1.3,
-                  ),
-                ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 30),
+                const Text('Internet Required',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800)),
+                const SizedBox(height: 14),
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 48),
                   child: Text(
-                    'This app requires an active internet connection '
-                    'for billing and security features. '
-                    'Please reconnect to continue.',
+                    'An active connection is needed for billing '
+                    'and security features. Please reconnect.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: Color(0xFF8888AA),
-                      fontSize: 15,
-                      height: 1.6,
-                    ),
+                        color: Color(0xFF8888AA),
+                        fontSize: 14,
+                        height: 1.6),
                   ),
                 ),
-                const SizedBox(height: 40),
+                const SizedBox(height: 32),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 24, vertical: 12),
+                      horizontal: 22, vertical: 11),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFF6B9D).withOpacity(0.1),
+                    color: const Color(0xFFFF6B9D).withOpacity(0.08),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
                         color: const Color(0xFFFF6B9D).withOpacity(0.3)),
                   ),
-                  child: const Text(
-                    '⏳ Waiting for connection...',
-                    style: TextStyle(
-                      color: Color(0xFFFF6B9D),
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
+                  child: const Text('⏳ Waiting for connection...',
+                      style: TextStyle(
+                          color: Color(0xFFFF6B9D),
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13)),
                 ),
               ],
             ),
@@ -203,7 +179,7 @@ class _NoInternetOverlay extends StatelessWidget {
   }
 }
 
-/// The mini app rendered inside the overlay window (separate isolate).
+/// Overlay window mini-app (separate isolate).
 class OverlayApp extends StatelessWidget {
   const OverlayApp({super.key});
 
@@ -244,15 +220,13 @@ class AppTheme {
             color: Colors.white,
             letterSpacing: -0.5),
         displayMedium: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.w700,
-            color: Colors.white),
+            fontSize: 24, fontWeight: FontWeight.w700, color: Colors.white),
         titleLarge: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w600,
-            color: Colors.white),
-        bodyLarge: TextStyle(fontSize: 16, color: Color(0xFFCCCCDD)),
-        bodyMedium: TextStyle(fontSize: 14, color: Color(0xFF9999BB)),
+            fontSize: 20, fontWeight: FontWeight.w600, color: Colors.white),
+        bodyLarge:
+            TextStyle(fontSize: 16, color: Color(0xFFCCCCDD)),
+        bodyMedium:
+            TextStyle(fontSize: 14, color: Color(0xFF9999BB)),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
