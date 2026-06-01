@@ -12,7 +12,7 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.6
-  android_intent_plus: ^6.0.0
+  android_intent_plus: ^5.3.1
   connectivity_plus: ^6.1.5
   device_apps: ^2.2.0
   flutter_overlay_window: ^0.4.5
