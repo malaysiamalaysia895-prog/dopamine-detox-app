@@ -1,0 +1,4 @@
+- [Android-only workflow](android-workflow.md) — Replit = IDE only; GitHub Actions builds the APK; never strip logic for web preview
+- [Init ordering](init-ordering.md) — AdMob + Audio must NOT be awaited before runApp(); fire-and-forget after runApp() to prevent white screen
+- [Timer-story race](timer-story-race.md) — Timer must start in dismissStory(), not startLevel(); starting it during the story dialog causes bad-state crash on "Let's Go"
+- [Level map freeze](level-map-freeze.md) — Only one AnimationController on the map; use _AnimatedLevelNode (StatefulWidget) for the next level, _StaticLevelNode (StatelessWidget) for all others
