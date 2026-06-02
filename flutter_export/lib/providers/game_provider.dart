@@ -46,8 +46,8 @@ enum AnimType { spawn, merge, error, unlock }
 class GameState {
   // Navigation
   final AppScreen screen;
-  final int currentLevelIndex;  // 0-based
-  final int highestUnlockedLevel; // 1-based
+  final int currentLevelIndex;     // 0-based
+  final int highestUnlockedLevel;  // 1-based
 
   // Grid
   final List<List<GridCell>> grid; // grid[col][row]
@@ -56,8 +56,8 @@ class GameState {
   final int energy;
   final int maxEnergy;
   final int totalCoins;
-  final int levelBaseCoins;   // = level.number * 100
-  final int levelEarnedCoins; // may be ×3 after ad
+  final int levelBaseCoins;    // = level.number * 100
+  final int levelEarnedCoins;  // may be ×3 after ad
   final bool coinsMultiplied;
 
   // Quota
@@ -122,7 +122,7 @@ class GameState {
     return true;
   }
 
-  /// True when grid is full AND no two adjacent cells have the same item.
+  /// True when grid is full AND no two adjacent cells share the same item.
   bool get isGridLocked {
     if (!isGridFull) return false;
     final cfg = currentLevel;
@@ -133,7 +133,7 @@ class GameState {
         for (final d in const [[-1,0],[1,0],[0,-1],[0,1]]) {
           final nc = c + d[0], nr = r + d[1];
           if (nc < 0 || nc >= cfg.gridCols || nr < 0 || nr >= cfg.gridRows) continue;
-          if (grid[nc][nr].itemId == id) return false; // merge exists
+          if (grid[nc][nr].itemId == id) return false; // merge possible
         }
       }
     }
@@ -196,57 +196,68 @@ class GameNotifier extends StateNotifier<GameState> {
   // ── Preferences ───────────────────────────────────────────────────────────
 
   Future<void> _loadPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    state = state.copyWith(
-      highestUnlockedLevel: prefs.getInt(_kHighestLevel) ?? 1,
-      totalCoins:           prefs.getInt(_kTotalCoins)   ?? 0,
-    );
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      state = state.copyWith(
+        highestUnlockedLevel: prefs.getInt(_kHighestLevel) ?? 1,
+        totalCoins:           prefs.getInt(_kTotalCoins)   ?? 0,
+      );
+    } catch (e) {
+      debugPrint('[Prefs] _loadPrefs() failed: $e');
+    }
   }
 
   Future<void> _savePrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_kHighestLevel, state.highestUnlockedLevel);
-    await prefs.setInt(_kTotalCoins,   state.totalCoins);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_kHighestLevel, state.highestUnlockedLevel);
+      await prefs.setInt(_kTotalCoins,   state.totalCoins);
+    } catch (e) {
+      debugPrint('[Prefs] _savePrefs() failed: $e');
+    }
   }
 
   // ── Navigation ────────────────────────────────────────────────────────────
 
   void goToMap() {
     _timer?.cancel();
-    state = state.copyWith(screen: AppScreen.map, timerActive: false);
     final level = state.currentLevel;
+    state = state.copyWith(screen: AppScreen.map, timerActive: false);
     AudioManager.instance.playBgm(themeOf(level.phase).bgmAsset);
   }
 
   // ── Start Level ───────────────────────────────────────────────────────────
 
   void startLevel(int levelIndex) {
+    // Guard: clamp to valid range
+    final safeIndex = levelIndex.clamp(0, kLevels.length - 1);
     _timer?.cancel();
 
-    final cfg  = kLevels[levelIndex];
+    final cfg  = kLevels[safeIndex];
     final grid = _buildInitialGrid(cfg);
     final base = cfg.baseCoins;
 
     state = state.copyWith(
-      screen:            AppScreen.game,
-      currentLevelIndex: levelIndex,
-      grid:              grid,
-      energy:            100,
-      maxEnergy:         100,
-      levelBaseCoins:    base,
-      levelEarnedCoins:  base,
-      coinsMultiplied:   false,
-      quotaRequired:     cfg.quotaMap,
-      quotaDelivered:    {},
-      timerSeconds:      cfg.timeLimitSeconds,
-      timerActive:       cfg.hasTimer,
-      timerExpiredOnce:  false,
-      activeDialog:      ActiveDialog.story,
+      screen:             AppScreen.game,
+      currentLevelIndex:  safeIndex,
+      grid:               grid,
+      energy:             100,
+      maxEnergy:          100,
+      levelBaseCoins:     base,
+      levelEarnedCoins:   base,
+      coinsMultiplied:    false,
+      quotaRequired:      cfg.quotaMap,
+      quotaDelivered:     {},
+      timerSeconds:       cfg.timeLimitSeconds,
+      timerActive:        cfg.hasTimer,
+      timerExpiredOnce:   false,
+      activeDialog:       ActiveDialog.story,
       deletionModeActive: false,
-      pendingAnimations: const [],
+      pendingAnimations:  const [],
     );
 
     if (cfg.hasTimer) _startTimer();
+    // Audio is guarded by try-catch inside AudioManager
     AudioManager.instance.playBgm(themeOf(cfg.phase).bgmAsset);
   }
 
@@ -258,7 +269,6 @@ class GameNotifier extends StateNotifier<GameState> {
       (c) => List.generate(cfg.gridRows, (r) => const GridCell()),
     );
 
-    // Available positions for obstacles
     final positions = <(int, int)>[];
     for (int c = 0; c < cfg.gridCols; c++) {
       for (int r = 0; r < cfg.gridRows; r++) {
@@ -269,7 +279,7 @@ class GameNotifier extends StateNotifier<GameState> {
 
     int posIdx = 0;
 
-    // Black Holes (Phase 5) — must be placed first, in spread positions
+    // Black Holes (Phase 5)
     for (int i = 0; i < cfg.blackHoleCount && posIdx < positions.length; i++) {
       final (c, r) = positions[posIdx++];
       cells[c][r] = const GridCell(obstacle: ObstacleType.blackHole);
@@ -287,7 +297,7 @@ class GameNotifier extends StateNotifier<GameState> {
       cells[c][r] = const GridCell(obstacle: ObstacleType.lockedCrate);
     }
 
-    // Seed some starting items (base spawner item for this level)
+    // Seed some starting items
     final seedId = cfg.spawnerItemId;
     final nonObstacle = <(int, int)>[];
     for (int c = 0; c < cfg.gridCols; c++) {
@@ -312,25 +322,21 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   // ── Spawn Item ────────────────────────────────────────────────────────────
-  // Spawner places the base item into the first empty cell (or targeted cell).
 
   void spawnItem({int? targetCol, int? targetRow}) {
     if (state.activeDialog != ActiveDialog.none) return;
     if (state.deletionModeActive) return;
     final cfg = state.currentLevel;
 
-    // Rule: Zero Energy — block and show popup
     if (state.energy <= 0) {
       AudioManager.instance.playErrorBuzz();
       state = state.copyWith(activeDialog: ActiveDialog.zeroEnergy);
       return;
     }
 
-    // Find target cell
     int col = targetCol ?? -1;
     int row = targetRow ?? -1;
     if (col == -1 || row == -1) {
-      // Auto-place in first empty cell
       outer:
       for (int c = 0; c < cfg.gridCols; c++) {
         for (int r = 0; r < cfg.gridRows; r++) {
@@ -340,7 +346,6 @@ class GameNotifier extends StateNotifier<GameState> {
     }
 
     if (col == -1) {
-      // No empty space — check grid lock
       if (state.isGridLocked && cfg.allowGridRescue) {
         state = state.copyWith(activeDialog: ActiveDialog.gridFull);
       }
@@ -353,22 +358,17 @@ class GameNotifier extends StateNotifier<GameState> {
     final anims = [...state.pendingAnimations, PendingAnimation(col, row, AnimType.spawn)];
 
     state = state.copyWith(
-      grid: newGrid,
+      grid:  newGrid,
       energy: state.energy - 1,
       pendingAnimations: anims,
     );
 
     AudioManager.instance.playSpawnPop();
-
-    // Check grid locked after spawn
     _checkGridLocked();
   }
 
   // ── Move / Merge / Deliver ────────────────────────────────────────────────
 
-  /// Called when the player drags fromCell to toCell.
-  /// If toCell is the Delivery Zone (toCol == -1, toRow == -1), deliver.
-  /// Otherwise attempt merge or swap.
   void handleDrag(int fromCol, int fromRow, {int? toCol, int? toRow, bool isDelivery = false}) {
     if (state.activeDialog != ActiveDialog.none) return;
     if (state.deletionModeActive) return;
@@ -387,13 +387,10 @@ class GameNotifier extends StateNotifier<GameState> {
     if (to.isBlocked) return;
 
     if (to.itemId == null) {
-      // Simple move
       _moveCell(fromCol, fromRow, toCol, toRow);
     } else if (to.itemId == from.itemId) {
-      // Merge
       _mergeItems(fromCol, fromRow, toCol, toRow);
     } else {
-      // Swap
       _swapCells(fromCol, fromRow, toCol, toRow);
     }
   }
@@ -416,10 +413,9 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   void _mergeItems(int fc, int fr, int tc, int tr) {
-    final id = state.grid[fc][fr].itemId!;
+    final id   = state.grid[fc][fr].itemId!;
     final next = ItemDictionary.nextItem(id);
     if (next == null) {
-      // Max tier — error shake
       AudioManager.instance.playErrorBuzz();
       state = state.copyWith(
         pendingAnimations: [...state.pendingAnimations, PendingAnimation(tc, tr, AnimType.error)],
@@ -431,7 +427,6 @@ class GameNotifier extends StateNotifier<GameState> {
     newGrid[fc][fr] = newGrid[fc][fr].clearItem();
     newGrid[tc][tr] = newGrid[tc][tr].withItem(next.id);
 
-    // Unlock adjacent obstacles on merge
     _unlockAdjacent(newGrid, tc, tr);
 
     final anims = [...state.pendingAnimations, PendingAnimation(tc, tr, AnimType.merge)];
@@ -455,12 +450,11 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   void _deliverItem(int col, int row) {
-    final itemId = state.grid[col][row].itemId!;
-    final needed = state.quotaRequired[itemId] ?? 0;
-    final done   = state.quotaDelivered[itemId] ?? 0;
+    final itemId  = state.grid[col][row].itemId!;
+    final needed  = state.quotaRequired[itemId] ?? 0;
+    final done    = state.quotaDelivered[itemId] ?? 0;
 
     if (needed == 0 || done >= needed) {
-      // Item not needed — error
       AudioManager.instance.playErrorBuzz();
       state = state.copyWith(
         pendingAnimations: [...state.pendingAnimations, PendingAnimation(col, row, AnimType.error)],
@@ -468,21 +462,19 @@ class GameNotifier extends StateNotifier<GameState> {
       return;
     }
 
-    final newGrid = _cloneGrid();
+    final newGrid     = _cloneGrid();
     newGrid[col][row] = newGrid[col][row].clearItem();
     final newDelivered = Map<int, int>.from(state.quotaDelivered);
     newDelivered[itemId] = done + 1;
 
     state = state.copyWith(
-      grid: newGrid,
+      grid:          newGrid,
       quotaDelivered: newDelivered,
     );
 
     AudioManager.instance.playMergeSnap();
 
-    // Check win
-    final newState = state;
-    if (newState.isLevelComplete) {
+    if (state.isLevelComplete) {
       _onLevelComplete();
     }
   }
@@ -494,9 +486,7 @@ class GameNotifier extends StateNotifier<GameState> {
     AudioManager.instance.pauseBgm();
     AudioManager.instance.playVictory();
 
-    final lvlNum = state.currentLevel.number;
-
-    // Unlock next level
+    final lvlNum    = state.currentLevel.number;
     final newHighest = max(state.highestUnlockedLevel, lvlNum + 1);
 
     state = state.copyWith(
@@ -513,15 +503,14 @@ class GameNotifier extends StateNotifier<GameState> {
     AudioManager.instance.pauseBgm();
     final shown = await AdManager.instance.showRewarded(onReward: () {
       state = state.copyWith(
-        energy: (state.energy + 50).clamp(0, state.maxEnergy),
+        energy:       (state.energy + 50).clamp(0, state.maxEnergy),
         activeDialog: ActiveDialog.none,
       );
       AudioManager.instance.resumeBgm();
     });
     if (!shown) {
-      // Ad not ready — partial restore so player isn't stuck
       state = state.copyWith(
-        energy: min(20, state.maxEnergy),
+        energy:       min(20, state.maxEnergy),
         activeDialog: ActiveDialog.none,
       );
       AudioManager.instance.resumeBgm();
@@ -533,7 +522,6 @@ class GameNotifier extends StateNotifier<GameState> {
   Future<void> watchAdForGridRescue() async {
     AudioManager.instance.pauseBgm();
     final shown = await AdManager.instance.showRewarded(onReward: () {
-      // Enter deletion mode: player taps a cell to delete one item
       state = state.copyWith(
         activeDialog:       ActiveDialog.none,
         deletionModeActive: true,
@@ -546,17 +534,15 @@ class GameNotifier extends StateNotifier<GameState> {
     }
   }
 
-  /// Player tapped a cell in deletion mode — delete the lowest tier item there.
   void deleteItemInRescueMode(int col, int row) {
     if (!state.deletionModeActive) return;
     final cell = state.grid[col][row];
-    // Cannot delete obstacles or black holes
     if (cell.itemId == null || cell.isBlocked) return;
 
     final newGrid = _cloneGrid();
     newGrid[col][row] = newGrid[col][row].clearItem();
     state = state.copyWith(
-      grid: newGrid,
+      grid:               newGrid,
       deletionModeActive: false,
     );
     AudioManager.instance.playSpawnPop();
@@ -578,8 +564,6 @@ class GameNotifier extends StateNotifier<GameState> {
       );
       AudioManager.instance.resumeBgm();
     });
-    // Only resume immediately if ad was NOT shown (fallback path).
-    // When ad IS shown, resumeBgm() fires inside onReward after user watches the full ad.
     if (!shown) AudioManager.instance.resumeBgm();
   }
 
@@ -588,7 +572,6 @@ class GameNotifier extends StateNotifier<GameState> {
   Future<void> goToNextLevel() async {
     final lvlNum = state.currentLevel.number;
 
-    // Collect coins first
     state = state.copyWith(
       totalCoins: state.totalCoins + state.levelEarnedCoins,
     );
@@ -596,12 +579,11 @@ class GameNotifier extends StateNotifier<GameState> {
 
     final nextIndex = state.currentLevelIndex + 1;
     if (nextIndex >= kLevels.length) {
-      // All 50 levels beaten
       state = state.copyWith(activeDialog: ActiveDialog.gameBeaten);
       return;
     }
 
-    // Rule 4: interstitial on even-numbered levels
+    // Rule 4: interstitial on even-numbered level completions
     if (lvlNum % 2 == 0) {
       AudioManager.instance.pauseBgm();
       await AdManager.instance.showInterstitial(onDismiss: () {
@@ -614,7 +596,6 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   void dismissVictory() {
-    // Fallback: close dialog without going to next level (shouldn't normally be used)
     state = state.copyWith(activeDialog: ActiveDialog.none);
     AudioManager.instance.resumeBgm();
   }
@@ -637,10 +618,10 @@ class GameNotifier extends StateNotifier<GameState> {
   void _onTimerExpired() {
     AudioManager.instance.pauseBgm();
     state = state.copyWith(
-      timerSeconds:    0,
-      timerActive:     false,
+      timerSeconds:     0,
+      timerActive:      false,
       timerExpiredOnce: true,
-      activeDialog:    ActiveDialog.timeFail,
+      activeDialog:     ActiveDialog.timeFail,
     );
   }
 
@@ -650,10 +631,10 @@ class GameNotifier extends StateNotifier<GameState> {
     await AdManager.instance.showRewarded(onReward: () {
       final newSecs = state.timerSeconds + 60;
       state = state.copyWith(
-        timerSeconds:    newSecs,
-        timerActive:     true,
+        timerSeconds:     newSecs,
+        timerActive:      true,
         timerExpiredOnce: false,
-        activeDialog:    ActiveDialog.none,
+        activeDialog:     ActiveDialog.none,
       );
       _startTimer();
       AudioManager.instance.resumeBgm();
@@ -681,7 +662,7 @@ class GameNotifier extends StateNotifier<GameState> {
         .map((col) => col.map((cell) => GridCell(
               itemId:      cell.itemId,
               obstacle:    cell.obstacle,
-              isUnlocking: false, // reset on clone
+              isUnlocking: false,
             )).toList())
         .toList();
   }
@@ -709,12 +690,12 @@ final gameProvider = StateNotifierProvider<GameNotifier, GameState>(
 );
 
 // Derived providers — minimise widget rebuilds
-final screenProvider  = Provider<AppScreen>((ref) => ref.watch(gameProvider).screen);
-final gridProvider    = Provider<List<List<GridCell>>>((ref) => ref.watch(gameProvider).grid);
-final dialogProvider  = Provider<ActiveDialog>((ref) => ref.watch(gameProvider).activeDialog);
-final energyProvider  = Provider<int>((ref) => ref.watch(gameProvider).energy);
-final timerProvider   = Provider<int>((ref) => ref.watch(gameProvider).timerSeconds);
-final quotaPctProvider = Provider<double>((ref) => ref.watch(gameProvider).quotaPercent);
-final animProvider    = Provider<List<PendingAnimation>>((ref) => ref.watch(gameProvider).pendingAnimations);
-final highestLvlProvider = Provider<int>((ref) => ref.watch(gameProvider).highestUnlockedLevel);
+final screenProvider       = Provider<AppScreen>((ref) => ref.watch(gameProvider).screen);
+final gridProvider         = Provider<List<List<GridCell>>>((ref) => ref.watch(gameProvider).grid);
+final dialogProvider       = Provider<ActiveDialog>((ref) => ref.watch(gameProvider).activeDialog);
+final energyProvider       = Provider<int>((ref) => ref.watch(gameProvider).energy);
+final timerProvider        = Provider<int>((ref) => ref.watch(gameProvider).timerSeconds);
+final quotaPctProvider     = Provider<double>((ref) => ref.watch(gameProvider).quotaPercent);
+final animProvider         = Provider<List<PendingAnimation>>((ref) => ref.watch(gameProvider).pendingAnimations);
+final highestLvlProvider   = Provider<int>((ref) => ref.watch(gameProvider).highestUnlockedLevel);
 final deletionModeProvider = Provider<bool>((ref) => ref.watch(gameProvider).deletionModeActive);

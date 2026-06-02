@@ -31,8 +31,8 @@ class LevelMapScreen extends ConsumerWidget {
           SafeArea(
             child: Column(
               children: [
-                _Header(ref: ref),
-                Expanded(child: _PhaseScrollMap(ref: ref)),
+                const _Header(),
+                const Expanded(child: _PhaseScrollMap()),
               ],
             ),
           ),
@@ -42,12 +42,13 @@ class LevelMapScreen extends ConsumerWidget {
   }
 }
 
-class _Header extends StatelessWidget {
-  final WidgetRef ref;
-  const _Header({required this.ref});
+// ─── Header ───────────────────────────────────────────────────────────────────
+
+class _Header extends ConsumerWidget {
+  const _Header();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final totalCoins = ref.watch(gameProvider).totalCoins;
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
@@ -96,9 +97,10 @@ class _CoinBadge extends StatelessWidget {
   }
 }
 
+// ─── Phase Scroll Map ─────────────────────────────────────────────────────────
+
 class _PhaseScrollMap extends StatelessWidget {
-  final WidgetRef ref;
-  const _PhaseScrollMap({required this.ref});
+  const _PhaseScrollMap();
 
   @override
   Widget build(BuildContext context) {
@@ -109,17 +111,14 @@ class _PhaseScrollMap extends StatelessWidget {
         final phase = GamePhase.values[phaseIdx];
         final theme = themeOf(phase);
         final startLevel = phaseIdx * 10 + 1;
-        final endLevel   = startLevel + 9;
 
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Phase header
               _PhaseHeader(theme: theme, phase: phase),
               const SizedBox(height: 12),
-              // Level nodes
               Wrap(
                 spacing: 12, runSpacing: 12,
                 children: List.generate(10, (i) {
@@ -127,7 +126,6 @@ class _PhaseScrollMap extends StatelessWidget {
                   return _LevelNode(
                     levelNumber: lvlNum,
                     theme: theme,
-                    ref: ref,
                   );
                 }),
               ),
@@ -187,12 +185,10 @@ class _PhaseHeader extends StatelessWidget {
 class _LevelNode extends ConsumerStatefulWidget {
   final int levelNumber;
   final PhaseTheme theme;
-  final WidgetRef ref;
 
   const _LevelNode({
     required this.levelNumber,
     required this.theme,
-    required this.ref,
   });
 
   @override
@@ -221,14 +217,13 @@ class _LevelNodeState extends ConsumerState<_LevelNode>
 
   @override
   Widget build(BuildContext context) {
-    final highest = ref.watch(highestLvlProvider);
+    final highest    = ref.watch(highestLvlProvider);
     final isUnlocked = widget.levelNumber <= highest;
     final isNext     = widget.levelNumber == highest;
 
     final levelDef = kLevels[widget.levelNumber - 1];
 
     if (isNext) {
-      // Glowing + bouncing node for the next available level
       return AnimatedBuilder(
         animation: _bounceAnim,
         builder: (_, __) => Transform.translate(
@@ -254,7 +249,6 @@ class _LevelNodeState extends ConsumerState<_LevelNode>
       );
     }
 
-    // Locked
     return _NodeBody(
       levelDef: levelDef,
       isUnlocked: false,
@@ -282,7 +276,7 @@ class _NodeBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final size = 68.0;
+    const size = 68.0;
 
     return GestureDetector(
       onTap: onTap,

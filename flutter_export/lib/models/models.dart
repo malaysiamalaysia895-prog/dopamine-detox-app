@@ -153,6 +153,7 @@ class LevelDefinition {
   /// = max(1, lowestQuotaItemId - 3)
   /// This keeps the merge chain to ~3 steps, which is viable on any grid size.
   int get spawnerItemId {
+    if (quota.isEmpty) return 1;
     final lowestQuota = quota.map((q) => q.itemId).reduce(min);
     return max(1, lowestQuota - 3);
   }
