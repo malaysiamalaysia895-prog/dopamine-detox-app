@@ -30,7 +30,7 @@ jobs:
           
           flutter clean
           
-          # 1. KACHRA SAAF (Pichli baar ka kharab structure hatana zaroori hai)
+          # 1. KACHRA SAAF
           rm -f android/build.gradle android/build.gradle.kts
           rm -f android/settings.gradle android/settings.gradle.kts
           rm -f android/app/build.gradle android/app/build.gradle.kts
@@ -65,15 +65,16 @@ jobs:
           curl -L -o assets/fonts/Orbitron-Bold.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron-Bold.ttf"
           curl -L -o assets/fonts/Orbitron-Regular.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron-Regular.ttf"
           
-          # 7. R8 PROGUARD FIX (The Official Safe Way - Bina Gradle Tode)
-          cat <<EOF > android/app/proguard-rules.pro
-          -dontwarn com.google.android.play.core.**
-          -dontwarn io.flutter.embedding.engine.deferredcomponents.**
-          EOF
-          sed -i '/release {/a \            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"' android/app/build.gradle || true
+          # 7. ADMOB CRASH FIX (Yeh guarantee dega ki app black screen par crash na ho)
+          sed -i '/<\/application>/i \        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-8566652140087308~1114269136"/>' android/app/src/main/AndroidManifest.xml || true
           
-          # 8. FINAL APK BUILD
-          flutter build apk --release
+          echo "" >> android/app/build.gradle
+          echo "dependencies {" >> android/app/build.gradle
+          echo "    implementation 'com.google.android.play:core:1.10.3'" >> android/app/build.gradle
+          echo "}" >> android/app/build.gradle
+          
+          # 8. FINAL APK BUILD (Maine wapas --no-shrink laga diya hai taaki aapki main files delete na hon)
+          flutter build apk --release --no-shrink
           
           mkdir -p $GITHUB_WORKSPACE/output
           find build -name "*.apk" -exec cp {} $GITHUB_WORKSPACE/output/ \;
