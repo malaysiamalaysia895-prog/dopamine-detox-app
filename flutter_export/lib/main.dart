@@ -61,7 +61,7 @@ void main() async {
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor:              Colors.transparent,
     statusBarIconBrightness:     Brightness.light,
-    navigationBarColor:          Colors.black,
+    systemNavigationBarColor:    Colors.black,
     navigationBarIconBrightness: Brightness.light,
   ));
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
