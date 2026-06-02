@@ -22,25 +22,37 @@ jobs:
         with:
           channel: 'stable'
           
-      - name: Update Ads & Build App
+      - name: The Final Master Build
         run: |
           PUBSPEC=$(find . -name "pubspec.yaml" | head -n 1)
           DIR=$(dirname "$PUBSPEC")
           cd "$DIR"
           
-          # 1. Purani cache saaf karein
           flutter clean
           
-          # 2. SABSE ZAROORI: Ads wale package ko automatically update karein
-          flutter pub add google_mobile_ads
+          # 1. KACHRA SAAF KAREIN: Purani aur nayi files ki ladaai khatam karne ke liye unhe hata rahe hain.
+          # (Chinta mat kijiye, AdMob wali Manifest file bilkul safe rahegi)
+          rm -f android/build.gradle android/build.gradle.kts
+          rm -f android/settings.gradle android/settings.gradle.kts
+          rm -f android/app/build.gradle android/app/build.gradle.kts
           
-          # 3. Naye system ke hisaab se Android files banayein
+          # 2. FRESH START: Naye aur ekdum clean files automatically banayein
           flutter create .
           
-          # 4. Saare naye packages download karein
+          # 3. KOTLIN VERSION FIX: Jo error abhi aapko aaya tha, use hamesha ke liye block karna
+          echo "kotlin_version=1.9.22" >> android/gradle.properties
+          echo "android.useAndroidX=true" >> android/gradle.properties
+          echo "android.enableJetifier=true" >> android/gradle.properties
+          
+          # 4. ADS FIX (minSdkVersion 21): Jo Agent credit khatam hone se nahi kar paya, wo humne yahan force kar diya
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle.kts || true
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle.kts || true
+          
+          # 5. Ads ka package wapas add karke fresh download karein
+          flutter pub add google_mobile_ads
           flutter pub get
           
-          # 5. Final APK Build karein
+          # Final APK Build
           flutter build apk --release --no-shrink
           
           mkdir -p $GITHUB_WORKSPACE/output
