@@ -534,22 +534,37 @@ class GameNotifier extends StateNotifier<GameState> {
     }
   }
 
-  // ── Ad: Zero Energy — Rule 1 ──────────────────────────────────────────────
+  // ── Ad: Zero Energy — Option A (Watch Ad) ────────────────────────────────
 
   Future<void> watchAdForEnergy() async {
     AudioManager.instance.pauseBgm();
     final shown = await AdManager.instance.showRewarded(onReward: () {
+      // Rule 5: reward granted ONLY in onUserEarnedReward.
+      // Reset energy to the full cap (100) — not just +50.
       state = state.copyWith(
-        energy:       (state.energy + 50).clamp(0, state.maxEnergy),
+        energy:       state.maxEnergy,
         activeDialog: ActiveDialog.none,
       );
       AudioManager.instance.resumeBgm();
     });
     if (!shown) {
-      // Ad not ready — do NOT give free energy.
-      // Keep the dialog open so the player can retry once the ad loads.
+      // Ad not ready — keep dialog open so the player can retry or spend coins.
       AudioManager.instance.resumeBgm();
     }
+  }
+
+  // ── Spend Coins for Energy — Option B (200 Coins → full refill) ───────────
+
+  void spendCoinsForEnergy() {
+    const int kEnergyCost = 200;
+    if (state.totalCoins < kEnergyCost) return; // safety guard — UI should prevent this
+    state = state.copyWith(
+      totalCoins:   state.totalCoins - kEnergyCost,
+      energy:       state.maxEnergy,
+      activeDialog: ActiveDialog.none,
+    );
+    _savePrefs();
+    AudioManager.instance.resumeBgm();
   }
 
   // ── Ad: Grid Full Rescue — Phase 3+ ───────────────────────────────────────
@@ -587,18 +602,19 @@ class GameNotifier extends StateNotifier<GameState> {
     state = state.copyWith(deletionModeActive: false);
   }
 
-  // ── Ad: Victory Multiplier — Rule 3 ──────────────────────────────────────
+  // ── Ad: Victory 3× Reward — fixed 300 coins ──────────────────────────────
 
   Future<void> watchAdForMultiplier() async {
     if (state.coinsMultiplied) return;
     AudioManager.instance.pauseBgm();
     final shown = await AdManager.instance.showRewarded(onReward: () {
-      // Rule 5: coins are added ONLY inside onUserEarnedReward (this closure).
+      // Rule 5: coins granted ONLY inside onUserEarnedReward (this closure).
+      // Fixed reward: always 300 coins regardless of level base value.
       state = state.copyWith(
-        levelEarnedCoins: state.levelEarnedCoins * 3,
+        levelEarnedCoins: 300,
         coinsMultiplied:  true,
       );
-      // Rule 3 (mutual exclusion): player just watched an opt-in Rewarded Ad.
+      // Rule 3 (mutual exclusion): player watched opt-in Rewarded Ad.
       // Flag this so goToNextLevel() will suppress the Interstitial.
       _rewardedWatchedThisVictory = true;
       AudioManager.instance.resumeBgm();

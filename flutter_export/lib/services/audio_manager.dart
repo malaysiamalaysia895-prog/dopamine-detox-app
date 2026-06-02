@@ -4,8 +4,10 @@
 // audioplayers: ^6.0.0
 //
 // Volume design:
-//   BGM  → _kBgmVolume  = 0.10  (subtle, soothing background)
-//   SFX  → _kSfxVolume  = 1.00  (crisp, full-volume interactions)
+//   BGM  → _kBgmVolume  = 0.20  (calm 20 % background presence)
+//   SFX  → _kSfxVolume  = 1.00  (100 % — crisp interaction feedback)
+//
+// BGM loops infinitely via ReleaseMode.loop — it never stops.
 // ============================================================
 
 import 'package:audioplayers/audioplayers.dart';
@@ -13,13 +15,15 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 // ── Volume constants ──────────────────────────────────────────────────────────
-const double _kBgmVolume = 0.10; // 10 % — calm background presence
-const double _kSfxVolume = 1.00; // 100 % — clear interaction feedback
+const double _kBgmVolume = 0.20; // 20 % — calm background, never distracting
+const double _kSfxVolume = 1.00; // 100 % — satisfying, clearly audible SFX
 
 // ── Default BGM (plays on app open / Level Map screen) ────────────────────────
-// bgm_garage.mp3 is the Phase-1 ambient: slow, calm, lo-fi garage vibe.
-// It transitions to the phase-specific track when the player enters a level.
-const String _kDefaultBgm = 'audio/bgm_garage.mp3';
+// "Floating Cities" by Kevin MacLeod (incompetech.com)
+// Licensed under Creative Commons: By Attribution 4.0 License
+// http://creativecommons.org/licenses/by/4.0/
+// Stored as bgm_ambient.mp3 — used for all phases.
+const String _kDefaultBgm = 'audio/bgm_ambient.mp3';
 
 class AudioManager with WidgetsBindingObserver {
   AudioManager._();
@@ -42,14 +46,16 @@ class AudioManager with WidgetsBindingObserver {
       // if the native channel has a timing issue on cold start. Setting it first
       // means every play() call still attempts to run (each has its own try-catch).
       _initialized = true;
+      // INFINITE LOOP: ReleaseMode.loop ensures BGM restarts automatically
+      // when it reaches the end — it never stops playing.
       await _bgm.setReleaseMode(ReleaseMode.loop);
       await _bgm.setVolume(_kBgmVolume);
     } catch (e) {
       debugPrint('[Audio] initialize() failed: $e');
     }
 
-    // Auto-start the default BGM as soon as the SDK is ready.
-    // This runs in the background (after runApp) so it never stalls the UI.
+    // Auto-start the ambient BGM as soon as the SDK is ready.
+    // Runs after runApp() — never stalls cold-start UI.
     await playBgm(_kDefaultBgm);
   }
 
@@ -58,8 +64,7 @@ class AudioManager with WidgetsBindingObserver {
   Future<void> playBgm(String assetPath) async {
     if (!_initialized) return;
     try {
-      // Strip leading 'assets/' if the caller includes it (phase_themes use
-      // the full 'assets/audio/…' path while _kDefaultBgm uses 'audio/…').
+      // Strip leading 'assets/' if the caller includes it.
       final String asset = assetPath.replaceFirst('assets/', '');
 
       if (_currentBgmAsset == asset && !_bgmPaused) {
@@ -69,6 +74,7 @@ class AudioManager with WidgetsBindingObserver {
       _currentBgmAsset = asset;
       await _bgm.stop();
       if (!_muted) {
+        await _bgm.setReleaseMode(ReleaseMode.loop); // Re-affirm loop on every track change
         await _bgm.setVolume(_kBgmVolume);
         await _bgm.play(AssetSource(asset));
       }
@@ -123,7 +129,7 @@ class AudioManager with WidgetsBindingObserver {
     try {
       // Fresh player per SFX so rapid spawns/merges never cancel each other.
       final player = AudioPlayer();
-      await player.setVolume(_kSfxVolume); // Full volume — must be louder than BGM
+      await player.setVolume(_kSfxVolume); // Full volume — must stand out over BGM
       await player.play(AssetSource(asset));
       // Dispose automatically once the sound finishes.
       player.onPlayerComplete.first
@@ -143,7 +149,7 @@ class AudioManager with WidgetsBindingObserver {
       if (_muted) {
         _bgm.setVolume(0);
       } else {
-        _bgm.setVolume(_kBgmVolume); // Restore to 10 % — never back to 60 %
+        _bgm.setVolume(_kBgmVolume); // Restore to 20 % — never back to a louder value
         if (!_bgmPaused && _currentBgmAsset != null) _bgm.resume();
       }
     } catch (e) {

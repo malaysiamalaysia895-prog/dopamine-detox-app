@@ -845,7 +845,7 @@ class _StoryDialog extends ConsumerWidget {
   };
 }
 
-// ─── Zero Energy Dialog (Rule 1: Rewarded Ad) ─────────────────────────────────
+// ─── Zero Energy Dialog — Dual Refill Options ─────────────────────────────────
 
 class _ZeroEnergyDialog extends ConsumerWidget {
   final PhaseTheme theme;
@@ -853,27 +853,57 @@ class _ZeroEnergyDialog extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final coins     = ref.watch(gameProvider).totalCoins;
+    final canAfford = coins >= 200;
+
     return _BaseDialog(theme: theme, children: [
       const Text('⚡', style: TextStyle(fontSize: 64)),
       const SizedBox(height: 10),
-      const Text('Out of Power!',
+      const Text('Out of Energy!',
         style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 24)),
       const SizedBox(height: 8),
-      const Text('Watch a short video to recharge +50 ⚡',
+      const Text('Choose a refill option to restore 100 ⚡',
         textAlign: TextAlign.center,
-        style: TextStyle(color: Colors.white54, fontSize: 14)),
-      const SizedBox(height: 4),
-      const Text('No ad? Tap below to retry or restart.',
-        textAlign: TextAlign.center,
-        style: TextStyle(color: Colors.white24, fontSize: 11)),
+        style: TextStyle(color: Colors.white54, fontSize: 13)),
       const SizedBox(height: 20),
-      _FullButton('📺 Watch Ad for +50 ⚡',
+
+      // ── Option A: Watch Ad ────────────────────────────────────────────────
+      _FullButton('📺 Watch Ad — Refill 100 ⚡  (Free)',
         color: const Color(0xFFFFD700), dark: true,
         onTap: () => ref.read(gameProvider.notifier).watchAdForEnergy()),
-      const SizedBox(height: 10),
-      _FullButton('🔄 Restart Level',
-        color: Colors.white10, dark: false,
-        onTap: () => ref.read(gameProvider.notifier).retryLevel()),
+
+      const SizedBox(height: 14),
+      const Row(children: [
+        Expanded(child: Divider(color: Colors.white12)),
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10),
+          child: Text('OR', style: TextStyle(color: Colors.white24, fontSize: 11,
+              letterSpacing: 1.5)),
+        ),
+        Expanded(child: Divider(color: Colors.white12)),
+      ]),
+      const SizedBox(height: 14),
+
+      // ── Option B: Spend 200 Coins ─────────────────────────────────────────
+      Opacity(
+        opacity: canAfford ? 1.0 : 0.38,
+        child: _FullButton(
+          canAfford
+              ? '💰 Spend 200 Coins — Refill 100 ⚡'
+              : '💰 Need 200 Coins  (you have $coins)',
+          color: const Color(0xFF00E5FF), dark: true,
+          onTap: canAfford
+              ? () => ref.read(gameProvider.notifier).spendCoinsForEnergy()
+              : () {},
+        ),
+      ),
+
+      const SizedBox(height: 16),
+      TextButton(
+        onPressed: () => ref.read(gameProvider.notifier).retryLevel(),
+        child: const Text('↩ Restart Level',
+          style: TextStyle(color: Colors.white30, fontSize: 12)),
+      ),
     ]);
   }
 }

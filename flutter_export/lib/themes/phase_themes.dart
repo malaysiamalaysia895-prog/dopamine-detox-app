@@ -102,7 +102,7 @@ const Map<GamePhase, PhaseTheme> kPhaseThemes = {
     spawnerColor:   Color(0xFFFF6B35),
     textPrimary:    Colors.white,
     textSecondary:  Color(0xFFBCAAA4),
-    bgmAsset: 'assets/audio/bgm_garage.mp3',
+    bgmAsset: 'assets/audio/bgm_ambient.mp3',
   ),
 
   GamePhase.office: PhaseTheme(
@@ -119,7 +119,7 @@ const Map<GamePhase, PhaseTheme> kPhaseThemes = {
     spawnerColor:   Color(0xFF1E90FF),
     textPrimary:    Color(0xFF0D47A1),
     textSecondary:  Color(0xFF1565C0),
-    bgmAsset: 'assets/audio/bgm_office.mp3',
+    bgmAsset: 'assets/audio/bgm_ambient.mp3',
   ),
 
   GamePhase.silicon: PhaseTheme(
@@ -136,7 +136,7 @@ const Map<GamePhase, PhaseTheme> kPhaseThemes = {
     spawnerColor:   Color(0xFFCC00FF),
     textPrimary:    Colors.white,
     textSecondary:  Color(0xFFCC00FF),
-    bgmAsset: 'assets/audio/bgm_silicon.mp3',
+    bgmAsset: 'assets/audio/bgm_ambient.mp3',
   ),
 
   GamePhase.megacorp: PhaseTheme(
@@ -153,7 +153,7 @@ const Map<GamePhase, PhaseTheme> kPhaseThemes = {
     spawnerColor:   Color(0xFF00FF41),
     textPrimary:    Color(0xFF00FF41),
     textSecondary:  Color(0xFF4CAF50),
-    bgmAsset: 'assets/audio/bgm_megacorp.mp3',
+    bgmAsset: 'assets/audio/bgm_ambient.mp3',
   ),
 
   GamePhase.universe: PhaseTheme(
@@ -170,7 +170,7 @@ const Map<GamePhase, PhaseTheme> kPhaseThemes = {
     spawnerColor:   Color(0xFFFFD700),
     textPrimary:    Color(0xFFFFD700),
     textSecondary:  Color(0xFFE5E4E2),
-    bgmAsset: 'assets/audio/bgm_universe.mp3',
+    bgmAsset: 'assets/audio/bgm_ambient.mp3',
   ),
 };
 
