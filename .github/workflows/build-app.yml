@@ -30,45 +30,48 @@ jobs:
           
           flutter clean
           
-          # 1. KACHRA SAAF (Replit ne shuru mein dono files bana di thi, hum sirf modern .kts rakhenge)
+          # 1. KACHRA SAAF (Sirf purani .gradle files, .kts safe rahengi)
           rm -f android/settings.gradle
           rm -f android/build.gradle
           rm -f android/app/build.gradle
           
-          # 2. KOTLIN FIX (.kts extension ke sath)
+          # 2. V1 TO V2 EMBEDDING FIX (Yeh ek line aapke error ko jad se khatam kar degi)
+          sed -i '/<\/application>/i \        <meta-data android:name="flutterEmbedding" android:value="2" />' android/app/src/main/AndroidManifest.xml || true
+          
+          # 3. KOTLIN FIX (.kts extension ke sath)
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
           echo "android.newDsl=false" >> android/gradle.properties
           sed -i 's/1.9.22/2.0.0/g' android/settings.gradle.kts || true
           sed -i 's/1.9.24/2.0.0/g' android/settings.gradle.kts || true
           
-          # 3. ADS FIX (minSdk 21 .kts syntax mein)
+          # 4. ADS FIX (minSdk 21 .kts syntax mein)
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle.kts || true
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle.kts || true
           
           flutter pub add google_mobile_ads
           flutter pub get
           
-          # 4. GAME CODE SPELLING FIX
+          # 5. GAME CODE SPELLING FIX
           sed -i 's/navigationBarIconBrightness/systemNavigationBarIconBrightness/g' lib/main.dart || true
           sed -i 's/navigationBarColor/systemNavigationBarColor/g' lib/main.dart || true
           
-          # 5. ASLI FONTS
+          # 6. ASLI FONTS
           mkdir -p assets/fonts
           curl -L -o assets/fonts/Orbitron-Bold.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron-Bold.ttf"
           curl -L -o assets/fonts/Orbitron-Regular.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron-Regular.ttf"
           
-          # 6. CRASH / BLACK SCREEN FIX (Internet permissions & AdMob ID safe injection)
+          # 7. CRASH / BLACK SCREEN FIX (Internet permissions & AdMob ID safe injection)
           sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>' android/app/src/main/AndroidManifest.xml || true
           sed -i '/<\/application>/i \        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-8566652140087308~1114269136"/>' android/app/src/main/AndroidManifest.xml || true
           
-          # 7. R8 COMPRESSOR FIX (.kts syntax mein Play Core dependency bina file tode)
+          # 8. R8 COMPRESSOR FIX (.kts syntax mein Play Core dependency bina file tode)
           echo "" >> android/app/build.gradle.kts
           echo "dependencies {" >> android/app/build.gradle.kts
           echo "    implementation(\"com.google.android.play:core:1.10.3\")" >> android/app/build.gradle.kts
           echo "}" >> android/app/build.gradle.kts
           
-          # 8. FINAL APK BUILD
+          # 9. FINAL APK BUILD
           flutter build apk --release --no-shrink
           
           mkdir -p $GITHUB_WORKSPACE/output
