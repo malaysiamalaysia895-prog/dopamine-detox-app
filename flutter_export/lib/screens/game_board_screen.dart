@@ -994,9 +994,13 @@ class _VictoryDialogState extends ConsumerState<_VictoryDialog> {
               isLast ? '🎉 You\'ve Won!' : 'Next Level →',
               color: Colors.white12, dark: false,
               onTap: () async {
+                if (_busy) return;
                 setState(() => _busy = true);
                 await ref.read(gameProvider.notifier).goToNextLevel();
-                if (mounted) setState(() => _busy = false);
+                // Do NOT reset _busy here — the widget unmounts when the next
+                // level starts. Resetting it early would briefly re-show the
+                // button while an interstitial ad is still covering the screen,
+                // allowing a double-tap that triggers a second level transition.
               }),
     ]);
   }

@@ -571,14 +571,16 @@ class GameNotifier extends StateNotifier<GameState> {
   Future<void> watchAdForMultiplier() async {
     if (state.coinsMultiplied) return;
     AudioManager.instance.pauseBgm();
-    await AdManager.instance.showRewarded(onReward: () {
+    final shown = await AdManager.instance.showRewarded(onReward: () {
       state = state.copyWith(
         levelEarnedCoins: state.levelEarnedCoins * 3,
         coinsMultiplied:  true,
       );
       AudioManager.instance.resumeBgm();
     });
-    AudioManager.instance.resumeBgm();
+    // Only resume immediately if ad was NOT shown (fallback path).
+    // When ad IS shown, resumeBgm() fires inside onReward after user watches the full ad.
+    if (!shown) AudioManager.instance.resumeBgm();
   }
 
   // ── Proceed to Next Level — Rule 4 ────────────────────────────────────────
