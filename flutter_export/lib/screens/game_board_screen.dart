@@ -23,26 +23,31 @@ class GameBoardScreen extends ConsumerWidget {
     final levelDef = ref.watch(gameProvider).currentLevel;
     final theme    = themeOf(levelDef.phase);
 
-    return Scaffold(
-      body: Container(
-        decoration: theme.backgroundDecoration,
-        child: buildPhaseBackground(
-          phase: levelDef.phase,
-          child: SafeArea(
-            child: Stack(
-              children: [
-                Column(
-                  children: [
-                    _TopBar(levelDef: levelDef, theme: theme),
-                    if (levelDef.hasTimer) _TimerBar(theme: theme),
-                    _DeliveryZone(levelDef: levelDef, theme: theme),
-                    Expanded(child: _Grid(levelDef: levelDef, theme: theme)),
-                    _Spawner(levelDef: levelDef, theme: theme),
-                  ],
-                ),
-                // Dialog overlay layer
-                _DialogLayer(theme: theme),
-              ],
+    // PopScope prevents the Android hardware/gesture back button from
+    // navigating away mid-game. Players must use the in-game back arrow.
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        body: Container(
+          decoration: theme.backgroundDecoration,
+          child: buildPhaseBackground(
+            phase: levelDef.phase,
+            child: SafeArea(
+              child: Stack(
+                children: [
+                  Column(
+                    children: [
+                      _TopBar(levelDef: levelDef, theme: theme),
+                      if (levelDef.hasTimer) _TimerBar(theme: theme),
+                      _DeliveryZone(levelDef: levelDef, theme: theme),
+                      Expanded(child: _Grid(levelDef: levelDef, theme: theme)),
+                      _Spawner(levelDef: levelDef, theme: theme),
+                    ],
+                  ),
+                  // Dialog overlay layer
+                  _DialogLayer(theme: theme),
+                ],
+              ),
             ),
           ),
         ),
@@ -460,7 +465,13 @@ class _GridCellState extends ConsumerState<_GridCell>
     final isBlackHole = cell.obstacle == ObstacleType.blackHole;
     final isDeletable = widget.deletionMode && cell.itemId != null && !cell.isBlocked;
 
-    Widget cellBody = _buildCellDecoration(cell, item, isBlackHole, isDeletable);
+    // Build the visual decoration FIRST and capture it before any reassignment.
+    // This is critical: the DragTarget/Draggable builder is a closure that captures
+    // variables by reference. If we reassigned 'cellBody' and then referenced it
+    // inside the builder, Flutter would get the DragTarget itself as the Draggable's
+    // child → infinite widget loop → blank grid.
+    final Widget decoration = _buildCellDecoration(cell, item, isBlackHole, isDeletable);
+    Widget cellBody = decoration;
 
     // Wrap with draggable if it has an item and not in deletion mode
     if (item != null && !widget.deletionMode) {
@@ -482,7 +493,9 @@ class _GridCellState extends ConsumerState<_GridCell>
             data: _DragData(col: widget.col, row: widget.row, itemId: item.id),
             feedback: _DragFeedback(item: item, size: widget.size),
             childWhenDragging: _buildEmptyCell(),
-            child: cellBody,
+            // Use 'decoration' (the pre-captured value), NOT 'cellBody' (the variable),
+            // to avoid the DragTarget wrapping itself recursively.
+            child: decoration,
           );
         },
       );
