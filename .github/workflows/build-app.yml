@@ -23,13 +23,16 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Download Orbitron fonts (not stored in repo)
+      - name: Download Orbitron fonts
         run: |
           mkdir -p flutter_export/assets/fonts
-          curl -fL -o flutter_export/assets/fonts/Orbitron-Bold.ttf \
-            "https://github.com/google/fonts/raw/main/ofl/orbitron/static/Orbitron-Bold.ttf"
-          curl -fL -o flutter_export/assets/fonts/Orbitron-Regular.ttf \
-            "https://github.com/google/fonts/raw/main/ofl/orbitron/static/Orbitron-Regular.ttf"
+          # Orbitron is now a single variable font in the Google Fonts repo.
+          # Download it once and alias it to the two filenames pubspec.yaml expects.
+          curl -fL --globoff \
+            -o flutter_export/assets/fonts/Orbitron-VF.ttf \
+            "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron%5Bwght%5D.ttf"
+          cp flutter_export/assets/fonts/Orbitron-VF.ttf flutter_export/assets/fonts/Orbitron-Bold.ttf
+          cp flutter_export/assets/fonts/Orbitron-VF.ttf flutter_export/assets/fonts/Orbitron-Regular.ttf
 
       - name: Create local.properties
         run: |
