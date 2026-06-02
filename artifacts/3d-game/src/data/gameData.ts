@@ -54,7 +54,7 @@ export const PHASE_THEMES: Record<PhaseTheme, {
   },
   office: {
     name: "The Office Upgrade",
-    bg: "from-[#001a33] via-[#003366] to-[#f0f4ff]",
+    bg: "from-[#001a33] via-[#003366] to-[#001040]",
     primary: "#1E90FF",
     secondary: "#FFFFFF",
     accent: "#4FC3F7",

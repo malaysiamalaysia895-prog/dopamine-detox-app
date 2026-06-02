@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useCallback, useMemo, memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useGameStore, GridCell } from "../store/useGameStore";
 import { getItemById, PHASE_THEMES } from "../data/gameData";
@@ -21,7 +21,7 @@ interface CellProps {
   isSource: boolean;
 }
 
-function GameCell({ cell, theme, onDragStart, onDrop, onTap, isDragging, isSource }: CellProps) {
+const GameCell = memo(function GameCell({ cell, theme, onDragStart, onDrop, onTap, isDragging, isSource }: CellProps) {
   const themeColors = PHASE_THEMES[theme];
   const item = cell.itemId ? getItemById(cell.itemId) : null;
 
@@ -41,7 +41,6 @@ function GameCell({ cell, theme, onDragStart, onDrop, onTap, isDragging, isSourc
 
   return (
     <motion.div
-      layout
       className={`relative flex items-center justify-center rounded-xl border-2 transition-colors select-none ${bgStyle}`}
       style={{
         boxShadow: isSource ? `0 0 12px ${themeColors.primary}88` : undefined,
@@ -102,49 +101,52 @@ function GameCell({ cell, theme, onDragStart, onDrop, onTap, isDragging, isSourc
       )}
     </motion.div>
   );
-}
+});
 
 export function GameGrid() {
   const { grid, currentLevel, moveItem, spawnItem, phase } = useGameStore();
   const cfg = LEVELS[currentLevel];
   const theme = cfg?.theme ?? "garage";
-  const themeColors = PHASE_THEMES[theme];
 
   const [dragSource, setDragSource] = useState<[number, number] | null>(null);
 
-  function handleDragStart(col: number, row: number) {
+  const handleDragStart = useCallback((col: number, row: number) => {
     setDragSource([col, row]);
-  }
+  }, []);
 
-  function handleDrop(col: number, row: number) {
-    if (!dragSource) return;
-    const [fc, fr] = dragSource;
-    if (fc === col && fr === row) {
-      setDragSource(null);
-      return;
-    }
-    moveItem(fc, fr, col, row);
-    setDragSource(null);
-  }
+  const handleDrop = useCallback((col: number, row: number) => {
+    setDragSource(prev => {
+      if (!prev) return null;
+      const [fc, fr] = prev;
+      if (fc !== col || fr !== row) {
+        moveItem(fc, fr, col, row);
+      }
+      return null;
+    });
+  }, [moveItem]);
 
-  function handleTap(col: number, row: number) {
-    if (dragSource) {
-      handleDrop(col, row);
-    } else {
+  const handleTap = useCallback((col: number, row: number) => {
+    setDragSource(prev => {
+      if (prev) {
+        const [fc, fr] = prev;
+        if (fc !== col || fr !== row) moveItem(fc, fr, col, row);
+        return null;
+      }
       spawnItem(col, row);
-    }
-  }
+      return null;
+    });
+  }, [moveItem, spawnItem]);
 
-  function handlePointerUp() {
+  const handlePointerUp = useCallback(() => {
     setDragSource(null);
-  }
+  }, []);
+
+  const cellSize = useMemo(() => Math.min(
+    Math.floor((Math.min(window.innerWidth - 32, 420)) / (cfg?.gridCols ?? 4)),
+    72
+  ), [cfg?.gridCols]);
 
   if (!cfg || phase === "menu") return null;
-
-  const cellSize = Math.min(
-    Math.floor((Math.min(window.innerWidth - 32, 420)) / cfg.gridCols),
-    72
-  );
 
   return (
     <div

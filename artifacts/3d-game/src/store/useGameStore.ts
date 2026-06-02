@@ -145,7 +145,7 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
     const energyCost = Math.round(rawCost);
     const baseItem = getBaseItemForPhase(cfg.theme);
 
-    const newGrid = state.grid.map(col => col.map(c => ({ ...c })));
+    const newGrid = state.grid.map(colArr => colArr.map(c => ({ ...c })));
     newGrid[col][row] = { ...newGrid[col][row], itemId: baseItem.id };
     const newEnergy = Math.max(0, state.energy - energyCost);
 

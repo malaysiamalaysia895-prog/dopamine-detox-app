@@ -23,7 +23,7 @@ export function GamePage() {
       key={`level-${currentLevel}`}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className={`min-h-screen flex flex-col bg-gradient-to-br ${theme.bg} relative overflow-hidden`}
+      className={`h-screen flex flex-col bg-gradient-to-br ${theme.bg} relative overflow-hidden`}
     >
       {/* Ambient glow background */}
       <div
