@@ -257,6 +257,16 @@ class AdManager {
     return true;
   }
 
+  /// Pre-warm the interstitial immediately when an even-numbered level
+  /// completes — while the player is still on the Victory dialog (reading
+  /// story text, tapping the 3× coin ad, etc.).  By the time they hit
+  /// "Next Level" the download is already done, so Rule 4 fires instantly
+  /// instead of making them wait for the 3-second loading poll.
+  ///
+  /// Safe to call at any time: if the ad is already loaded or loading,
+  /// _loadInterstitial() is a no-op.
+  void prewarmInterstitial() => _loadInterstitial();
+
   void dispose() {
     try { _rewardedAd?.dispose(); } catch (_) {}
     try { _interstitialAd?.dispose(); } catch (_) {}

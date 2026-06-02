@@ -511,6 +511,16 @@ class GameNotifier extends StateNotifier<GameState> {
       highestUnlockedLevel: min(newHighest, kLevels.length),
     );
     _savePrefs();
+
+    // Rule 4 fires on even-numbered levels: kick off the interstitial download
+    // NOW, while the player is still on the Victory dialog (reading story text,
+    // optionally watching the 3× coin ad, etc.).  This gives the ad several
+    // extra seconds to load so it fires instantly when they tap "Next Level"
+    // instead of sitting through a 3-second poll.  prewarmInterstitial() is a
+    // no-op if the ad is already loaded or already loading.
+    if (lvlNum % 2 == 0) {
+      AdManager.instance.prewarmInterstitial();
+    }
   }
 
   // ── Ad: Zero Energy — Rule 1 ──────────────────────────────────────────────
