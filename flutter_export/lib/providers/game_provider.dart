@@ -193,6 +193,12 @@ class GameNotifier extends StateNotifier<GameState> {
   Timer? _timer;
   final Random _rng = Random();
 
+  /// True if the player voluntarily watched the Rewarded Ad (3× coins) on the
+  /// current Victory screen. Reset to false at the start of every new level
+  /// completion. Used to enforce the Rewarded ↔ Interstitial mutual exclusion
+  /// rule: never stack a forced Interstitial right after an opt-in Rewarded Ad.
+  bool _rewardedWatchedThisVictory = false;
+
   // ── Preferences ───────────────────────────────────────────────────────────
 
   Future<void> _loadPrefs() async {
@@ -502,8 +508,13 @@ class GameNotifier extends StateNotifier<GameState> {
     AudioManager.instance.pauseBgm();
     AudioManager.instance.playVictory();
 
-    final lvlNum    = state.currentLevel.number;
+    final lvlNum     = state.currentLevel.number;
     final newHighest = max(state.highestUnlockedLevel, lvlNum + 1);
+
+    // Reset the mutual-exclusion flag for the incoming Victory screen.
+    // If the player watches the Rewarded Ad here, it will be set to true,
+    // and the Interstitial will be suppressed when they tap "Next Level".
+    _rewardedWatchedThisVictory = false;
 
     state = state.copyWith(
       timerActive:          false,
@@ -512,13 +523,13 @@ class GameNotifier extends StateNotifier<GameState> {
     );
     _savePrefs();
 
-    // Rule 4 fires on even-numbered levels: kick off the interstitial download
-    // NOW, while the player is still on the Victory dialog (reading story text,
-    // optionally watching the 3× coin ad, etc.).  This gives the ad several
-    // extra seconds to load so it fires instantly when they tap "Next Level"
-    // instead of sitting through a 3-second poll.  prewarmInterstitial() is a
-    // no-op if the ad is already loaded or already loading.
-    if (lvlNum % 2 == 0) {
+    // Pre-warm the interstitial while the player is on the Victory dialog
+    // (reading story text, optionally watching the 3× coin ad, etc.).
+    // This gives the download time to finish so the ad fires instantly when
+    // they tap "Next Level" instead of sitting through a 3-second loading poll.
+    // Only bother from level 4 onwards — the grace period blocks levels 1-3.
+    // prewarmInterstitial() is a no-op if already loaded or loading.
+    if (lvlNum >= 4) {
       AdManager.instance.prewarmInterstitial();
     }
   }
@@ -582,16 +593,20 @@ class GameNotifier extends StateNotifier<GameState> {
     if (state.coinsMultiplied) return;
     AudioManager.instance.pauseBgm();
     final shown = await AdManager.instance.showRewarded(onReward: () {
+      // Rule 5: coins are added ONLY inside onUserEarnedReward (this closure).
       state = state.copyWith(
         levelEarnedCoins: state.levelEarnedCoins * 3,
         coinsMultiplied:  true,
       );
+      // Rule 3 (mutual exclusion): player just watched an opt-in Rewarded Ad.
+      // Flag this so goToNextLevel() will suppress the Interstitial.
+      _rewardedWatchedThisVictory = true;
       AudioManager.instance.resumeBgm();
     });
     if (!shown) AudioManager.instance.resumeBgm();
   }
 
-  // ── Proceed to Next Level — Rule 4 ────────────────────────────────────────
+  // ── Proceed to Next Level ─────────────────────────────────────────────────
 
   Future<void> goToNextLevel() async {
     final lvlNum = state.currentLevel.number;
@@ -607,8 +622,16 @@ class GameNotifier extends StateNotifier<GameState> {
       return;
     }
 
-    // Rule 4: interstitial on even-numbered level completions
-    if (lvlNum % 2 == 0) {
+    // ── Anti-Fatigue Gate ──────────────────────────────────────────────────
+    // All four rules are checked here in canShowInterstitial():
+    //   Rule 1 — Grace period: only levels ≥ 4 are eligible.
+    //   Rule 2 — 3-minute cooldown: skip if < 180 s since last interstitial.
+    //   Rule 3 — Mutual exclusion: skip if player just watched a Rewarded Ad.
+    //   Rule 4 — Triggered ONLY on this button tap, never during gameplay.
+    if (AdManager.instance.canShowInterstitial(
+      lvlNum,
+      rewardedJustWatched: _rewardedWatchedThisVictory,
+    )) {
       AudioManager.instance.pauseBgm();
       await AdManager.instance.showInterstitial(onDismiss: () {
         AudioManager.instance.resumeBgm();
@@ -665,8 +688,25 @@ class GameNotifier extends StateNotifier<GameState> {
     });
   }
 
-  void retryLevel() {
-    startLevel(state.currentLevelIndex);
+  // ── Restart Level ─────────────────────────────────────────────────────────
+
+  Future<void> retryLevel() async {
+    final lvlNum = state.currentLevel.number;
+
+    // Same anti-fatigue gate as goToNextLevel(), except mutual exclusion is
+    // irrelevant here (no Rewarded Ad on a restart flow), so pass false.
+    // Grace period and 3-minute cooldown still apply.
+    if (AdManager.instance.canShowInterstitial(
+      lvlNum,
+      rewardedJustWatched: false,
+    )) {
+      AudioManager.instance.pauseBgm();
+      await AdManager.instance.showInterstitial(onDismiss: () {
+        startLevel(state.currentLevelIndex);
+      });
+    } else {
+      startLevel(state.currentLevelIndex);
+    }
   }
 
   // ── Consume Animations ────────────────────────────────────────────────────
