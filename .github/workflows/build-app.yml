@@ -38,7 +38,7 @@ jobs:
           # 2. FRESH ANDROID FILES
           flutter create .
           
-          # 3. KOTLIN & DSL FIX
+          # 3. KOTLIN FIX
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
           echo "android.newDsl=false" >> android/gradle.properties
@@ -65,15 +65,54 @@ jobs:
           curl -L -o assets/fonts/Orbitron-Bold.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron-Bold.ttf"
           curl -L -o assets/fonts/Orbitron-Regular.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron-Regular.ttf"
           
-          # 7. ADMOB CRASH FIX (Yeh guarantee dega ki app black screen par crash na ho)
-          sed -i '/<\/application>/i \        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-8566652140087308~1114269136"/>' android/app/src/main/AndroidManifest.xml || true
+          # 7. MANIFEST OVERRIDE (CRASH FIX - Internet Permissions)
+          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <!-- Sabse zaroori permissions jo gayab thi -->
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+              
+              <application
+                  android:label="Tech Tycoon Merge"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data android:name="io.flutter.embedding.android.NormalTheme" android:resource="@style/NormalTheme" />
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  <meta-data android:name="flutterEmbedding" android:value="2" />
+                  <!-- AdMob ID -->
+                  <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-8566652140087308~1114269136"/>
+              </application>
+              
+              <!-- AdMob Android 12+ Fix -->
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.VIEW" />
+                      <category android:name="android.intent.category.BROWSABLE" />
+                      <data android:scheme="https" />
+                  </intent>
+              </queries>
+          </manifest>
+          EOF
           
+          # 8. R8 & PLAY CORE FIX
           echo "" >> android/app/build.gradle
           echo "dependencies {" >> android/app/build.gradle
           echo "    implementation 'com.google.android.play:core:1.10.3'" >> android/app/build.gradle
           echo "}" >> android/app/build.gradle
           
-          # 8. FINAL APK BUILD (Maine wapas --no-shrink laga diya hai taaki aapki main files delete na hon)
+          # 9. FINAL APK BUILD
           flutter build apk --release --no-shrink
           
           mkdir -p $GITHUB_WORKSPACE/output
