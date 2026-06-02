@@ -38,7 +38,7 @@ jobs:
           # 2. Fresh Android files banayein
           flutter create .
           
-          # 3. KOTLIN & DSL FIX (Jo successfully kaam kar gaya)
+          # 3. KOTLIN & DSL FIX
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
           echo "android.newDsl=false" >> android/gradle.properties
@@ -56,11 +56,15 @@ jobs:
           flutter pub add google_mobile_ads
           flutter pub get
           
-          # 5. DART SPELLING FIX (Jo current error ko automatically theek kar dega)
+          # 5. DART SPELLING FIX
           sed -i 's/navigationBarIconBrightness/systemNavigationBarIconBrightness/g' lib/main.dart || true
           sed -i 's/navigationBarColor/systemNavigationBarColor/g' lib/main.dart || true
           
-          # 6. FINAL APK BUILD
+          # 6. ASLI FONT DOWNLOAD FIX (Direct Google ke server se)
+          mkdir -p assets/fonts
+          curl -L -o assets/fonts/Orbitron-Bold.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron-Bold.ttf"
+          
+          # 7. FINAL APK BUILD
           flutter build apk --release --no-shrink
           
           mkdir -p $GITHUB_WORKSPACE/output
