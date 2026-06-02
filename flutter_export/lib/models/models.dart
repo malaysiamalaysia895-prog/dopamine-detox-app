@@ -9,9 +9,19 @@ import 'dart:math';
 
 enum GamePhase { garage, office, silicon, megacorp, universe }
 
-enum ObstacleType { none, dustyWeb, lockedCrate, blackHole, hazardTrap }
+enum ObstacleType { none, dustyWeb, lockedCrate, blackHole, hazardTrap, glitchHazard, mysteryBox }
 
 enum AppScreen { map, game }
+
+// ─── Mystery Box Variants ─────────────────────────────────────────────────────
+enum MysteryBoxVariant {
+  tier1,       // L21-30: 30% coins | 30% quota item | 40% trap
+  tier2Good,   // L31-40 Box 1: 50% coins | 50% quota item
+  tier2Trap,   // L31-40 Box 2&3: 100% trap
+  tier3Coins,  // L41-50 Box 1: 100% coins
+  tier3Quota,  // L41-50 Box 2: 100% quota item
+  tier3Trap,   // L41-50 Box 3&4: 100% trap
+}
 
 // ─── Item Definition ──────────────────────────────────────────────────────────
 // Items are numbered 1–51. Item N + Item N = Item N+1.
@@ -531,58 +541,63 @@ const List<LevelDefinition> kLevels = [
   ),
 ];
 
-// ─── Hazard Trap Progression ──────────────────────────────────────────────────
-// Returns the flat (row-major) grid indexes where Hazard Traps are placed.
-// Only levels that are multiples of 5 get hazards.
-// Flat index → col = idx % gridCols, row = idx ~/ gridCols
-//
-// Tier 1 (Easy   L5, L10):       1 hazard  — index 15 (bottom-right corner)
-// Tier 2 (Medium L15, L20):      2 hazards — indexes 0, 15 (top-left + bottom-right)
-// Tier 3 (Hard   L25, L30, L35): 3 hazards — indexes 0, 3, 15
-// Tier 4 (Expert L40, L45, L50): 4 hazards — indexes 5, 6, 9, 10 (center 2×2)
-
-List<int> hazardIndexesForLevel(int levelNumber) {
-  if (levelNumber % 5 != 0) return const [];
-  if (levelNumber <= 10)  return const [15];
-  if (levelNumber <= 20)  return const [0, 15];
-  if (levelNumber <= 35)  return const [0, 3, 15];
-  return const [5, 6, 9, 10];
-}
-
 // ─── Grid Cell Model ─────────────────────────────────────────────────────────
 
 class GridCell {
-  final int? itemId;          // 1-based; null = empty
+  final int? itemId;                    // 1-based; null = empty
   final ObstacleType obstacle;
-  final bool isUnlocking;     // animation: crate just broke open
+  final bool isUnlocking;               // animation: crate just broke open
+  final int? disguiseItemId;            // glitch hazard: item it impersonates
+  final MysteryBoxVariant? boxVariant;  // mystery box: outcome table
 
   const GridCell({
     this.itemId,
     this.obstacle = ObstacleType.none,
     this.isUnlocking = false,
+    this.disguiseItemId,
+    this.boxVariant,
   });
 
-  bool get isEmpty => itemId == null && obstacle == ObstacleType.none;
-  bool get hasItem  => itemId != null;
-  bool get isHazard => obstacle == ObstacleType.hazardTrap;
+  bool get isEmpty   => itemId == null && obstacle == ObstacleType.none;
+  bool get hasItem   => itemId != null;
+  bool get isHazard  => obstacle == ObstacleType.hazardTrap;
+  bool get isGlitch  => obstacle == ObstacleType.glitchHazard;
+  bool get isMystery => obstacle == ObstacleType.mysteryBox;
   bool get isBlocked =>
-      obstacle == ObstacleType.dustyWeb ||
+      obstacle == ObstacleType.dustyWeb   ||
       obstacle == ObstacleType.lockedCrate ||
-      obstacle == ObstacleType.blackHole ||
-      obstacle == ObstacleType.hazardTrap;
+      obstacle == ObstacleType.blackHole  ||
+      obstacle == ObstacleType.hazardTrap ||
+      obstacle == ObstacleType.glitchHazard ||
+      obstacle == ObstacleType.mysteryBox;
 
-  GridCell clearItem() => GridCell(obstacle: obstacle);
-  GridCell withItem(int id) => GridCell(itemId: id, obstacle: obstacle);
+  GridCell clearItem() => GridCell(
+    obstacle:       obstacle,
+    disguiseItemId: disguiseItemId,
+    boxVariant:     boxVariant,
+  );
+  GridCell withItem(int id) => GridCell(
+    itemId:         id,
+    obstacle:       obstacle,
+    disguiseItemId: disguiseItemId,
+    boxVariant:     boxVariant,
+  );
 
   GridCell copyWith({
     Object? itemId = _sentinel,
     ObstacleType? obstacle,
     bool? isUnlocking,
+    Object? disguiseItemId = _sentinel,
+    MysteryBoxVariant? boxVariant,
   }) {
     return GridCell(
-      itemId:      itemId == _sentinel ? this.itemId : itemId as int?,
-      obstacle:    obstacle     ?? this.obstacle,
-      isUnlocking: isUnlocking  ?? this.isUnlocking,
+      itemId:         itemId == _sentinel ? this.itemId : itemId as int?,
+      obstacle:       obstacle        ?? this.obstacle,
+      isUnlocking:    isUnlocking     ?? this.isUnlocking,
+      disguiseItemId: disguiseItemId == _sentinel
+          ? this.disguiseItemId
+          : disguiseItemId as int?,
+      boxVariant:     boxVariant      ?? this.boxVariant,
     );
   }
 

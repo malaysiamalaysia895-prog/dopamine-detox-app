@@ -40,6 +40,9 @@ class PendingAnimation {
 
 enum AnimType { spawn, merge, error, unlock, hazardHit }
 
+// Outcome of tapping a Mystery Box (internal use only)
+enum _BoxOutcome { coins, quotaItem, trap }
+
 // ─── Game State (Immutable) ───────────────────────────────────────────────────
 
 @immutable
@@ -183,6 +186,31 @@ class GameState {
   }
 }
 
+// ─── Level Obstacle Helpers ───────────────────────────────────────────────────
+
+int _glitchCountForLevel(int n) {
+  if (n >= 5  && n <= 10) return 2;
+  if (n >= 11 && n <= 20) return 3;
+  if (n >= 41 && n <= 50) return 2;
+  return 0;
+}
+
+List<MysteryBoxVariant> _mysteryBoxesForLevel(int n) {
+  if (n >= 21 && n <= 30) return [MysteryBoxVariant.tier1];
+  if (n >= 31 && n <= 40) return [
+    MysteryBoxVariant.tier2Good,
+    MysteryBoxVariant.tier2Trap,
+    MysteryBoxVariant.tier2Trap,
+  ];
+  if (n >= 41 && n <= 50) return [
+    MysteryBoxVariant.tier3Coins,
+    MysteryBoxVariant.tier3Quota,
+    MysteryBoxVariant.tier3Trap,
+    MysteryBoxVariant.tier3Trap,
+  ];
+  return [];
+}
+
 // ─── Game Notifier ────────────────────────────────────────────────────────────
 
 class GameNotifier extends StateNotifier<GameState> {
@@ -191,6 +219,7 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   Timer? _timer;
+  Timer? _glitchTeleportTimer;
   final Random _rng = Random();
 
   /// True if the player voluntarily watched the Rewarded Ad (3× coins) on the
@@ -227,6 +256,7 @@ class GameNotifier extends StateNotifier<GameState> {
 
   void goToMap() {
     _timer?.cancel();
+    _stopGlitchTimer();
     final level = state.currentLevel;
     state = state.copyWith(screen: AppScreen.map, timerActive: false);
     AudioManager.instance.playBgm(themeOf(level.phase).bgmAsset);
@@ -238,6 +268,7 @@ class GameNotifier extends StateNotifier<GameState> {
     // Guard: clamp to valid range
     final safeIndex = levelIndex.clamp(0, kLevels.length - 1);
     _timer?.cancel();
+    _stopGlitchTimer();
 
     final cfg  = kLevels[safeIndex];
     final grid = _buildInitialGrid(cfg);
@@ -280,24 +311,46 @@ class GameNotifier extends StateNotifier<GameState> {
       (c) => List.generate(cfg.gridRows, (r) => const GridCell()),
     );
 
-    // ── Hazard Traps — fixed positions, placed FIRST (multiples of 5 only) ───
-    // Indexes are flat row-major: col = idx % gridCols, row = idx ~/ gridCols
-    for (final idx in hazardIndexesForLevel(cfg.number)) {
-      final col = idx % cfg.gridCols;
-      final row = idx ~/ cfg.gridCols;
-      if (col < cfg.gridCols && row < cfg.gridRows) {
-        cells[col][row] = const GridCell(obstacle: ObstacleType.hazardTrap);
+    // ── Glitch Hazards (L5-20, L41-50) — random empty positions ──────────────
+    final glitchCount = _glitchCountForLevel(cfg.number);
+    if (glitchCount > 0) {
+      final avail = <(int, int)>[
+        for (int c = 0; c < cfg.gridCols; c++)
+          for (int r = 0; r < cfg.gridRows; r++)
+            if (cells[c][r].isEmpty) (c, r),
+      ]..shuffle(_rng);
+      for (int i = 0; i < glitchCount && i < avail.length; i++) {
+        final (c, r) = avail[i];
+        cells[c][r] = GridCell(
+          obstacle: ObstacleType.glitchHazard,
+          disguiseItemId: cfg.spawnerItemId,
+        );
       }
     }
 
-    // ── Remaining random obstacles (shuffled positions, skip hazard slots) ───
-    final positions = <(int, int)>[];
-    for (int c = 0; c < cfg.gridCols; c++) {
-      for (int r = 0; r < cfg.gridRows; r++) {
-        if (cells[c][r].isEmpty) positions.add((c, r));
+    // ── Mystery Boxes (L21-50) — random empty positions ───────────────────────
+    final boxVariants = _mysteryBoxesForLevel(cfg.number);
+    if (boxVariants.isNotEmpty) {
+      final avail = <(int, int)>[
+        for (int c = 0; c < cfg.gridCols; c++)
+          for (int r = 0; r < cfg.gridRows; r++)
+            if (cells[c][r].isEmpty) (c, r),
+      ]..shuffle(_rng);
+      for (int i = 0; i < boxVariants.length && i < avail.length; i++) {
+        final (c, r) = avail[i];
+        cells[c][r] = GridCell(
+          obstacle: ObstacleType.mysteryBox,
+          boxVariant: boxVariants[i],
+        );
       }
     }
-    positions.shuffle(_rng);
+
+    // ── Remaining random obstacles (shuffled positions, skip occupied) ─────────
+    final positions = <(int, int)>[
+      for (int c = 0; c < cfg.gridCols; c++)
+        for (int r = 0; r < cfg.gridRows; r++)
+          if (cells[c][r].isEmpty) (c, r),
+    ]..shuffle(_rng);
 
     int posIdx = 0;
 
@@ -320,18 +373,15 @@ class GameNotifier extends StateNotifier<GameState> {
     }
 
     // Seed some starting items (skip all obstacle slots)
-    final seedId = cfg.spawnerItemId;
-    final nonObstacle = <(int, int)>[];
-    for (int c = 0; c < cfg.gridCols; c++) {
-      for (int r = 0; r < cfg.gridRows; r++) {
-        if (cells[c][r].isEmpty) nonObstacle.add((c, r));
-      }
-    }
-    nonObstacle.shuffle(_rng);
+    final nonObstacle = <(int, int)>[
+      for (int c = 0; c < cfg.gridCols; c++)
+        for (int r = 0; r < cfg.gridRows; r++)
+          if (cells[c][r].isEmpty) (c, r),
+    ]..shuffle(_rng);
     final seedCount = max(2, (nonObstacle.length * 0.15).round());
     for (int i = 0; i < seedCount && i < nonObstacle.length; i++) {
       final (c, r) = nonObstacle[i];
-      cells[c][r] = GridCell(itemId: seedId);
+      cells[c][r] = GridCell(itemId: cfg.spawnerItemId);
     }
 
     return cells;
@@ -369,6 +419,163 @@ class GameNotifier extends StateNotifier<GameState> {
     }
   }
 
+  // ── Glitch Hazard Timer & Teleportation ───────────────────────────────────
+
+  void _startGlitchTimer() {
+    _glitchTeleportTimer?.cancel();
+    _glitchTeleportTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      _teleportGlitchHazards();
+    });
+  }
+
+  void _stopGlitchTimer() {
+    _glitchTeleportTimer?.cancel();
+    _glitchTeleportTimer = null;
+  }
+
+  void _teleportGlitchHazards() {
+    if (state.activeDialog != ActiveDialog.none) return;
+    if (state.screen != AppScreen.game) return;
+    final cfg = state.currentLevel;
+    final newGrid = _cloneGrid();
+
+    // Collect all glitch hazard positions and clear them
+    final glitchCells = <(int, int, int?)>[];
+    for (int c = 0; c < cfg.gridCols; c++) {
+      for (int r = 0; r < cfg.gridRows; r++) {
+        if (newGrid[c][r].obstacle == ObstacleType.glitchHazard) {
+          glitchCells.add((c, r, newGrid[c][r].disguiseItemId));
+          newGrid[c][r] = const GridCell();
+        }
+      }
+    }
+    if (glitchCells.isEmpty) return;
+
+    // Collect all now-empty positions and pick random targets
+    final empties = <(int, int)>[
+      for (int c = 0; c < cfg.gridCols; c++)
+        for (int r = 0; r < cfg.gridRows; r++)
+          if (newGrid[c][r].isEmpty) (c, r),
+    ]..shuffle(_rng);
+
+    if (empties.isEmpty) return;
+
+    for (int i = 0; i < glitchCells.length && i < empties.length; i++) {
+      final (c, r) = empties[i];
+      newGrid[c][r] = GridCell(
+        obstacle:       ObstacleType.glitchHazard,
+        disguiseItemId: glitchCells[i].$3,
+      );
+    }
+    state = state.copyWith(grid: newGrid);
+  }
+
+  // ── Glitch Hazard Tap ─────────────────────────────────────────────────────
+  // Looks like a normal item — tapping shows error shake + buzz (no energy cost).
+
+  void tapGlitchHazard(int col, int row) {
+    if (state.activeDialog != ActiveDialog.none) return;
+    if (state.grid[col][row].obstacle != ObstacleType.glitchHazard) return;
+    AudioManager.instance.playErrorBuzz();
+    state = state.copyWith(
+      pendingAnimations: [
+        ...state.pendingAnimations,
+        PendingAnimation(col, row, AnimType.error),
+      ],
+    );
+  }
+
+  // ── Mystery Box Tap ───────────────────────────────────────────────────────
+  // RNG outcome depends on variant.  Box disappears after tap regardless.
+
+  void tapMysteryBox(int col, int row) {
+    if (state.activeDialog != ActiveDialog.none) return;
+    final cell = state.grid[col][row];
+    if (cell.obstacle != ObstacleType.mysteryBox || cell.boxVariant == null) return;
+
+    final cfg     = state.currentLevel;
+    final variant = cell.boxVariant!;
+    final roll    = _rng.nextDouble();
+
+    // Resolve outcome from variant + RNG
+    _BoxOutcome outcome;
+    switch (variant) {
+      case MysteryBoxVariant.tier1:
+        if (roll < 0.30)       outcome = _BoxOutcome.coins;
+        else if (roll < 0.60)  outcome = _BoxOutcome.quotaItem;
+        else                   outcome = _BoxOutcome.trap;
+      case MysteryBoxVariant.tier2Good:
+        outcome = roll < 0.50 ? _BoxOutcome.coins : _BoxOutcome.quotaItem;
+      case MysteryBoxVariant.tier2Trap:
+      case MysteryBoxVariant.tier3Trap:
+        outcome = _BoxOutcome.trap;
+      case MysteryBoxVariant.tier3Coins:
+        outcome = _BoxOutcome.coins;
+      case MysteryBoxVariant.tier3Quota:
+        outcome = _BoxOutcome.quotaItem;
+    }
+
+    // Remove the box from the grid
+    final newGrid = _cloneGrid();
+    newGrid[col][row] = const GridCell();
+
+    int newCoins  = state.totalCoins;
+    int newEnergy = state.energy;
+    var newAnims  = [...state.pendingAnimations];
+
+    switch (outcome) {
+      case _BoxOutcome.coins:
+        newCoins += 100 + _rng.nextInt(101); // 100–200 coins
+        AudioManager.instance.playMergeSnap();
+
+      case _BoxOutcome.quotaItem:
+        // Spawn the lowest-ID quota item in a random empty cell
+        final quotaItemId = cfg.quotaMap.keys.isNotEmpty
+            ? cfg.quotaMap.keys.reduce((a, b) => a < b ? a : b)
+            : cfg.spawnerItemId;
+        final empties = <(int, int)>[
+          for (int c = 0; c < cfg.gridCols; c++)
+            for (int r = 0; r < cfg.gridRows; r++)
+              if (newGrid[c][r].isEmpty) (c, r),
+        ];
+        if (empties.isNotEmpty) {
+          empties.shuffle(_rng);
+          final (ec, er) = empties.first;
+          newGrid[ec][er] = GridCell(itemId: quotaItemId);
+          newAnims = [...newAnims, PendingAnimation(ec, er, AnimType.spawn)];
+          AudioManager.instance.playSpawnPop();
+        } else {
+          newCoins += 100; // no empty cell — coins instead
+          AudioManager.instance.playMergeSnap();
+        }
+
+      case _BoxOutcome.trap:
+        newEnergy = (state.energy - 50).clamp(0, state.maxEnergy);
+        // Full-screen red flash
+        newAnims = [...newAnims, const PendingAnimation(-1, -1, AnimType.hazardHit)];
+        AudioManager.instance.playErrorBuzz();
+    }
+
+    final hitZeroEnergy = outcome == _BoxOutcome.trap && newEnergy <= 0;
+    if (hitZeroEnergy) {
+      state = state.copyWith(
+        grid:              newGrid,
+        totalCoins:        newCoins,
+        energy:            0,
+        pendingAnimations: newAnims,
+        activeDialog:      ActiveDialog.zeroEnergy,
+      );
+    } else {
+      state = state.copyWith(
+        grid:              newGrid,
+        totalCoins:        newCoins,
+        energy:            newEnergy,
+        pendingAnimations: newAnims,
+      );
+    }
+    _savePrefs();
+  }
+
   // ── Story Dialog ──────────────────────────────────────────────────────────
 
   void dismissStory() {
@@ -384,6 +591,7 @@ class GameNotifier extends StateNotifier<GameState> {
       timerActive:  cfg.hasTimer,
     );
     if (cfg.hasTimer) _startTimer();
+    if (_glitchCountForLevel(cfg.number) > 0) _startGlitchTimer();
   }
 
   // ── Spawn Item ────────────────────────────────────────────────────────────
@@ -548,6 +756,7 @@ class GameNotifier extends StateNotifier<GameState> {
 
   void _onLevelComplete() {
     _timer?.cancel();
+    _stopGlitchTimer();
     AudioManager.instance.pauseBgm();
     AudioManager.instance.playVictory();
 
@@ -783,9 +992,11 @@ class GameNotifier extends StateNotifier<GameState> {
   List<List<GridCell>> _cloneGrid() {
     return state.grid
         .map((col) => col.map((cell) => GridCell(
-              itemId:      cell.itemId,
-              obstacle:    cell.obstacle,
-              isUnlocking: false,
+              itemId:         cell.itemId,
+              obstacle:       cell.obstacle,
+              isUnlocking:    false,
+              disguiseItemId: cell.disguiseItemId,
+              boxVariant:     cell.boxVariant,
             )).toList())
         .toList();
   }
@@ -802,6 +1013,7 @@ class GameNotifier extends StateNotifier<GameState> {
   @override
   void dispose() {
     _timer?.cancel();
+    _stopGlitchTimer();
     super.dispose();
   }
 }

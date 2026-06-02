@@ -573,6 +573,10 @@ class _GridCellState extends ConsumerState<_GridCell>
             ref.read(gameProvider.notifier).deleteItemInRescueMode(widget.col, widget.row);
           } else if (cell.isHazard) {
             ref.read(gameProvider.notifier).tapHazard(widget.col, widget.row);
+          } else if (cell.isGlitch) {
+            ref.read(gameProvider.notifier).tapGlitchHazard(widget.col, widget.row);
+          } else if (cell.isMystery) {
+            ref.read(gameProvider.notifier).tapMysteryBox(widget.col, widget.row);
           } else if (cell.isEmpty) {
             ref.read(gameProvider.notifier).spawnItem(
               targetCol: widget.col, targetRow: widget.row);
@@ -587,6 +591,14 @@ class _GridCellState extends ConsumerState<_GridCell>
     if (isBlackHole) return _BlackHoleTile(size: widget.size);
     if (cell.obstacle == ObstacleType.hazardTrap)
       return _HazardTile(size: widget.size);
+    if (cell.obstacle == ObstacleType.glitchHazard)
+      return _GlitchTile(
+        disguiseItemId: cell.disguiseItemId,
+        size: widget.size,
+        theme: widget.theme,
+      );
+    if (cell.obstacle == ObstacleType.mysteryBox)
+      return _MysteryBoxTile(variant: cell.boxVariant, size: widget.size);
     if (cell.obstacle == ObstacleType.dustyWeb)
       return _ObstacleTile(emoji: '🕸️', label: 'Web', size: widget.size, theme: widget.theme);
     if (cell.obstacle == ObstacleType.lockedCrate)
@@ -648,6 +660,251 @@ class _ObstacleTile extends StatelessWidget {
         Text(emoji, style: TextStyle(fontSize: size * 0.38)),
         Text(label, style: TextStyle(color: Colors.white24, fontSize: size * 0.1)),
       ]),
+    );
+  }
+}
+
+// ─── Glitch Hazard Tile (disguised as normal item + 5s glitch animation) ──────
+
+class _GlitchTile extends StatefulWidget {
+  final int? disguiseItemId;
+  final double size;
+  final PhaseTheme theme;
+  const _GlitchTile({
+    required this.disguiseItemId,
+    required this.size,
+    required this.theme,
+  });
+
+  @override
+  State<_GlitchTile> createState() => _GlitchTileState();
+}
+
+class _GlitchTileState extends State<_GlitchTile>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _glitchCtrl;
+  Timer? _glitchTimer;
+  bool _glitching = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _glitchCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _glitchCtrl.addStatusListener((s) {
+      if (s == AnimationStatus.completed) {
+        if (mounted) setState(() => _glitching = false);
+        _glitchCtrl.reset();
+      }
+    });
+    // Fire glitch animation every 5 seconds
+    _glitchTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted) {
+        setState(() => _glitching = true);
+        _glitchCtrl.forward(from: 0);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _glitchTimer?.cancel();
+    _glitchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final item = widget.disguiseItemId != null
+        ? ItemDictionary.getById(widget.disguiseItemId!)
+        : null;
+
+    return AnimatedBuilder(
+      animation: _glitchCtrl,
+      builder: (_, __) {
+        final t = _glitchCtrl.value;
+        return Stack(
+          children: [
+            // ── Normal item appearance (disguise) ──────────────────────────
+            Container(
+              width: widget.size,
+              height: widget.size,
+              decoration: widget.theme.gridCellDecoration(
+                isEmpty: false,
+                isHighlighted: false,
+              ),
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      item?.emoji ?? '⚡',
+                      style: TextStyle(fontSize: widget.size * 0.38),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      item == null
+                          ? ''
+                          : item.name.length > 10
+                              ? '${item.name.substring(0, 9)}…'
+                              : item.name,
+                      style: TextStyle(
+                        color: widget.theme.textPrimary.withOpacity(0.7),
+                        fontSize: widget.size * 0.1,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // ── Glitch static overlay (fires every 5 s, lasts 400 ms) ────
+            if (_glitching)
+              Positioned.fill(
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10),
+                    color: const Color(0xFF00FFFF).withOpacity(
+                      (sin(t * 18) * 0.5 + 0.5) * 0.45,
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      '▒▒▒',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.7 * t),
+                        fontSize: widget.size * 0.2,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// ─── Mystery Box Tile (shimmer ? box, color-coded by variant) ─────────────────
+
+class _MysteryBoxTile extends StatefulWidget {
+  final MysteryBoxVariant? variant;
+  final double size;
+  const _MysteryBoxTile({required this.variant, required this.size});
+
+  @override
+  State<_MysteryBoxTile> createState() => _MysteryBoxTileState();
+}
+
+class _MysteryBoxTileState extends State<_MysteryBoxTile>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _shimmer;
+
+  @override
+  void initState() {
+    super.initState();
+    _shimmer = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _shimmer.dispose();
+    super.dispose();
+  }
+
+  Color get _boxColor {
+    switch (widget.variant) {
+      case MysteryBoxVariant.tier1:      return const Color(0xFF7B1FA2);
+      case MysteryBoxVariant.tier2Good:  return const Color(0xFF1565C0);
+      case MysteryBoxVariant.tier2Trap:  return const Color(0xFFB71C1C);
+      case MysteryBoxVariant.tier3Coins: return const Color(0xFFF57F17);
+      case MysteryBoxVariant.tier3Quota: return const Color(0xFF1B5E20);
+      case MysteryBoxVariant.tier3Trap:  return const Color(0xFF880E4F);
+      default:                           return const Color(0xFF7B1FA2);
+    }
+  }
+
+  String get _label {
+    switch (widget.variant) {
+      case MysteryBoxVariant.tier1:      return 'MYSTERY';
+      case MysteryBoxVariant.tier2Good:  return 'LUCKY';
+      case MysteryBoxVariant.tier2Trap:  return 'DANGER';
+      case MysteryBoxVariant.tier3Coins: return 'COINS';
+      case MysteryBoxVariant.tier3Quota: return 'PACKAGE';
+      case MysteryBoxVariant.tier3Trap:  return 'TRAP';
+      default:                           return '?';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _shimmer,
+      builder: (_, __) {
+        final t = _shimmer.value;
+        return Container(
+          width: widget.size,
+          height: widget.size,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                _boxColor,
+                Color.lerp(_boxColor, Colors.white, 0.3 * t)!,
+              ],
+            ),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: Colors.white.withOpacity(0.4 + 0.4 * t),
+              width: 1.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: _boxColor.withOpacity(0.5 + 0.3 * t),
+                blurRadius: 8 + 6 * t,
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                '?',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: widget.size * 0.38,
+                  fontWeight: FontWeight.w900,
+                  shadows: [
+                    Shadow(
+                      color: Colors.white.withOpacity(0.8 * t),
+                      blurRadius: 12,
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                _label,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.75),
+                  fontSize: widget.size * 0.09,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
