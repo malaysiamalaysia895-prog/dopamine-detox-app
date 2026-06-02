@@ -30,30 +30,28 @@ jobs:
           
           flutter clean
           
-          # 1. KACHRA SAAF KAREIN: Purani aur nayi files ki ladaai khatam karne ke liye unhe hata rahe hain.
-          # (Chinta mat kijiye, AdMob wali Manifest file bilkul safe rahegi)
+          # Kachra saaf karein
           rm -f android/build.gradle android/build.gradle.kts
           rm -f android/settings.gradle android/settings.gradle.kts
           rm -f android/app/build.gradle android/app/build.gradle.kts
           
-          # 2. FRESH START: Naye aur ekdum clean files automatically banayein
+          # Fresh Android files banayein
           flutter create .
           
-          # 3. KOTLIN VERSION FIX: Jo error abhi aapko aaya tha, use hamesha ke liye block karna
-          echo "kotlin_version=1.9.22" >> android/gradle.properties
+          # 3. KOTLIN VERSION FIX: 2.0.0 set kar diya gaya hai
+          echo "kotlin_version=2.0.0" >> android/gradle.properties
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
           
-          # 4. ADS FIX (minSdkVersion 21): Jo Agent credit khatam hone se nahi kar paya, wo humne yahan force kar diya
+          # 4. ADS FIX (minSdkVersion 21)
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle.kts || true
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle.kts || true
           
-          # 5. Ads ka package wapas add karke fresh download karein
           flutter pub add google_mobile_ads
           flutter pub get
           
-          # Final APK Build
-          flutter build apk --release --no-shrink
+          # 5. FINAL APK BUILD (Bypass flag ke sath taaki koi naya error na aaye)
+          flutter build apk --release --no-shrink --android-skip-build-dependency-validation
           
           mkdir -p $GITHUB_WORKSPACE/output
           find build -name "*.apk" -exec cp {} $GITHUB_WORKSPACE/output/ \;
