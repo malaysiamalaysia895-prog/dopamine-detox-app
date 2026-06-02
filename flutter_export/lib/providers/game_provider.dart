@@ -38,7 +38,7 @@ class PendingAnimation {
   const PendingAnimation(this.col, this.row, this.type);
 }
 
-enum AnimType { spawn, merge, error, unlock }
+enum AnimType { spawn, merge, error, unlock, hazardHit }
 
 // ─── Game State (Immutable) ───────────────────────────────────────────────────
 
@@ -351,7 +351,8 @@ class GameNotifier extends StateNotifier<GameState> {
     final newEnergy = (state.energy - 20).clamp(0, state.maxEnergy);
     final anims = [
       ...state.pendingAnimations,
-      PendingAnimation(col, row, AnimType.error),
+      PendingAnimation(col, row, AnimType.error),    // cell shake
+      const PendingAnimation(-1, -1, AnimType.hazardHit), // full-screen flash
     ];
 
     if (newEnergy <= 0) {

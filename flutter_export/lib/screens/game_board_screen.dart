@@ -46,6 +46,8 @@ class GameBoardScreen extends ConsumerWidget {
                       _Spawner(levelDef: levelDef, theme: theme),
                     ],
                   ),
+                  // Hazard hit flash — full-screen red blip
+                  const _HazardFlashOverlay(),
                   // Dialog overlay layer
                   _DialogLayer(theme: theme),
                 ],
@@ -645,6 +647,78 @@ class _ObstacleTile extends StatelessWidget {
         Text(emoji, style: TextStyle(fontSize: size * 0.38)),
         Text(label, style: TextStyle(color: Colors.white24, fontSize: size * 0.1)),
       ]),
+    );
+  }
+}
+
+// ─── Hazard Flash Overlay (full-screen red blip on trap tap) ─────────────────
+
+class _HazardFlashOverlay extends ConsumerStatefulWidget {
+  const _HazardFlashOverlay();
+
+  @override
+  ConsumerState<_HazardFlashOverlay> createState() => _HazardFlashOverlayState();
+}
+
+class _HazardFlashOverlayState extends ConsumerState<_HazardFlashOverlay>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _opacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 420),
+    );
+    // Quick flash: fade in fast (0→peak), then fade out slowly
+    _opacity = TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween(begin: 0.0, end: 0.55)
+            .chain(CurveTween(curve: Curves.easeIn)),
+        weight: 25,
+      ),
+      TweenSequenceItem(
+        tween: Tween(begin: 0.55, end: 0.0)
+            .chain(CurveTween(curve: Curves.easeOut)),
+        weight: 75,
+      ),
+    ]).animate(_ctrl);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _triggerFlash() {
+    _ctrl.forward(from: 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen<List<PendingAnimation>>(animProvider, (_, next) {
+      for (final anim in next) {
+        if (anim.col == -1 && anim.row == -1 &&
+            anim.type == AnimType.hazardHit) {
+          _triggerFlash();
+          ref.read(gameProvider.notifier).consumeAnimation(anim);
+        }
+      }
+    });
+
+    return AnimatedBuilder(
+      animation: _opacity,
+      builder: (_, __) {
+        if (_opacity.value == 0) return const SizedBox.shrink();
+        return IgnorePointer(
+          child: Container(
+            color: const Color(0xFFDD0000).withOpacity(_opacity.value),
+          ),
+        );
+      },
     );
   }
 }
