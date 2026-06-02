@@ -13,21 +13,21 @@ import '../services/audio_manager.dart';
 
 // ─── Keys ────────────────────────────────────────────────────────────────────
 
-const _kBgmVolKey  = 'settings_bgm_volume';
-const _kSfxVolKey  = 'settings_sfx_volume';
-const _kMutedKey   = 'settings_muted';
+const _kBgmVolKey = 'settings_bgm_volume';
+const _kSfxVolKey = 'settings_sfx_volume';
+const _kMutedKey  = 'settings_muted';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
 @immutable
 class SettingsState {
-  final double bgmVolume; // 0.0 – 1.0
-  final double sfxVolume; // 0.0 – 1.0
+  final double bgmVolume; // 0.0 – 1.0  default 0.30
+  final double sfxVolume; // 0.0 – 1.0  default 1.00
   final bool   muted;
   final bool   loaded;    // false until SharedPreferences finishes loading
 
   const SettingsState({
-    this.bgmVolume = 0.20,
+    this.bgmVolume = 0.30, // 30 % — matches _kBgmVolume in audio_manager
     this.sfxVolume = 1.00,
     this.muted     = false,
     this.loaded    = false,
@@ -53,14 +53,12 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
     _load();
   }
 
-  // ── Load saved preferences on startup ─────────────────────────────────────
-
   Future<void> _load() async {
     try {
-      final prefs  = await SharedPreferences.getInstance();
-      final bgm    = prefs.getDouble(_kBgmVolKey) ?? 0.20;
-      final sfx    = prefs.getDouble(_kSfxVolKey) ?? 1.00;
-      final muted  = prefs.getBool(_kMutedKey)    ?? false;
+      final prefs = await SharedPreferences.getInstance();
+      final bgm   = prefs.getDouble(_kBgmVolKey) ?? 0.30;
+      final sfx   = prefs.getDouble(_kSfxVolKey) ?? 1.00;
+      final muted = prefs.getBool(_kMutedKey)    ?? false;
 
       state = SettingsState(
         bgmVolume: bgm,
@@ -69,7 +67,6 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
         loaded:    true,
       );
 
-      // Apply to AudioManager
       AudioManager.instance.setBgmVolume(bgm);
       AudioManager.instance.setSfxVolume(sfx);
       AudioManager.instance.setMuted(muted);
@@ -78,8 +75,6 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
       state = state.copyWith(loaded: true);
     }
   }
-
-  // ── BGM Volume ────────────────────────────────────────────────────────────
 
   Future<void> setBgmVolume(double v) async {
     final clamped = v.clamp(0.0, 1.0);
@@ -93,8 +88,6 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
     }
   }
 
-  // ── SFX Volume ────────────────────────────────────────────────────────────
-
   Future<void> setSfxVolume(double v) async {
     final clamped = v.clamp(0.0, 1.0);
     state = state.copyWith(sfxVolume: clamped);
@@ -106,8 +99,6 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
       debugPrint('[Settings] setSfxVolume save failed: $e');
     }
   }
-
-  // ── Mute toggle ───────────────────────────────────────────────────────────
 
   Future<void> setMuted(bool muted) async {
     state = state.copyWith(muted: muted);

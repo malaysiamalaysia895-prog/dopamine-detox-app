@@ -3,26 +3,90 @@
 // Tech Tycoon Merge
 // audioplayers: ^6.0.0
 //
-// Volume design (settable at runtime via SettingsProvider):
-//   BGM  → default 0.20  (20 % calm background presence)
-//   SFX  → default 1.00  (100 % — crisp interaction feedback)
+// ════════════════════════════════════════════════════════════
+// ROOT CAUSE OF BGM INTERRUPTION — and the fix
+// ════════════════════════════════════════════════════════════
 //
-// BGM loops infinitely via ReleaseMode.loop — it never stops.
+// BUG: Every new AudioPlayer() created for SFX requested
+// AUDIOFOCUS_GAIN from the Android OS by default.
+// Android then sent AUDIOFOCUS_LOSS to the BGM player,
+// which the audioplayers library handled by stopping it.
+//
+// FIX — two-part:
+//   1. BGM player: AudioContextAndroid(audioFocus: gain,
+//      usageType: game, stayAwake: true).
+//      Holds full audio focus for background music.
+//
+//   2. Each SFX player: AudioContextAndroid(audioFocus: none).
+//      Does NOT participate in the focus protocol at all.
+//      Android OS never sends AUDIOFOCUS_LOSS to the BGM.
+//      iOS: AVAudioSessionOptions.mixWithOthers on every player.
+//
+// Result: BGM and SFX play fully simultaneously, at all times.
+// ════════════════════════════════════════════════════════════
+//
+// Volume:
+//   BGM  → default 0.30  (30 % calm background)
+//   SFX  → default 1.00  (100 % clear, satisfying interaction)
+//
+// BGM loops infinitely via ReleaseMode.loop.
 // ============================================================
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
-// ── Default volume constants (used on first launch / before prefs load) ───────
-const double _kBgmVolume = 0.20;
-const double _kSfxVolume = 1.00;
+// ── Volume defaults ───────────────────────────────────────────────────────────
+const double _kBgmVolume = 0.30; // 30 % — calm background, raised from 0.2
+const double _kSfxVolume = 1.00; // 100 % — full clarity on every interaction
 
 // ── Default BGM track ─────────────────────────────────────────────────────────
 // "Floating Cities" by Kevin MacLeod (incompetech.com)
 // Licensed under Creative Commons: By Attribution 4.0 License
-// http://creativecommons.org/licenses/by/4.0/
 const String _kDefaultBgm = 'audio/bgm_ambient.mp3';
+
+// ── Audio context: BGM — holds full focus, loops indefinitely ─────────────────
+const AudioContext _kBgmContext = AudioContext(
+  android: AudioContextAndroid(
+    // Full, persistent focus — the BGM owns audio for the session.
+    audioFocus: AndroidAudioFocus.gain,
+    // game usageType = optimised for low-latency game audio mixing
+    usageType:   AndroidUsageType.game,
+    contentType: AndroidContentType.music,
+    stayAwake:   true,
+    isSpeakerphoneOn: false,
+  ),
+  iOS: AudioContextIOS(
+    defaultToSpeaker: true,
+    // mixWithOthers lets BGM coexist with SFX on the same AVAudioSession.
+    category: AVAudioSessionCategory.playback,
+    options: {
+      AVAudioSessionOptions.mixWithOthers,
+      AVAudioSessionOptions.allowBluetooth,
+    },
+  ),
+);
+
+// ── Audio context: SFX — no focus request, always mixes with BGM ──────────────
+const AudioContext _kSfxContext = AudioContext(
+  android: AudioContextAndroid(
+    // THE CRITICAL FIX: AudioFocus.none means this player NEVER sends
+    // AUDIOFOCUS_GAIN to Android, so the OS never evicts the BGM player.
+    audioFocus: AndroidAudioFocus.none,
+    usageType:   AndroidUsageType.game,
+    contentType: AndroidContentType.sonification,
+    stayAwake:   false,
+    isSpeakerphoneOn: false,
+  ),
+  iOS: AudioContextIOS(
+    defaultToSpeaker: true,
+    // ambient category + mixWithOthers = SFX mixes on top of BGM on iOS.
+    category: AVAudioSessionCategory.ambient,
+    options: {
+      AVAudioSessionOptions.mixWithOthers,
+    },
+  ),
+);
 
 class AudioManager with WidgetsBindingObserver {
   AudioManager._();
@@ -30,7 +94,7 @@ class AudioManager with WidgetsBindingObserver {
 
   final AudioPlayer _bgm = AudioPlayer();
 
-  // ── Runtime volume state (updated by SettingsProvider) ────────────────────
+  // Runtime-settable volumes (updated by SettingsProvider)
   double _bgmVol = _kBgmVolume;
   double _sfxVol = _kSfxVolume;
 
@@ -39,7 +103,7 @@ class AudioManager with WidgetsBindingObserver {
   bool _muted       = false;
   bool _initialized = false;
 
-  // ── Getters for SettingsProvider / UI ─────────────────────────────────────
+  // Getters for SettingsProvider / UI
   double get bgmVolume => _bgmVol;
   double get sfxVolume => _sfxVol;
   bool   get isMuted   => _muted;
@@ -50,11 +114,17 @@ class AudioManager with WidgetsBindingObserver {
     try {
       WidgetsBinding.instance.addObserver(this);
       _initialized = true;
+
+      // Apply the BGM-specific audio context BEFORE any playback call.
+      // This tells Android: "this player holds full, persistent focus".
+      await _bgm.setAudioContext(_kBgmContext);
       await _bgm.setReleaseMode(ReleaseMode.loop);
       await _bgm.setVolume(_bgmVol);
     } catch (e) {
       debugPrint('[Audio] initialize() failed: $e');
     }
+
+    // Auto-start ambient BGM — runs after runApp(), never stalls cold-start UI.
     await playBgm(_kDefaultBgm);
   }
 
@@ -71,13 +141,12 @@ class AudioManager with WidgetsBindingObserver {
 
   void setSfxVolume(double v) {
     _sfxVol = v.clamp(0.0, 1.0);
-    // Applied per-play in _playSfx — no active player to update.
   }
 
-  /// Set mute state explicitly (used by SettingsProvider on load + toggle).
-  /// Idempotent — calling setMuted(true) twice has the same effect as once.
+  // ── Mute control ──────────────────────────────────────────────────────────
+
   void setMuted(bool muted) {
-    if (_muted == muted) return; // already in desired state
+    if (_muted == muted) return;
     _muted = muted;
     try {
       if (_muted) {
@@ -91,19 +160,22 @@ class AudioManager with WidgetsBindingObserver {
     }
   }
 
-  /// Legacy toggle — kept for the mute button in the game HUD.
   void toggleMute() => setMuted(!_muted);
 
-  // ── Public BGM controls ───────────────────────────────────────────────────
+  // ── BGM controls ──────────────────────────────────────────────────────────
 
   Future<void> playBgm(String assetPath) async {
     if (!_initialized) return;
     try {
       final String asset = assetPath.replaceFirst('assets/', '');
+      // Same track already playing — do nothing (avoids needless stop/restart)
       if (_currentBgmAsset == asset && !_bgmPaused) return;
       _currentBgmAsset = asset;
       await _bgm.stop();
       if (!_muted) {
+        // Re-apply context and loop mode after every stop, as some Android
+        // versions reset these on stop().
+        await _bgm.setAudioContext(_kBgmContext);
         await _bgm.setReleaseMode(ReleaseMode.loop);
         await _bgm.setVolume(_bgmVol);
         await _bgm.play(AssetSource(asset));
@@ -143,7 +215,11 @@ class AudioManager with WidgetsBindingObserver {
     }
   }
 
-  // ── SFX controls ─────────────────────────────────────────────────────────
+  // ── SFX controls ──────────────────────────────────────────────────────────
+  //
+  // KEY DESIGN: every SFX gets a fresh AudioPlayer configured with
+  // _kSfxContext (audioFocus: none). It plays, then disposes itself.
+  // The BGM player's audio focus is NEVER affected.
 
   Future<void> playSpawnPop()    => _playSfx('audio/spawn_pop.mp3');
   Future<void> playMergeSnap()   => _playSfx('audio/merge_snap.mp3');
@@ -156,8 +232,15 @@ class AudioManager with WidgetsBindingObserver {
     if (!_initialized || _muted) return;
     try {
       final player = AudioPlayer();
+
+      // ▶ CRITICAL FIX: Apply SFX context BEFORE play().
+      // audioFocus: none → Android never sends AUDIOFOCUS_LOSS to BGM.
+      // mixWithOthers   → iOS lets this SFX layer over the BGM session.
+      await player.setAudioContext(_kSfxContext);
       await player.setVolume(_sfxVol);
       await player.play(AssetSource(asset));
+
+      // Self-dispose after playback completes — no memory leak.
       player.onPlayerComplete.first
           .then((_) => player.dispose())
           .catchError((_) => player.dispose());
