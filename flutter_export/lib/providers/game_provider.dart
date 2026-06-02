@@ -280,10 +280,21 @@ class GameNotifier extends StateNotifier<GameState> {
       (c) => List.generate(cfg.gridRows, (r) => const GridCell()),
     );
 
+    // ── Hazard Traps — fixed positions, placed FIRST (multiples of 5 only) ───
+    // Indexes are flat row-major: col = idx % gridCols, row = idx ~/ gridCols
+    for (final idx in hazardIndexesForLevel(cfg.number)) {
+      final col = idx % cfg.gridCols;
+      final row = idx ~/ cfg.gridCols;
+      if (col < cfg.gridCols && row < cfg.gridRows) {
+        cells[col][row] = const GridCell(obstacle: ObstacleType.hazardTrap);
+      }
+    }
+
+    // ── Remaining random obstacles (shuffled positions, skip hazard slots) ───
     final positions = <(int, int)>[];
     for (int c = 0; c < cfg.gridCols; c++) {
       for (int r = 0; r < cfg.gridRows; r++) {
-        positions.add((c, r));
+        if (cells[c][r].isEmpty) positions.add((c, r));
       }
     }
     positions.shuffle(_rng);
@@ -308,7 +319,7 @@ class GameNotifier extends StateNotifier<GameState> {
       cells[c][r] = const GridCell(obstacle: ObstacleType.lockedCrate);
     }
 
-    // Seed some starting items
+    // Seed some starting items (skip all obstacle slots)
     final seedId = cfg.spawnerItemId;
     final nonObstacle = <(int, int)>[];
     for (int c = 0; c < cfg.gridCols; c++) {
@@ -324,6 +335,37 @@ class GameNotifier extends StateNotifier<GameState> {
     }
 
     return cells;
+  }
+
+  // ── Hazard Trap Tap ───────────────────────────────────────────────────────
+  // Penalty: tapping a Hazard Trap costs 20 Energy and plays error SFX.
+  // If energy drops to 0 or below, the zeroEnergy dialog fires immediately.
+
+  void tapHazard(int col, int row) {
+    if (state.activeDialog != ActiveDialog.none) return;
+    final cell = state.grid[col][row];
+    if (cell.obstacle != ObstacleType.hazardTrap) return;
+
+    AudioManager.instance.playErrorBuzz();
+
+    final newEnergy = (state.energy - 20).clamp(0, state.maxEnergy);
+    final anims = [
+      ...state.pendingAnimations,
+      PendingAnimation(col, row, AnimType.error),
+    ];
+
+    if (newEnergy <= 0) {
+      state = state.copyWith(
+        energy:           0,
+        activeDialog:     ActiveDialog.zeroEnergy,
+        pendingAnimations: anims,
+      );
+    } else {
+      state = state.copyWith(
+        energy:           newEnergy,
+        pendingAnimations: anims,
+      );
+    }
   }
 
   // ── Story Dialog ──────────────────────────────────────────────────────────

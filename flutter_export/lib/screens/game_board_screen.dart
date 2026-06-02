@@ -568,6 +568,8 @@ class _GridCellState extends ConsumerState<_GridCell>
         onTap: () {
           if (isDeletable) {
             ref.read(gameProvider.notifier).deleteItemInRescueMode(widget.col, widget.row);
+          } else if (cell.isHazard) {
+            ref.read(gameProvider.notifier).tapHazard(widget.col, widget.row);
           } else if (cell.isEmpty) {
             ref.read(gameProvider.notifier).spawnItem(
               targetCol: widget.col, targetRow: widget.row);
@@ -580,6 +582,8 @@ class _GridCellState extends ConsumerState<_GridCell>
 
   Widget _buildCellDecoration(GridCell cell, ItemDef? item, bool isBlackHole, bool isDeletable) {
     if (isBlackHole) return _BlackHoleTile(size: widget.size);
+    if (cell.obstacle == ObstacleType.hazardTrap)
+      return _HazardTile(size: widget.size);
     if (cell.obstacle == ObstacleType.dustyWeb)
       return _ObstacleTile(emoji: '🕸️', label: 'Web', size: widget.size, theme: widget.theme);
     if (cell.obstacle == ObstacleType.lockedCrate)
@@ -641,6 +645,77 @@ class _ObstacleTile extends StatelessWidget {
         Text(emoji, style: TextStyle(fontSize: size * 0.38)),
         Text(label, style: TextStyle(color: Colors.white24, fontSize: size * 0.1)),
       ]),
+    );
+  }
+}
+
+// ─── Hazard Trap Tile (pulsing red warning) ────────────────────────────────────
+
+class _HazardTile extends StatefulWidget {
+  final double size;
+  const _HazardTile({required this.size});
+
+  @override
+  State<_HazardTile> createState() => _HazardTileState();
+}
+
+class _HazardTileState extends State<_HazardTile>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() { _pulse.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _pulse,
+      builder: (_, __) {
+        final t = _pulse.value;
+        return Container(
+          width: widget.size, height: widget.size,
+          decoration: BoxDecoration(
+            color: Color.lerp(const Color(0xFF1A0000), const Color(0xFF420000), t),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: Color.lerp(Colors.red.shade800, Colors.redAccent, t)!,
+              width: 2,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.red.withOpacity(0.25 + 0.35 * t),
+                blurRadius: 8 + 8 * t,
+                spreadRadius: t * 2,
+              ),
+            ],
+          ),
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Text('⚡', style: TextStyle(fontSize: widget.size * 0.30)),
+            Text('TRAP',
+              style: TextStyle(
+                color: Color.lerp(Colors.red.shade400, const Color(0xFFFF6E6E), t),
+                fontSize: widget.size * 0.115,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.2,
+              )),
+            Text('-20⚡',
+              style: TextStyle(
+                color: Colors.redAccent.withOpacity(0.65 + 0.35 * t),
+                fontSize: widget.size * 0.095,
+                fontWeight: FontWeight.bold,
+              )),
+          ]),
+        );
+      },
     );
   }
 }

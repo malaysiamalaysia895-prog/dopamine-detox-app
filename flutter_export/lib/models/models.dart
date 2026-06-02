@@ -9,7 +9,7 @@ import 'dart:math';
 
 enum GamePhase { garage, office, silicon, megacorp, universe }
 
-enum ObstacleType { none, dustyWeb, lockedCrate, blackHole }
+enum ObstacleType { none, dustyWeb, lockedCrate, blackHole, hazardTrap }
 
 enum AppScreen { map, game }
 
@@ -531,6 +531,24 @@ const List<LevelDefinition> kLevels = [
   ),
 ];
 
+// ─── Hazard Trap Progression ──────────────────────────────────────────────────
+// Returns the flat (row-major) grid indexes where Hazard Traps are placed.
+// Only levels that are multiples of 5 get hazards.
+// Flat index → col = idx % gridCols, row = idx ~/ gridCols
+//
+// Tier 1 (Easy   L5, L10):       1 hazard  — index 15 (bottom-right corner)
+// Tier 2 (Medium L15, L20):      2 hazards — indexes 0, 15 (top-left + bottom-right)
+// Tier 3 (Hard   L25, L30, L35): 3 hazards — indexes 0, 3, 15
+// Tier 4 (Expert L40, L45, L50): 4 hazards — indexes 5, 6, 9, 10 (center 2×2)
+
+List<int> hazardIndexesForLevel(int levelNumber) {
+  if (levelNumber % 5 != 0) return const [];
+  if (levelNumber <= 10)  return const [15];
+  if (levelNumber <= 20)  return const [0, 15];
+  if (levelNumber <= 35)  return const [0, 3, 15];
+  return const [5, 6, 9, 10];
+}
+
 // ─── Grid Cell Model ─────────────────────────────────────────────────────────
 
 class GridCell {
@@ -546,10 +564,12 @@ class GridCell {
 
   bool get isEmpty => itemId == null && obstacle == ObstacleType.none;
   bool get hasItem  => itemId != null;
+  bool get isHazard => obstacle == ObstacleType.hazardTrap;
   bool get isBlocked =>
       obstacle == ObstacleType.dustyWeb ||
       obstacle == ObstacleType.lockedCrate ||
-      obstacle == ObstacleType.blackHole;
+      obstacle == ObstacleType.blackHole ||
+      obstacle == ObstacleType.hazardTrap;
 
   GridCell clearItem() => GridCell(obstacle: obstacle);
   GridCell withItem(int id) => GridCell(itemId: id, obstacle: obstacle);
