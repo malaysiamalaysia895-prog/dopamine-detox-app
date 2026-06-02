@@ -59,22 +59,28 @@ void main() async {
 
   // ── Immersive full-screen ───────────────────────────────────────────────────
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor:              Colors.transparent,
-    statusBarIconBrightness:     Brightness.light,
+    statusBarColor:                    Colors.transparent,
+    statusBarIconBrightness:           Brightness.light,
     systemNavigationBarColor:          Colors.black,
     systemNavigationBarIconBrightness: Brightness.light,
   ));
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
-  // ── AdMob SDK ───────────────────────────────────────────────────────────────
-  await AdManager.instance.initialize();
+  // ── CRITICAL FIX: Call runApp() FIRST — never block it with heavy init ──────
+  // MobileAds.instance.initialize() can take 1-4 seconds on cold start.
+  // Awaiting it before runApp() produces a white/black screen. Instead we
+  // call runApp() now and initialise the SDKs in the background.
+  // Both AdManager and AudioManager guard every method with _initialized
+  // checks, so it is always safe to call them before init completes — the
+  // first ad/sound request that arrives before init will simply be skipped
+  // or will trigger a load-retry, never a crash.
+  runApp(const ProviderScope(child: TechTycoonMergeApp()));
 
-  // ── Audio init ──────────────────────────────────────────────────────────────
-  await AudioManager.instance.initialize();
+  // ── AdMob SDK — background init ─────────────────────────────────────────────
+  AdManager.instance.initialize();
 
-  runApp(
-    const ProviderScope(child: TechTycoonMergeApp()),
-  );
+  // ── Audio — background init ──────────────────────────────────────────────────
+  AudioManager.instance.initialize();
 }
 
 // ─── App ──────────────────────────────────────────────────────────────────────

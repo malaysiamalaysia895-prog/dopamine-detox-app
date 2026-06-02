@@ -26,7 +26,6 @@ class LevelMapScreen extends ConsumerWidget {
       ),
       child: Stack(
         children: [
-          // Static stars in background
           const _StaticStarField(),
           SafeArea(
             child: Column(
@@ -54,7 +53,6 @@ class _Header extends ConsumerWidget {
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
       child: Row(
         children: [
-          // Title
           ShaderMask(
             shaderCallback: (r) => const LinearGradient(
               colors: [Color(0xFF00E5FF), Color(0xFFCC00FF), Color(0xFFFFD700)],
@@ -66,7 +64,6 @@ class _Header extends ConsumerWidget {
               )),
           ),
           const Spacer(),
-          // Coins
           _CoinBadge(coins: totalCoins),
         ],
       ),
@@ -181,21 +178,66 @@ class _PhaseHeader extends StatelessWidget {
 }
 
 // ─── Level Node ───────────────────────────────────────────────────────────────
+// PERFORMANCE FIX: We use a ConsumerWidget to read the highestUnlockedLevel
+// and then delegate to either _AnimatedLevelNode (for the one "next" level
+// that actually needs a bounce) or _StaticLevelNode (for all 49 others).
+//
+// The old approach created 50 AnimationController objects in initState()
+// simultaneously, causing a 4-5 second freeze on the Level Map screen.
+// Now only exactly ONE AnimationController is ever alive at a time.
 
-class _LevelNode extends ConsumerStatefulWidget {
+class _LevelNode extends ConsumerWidget {
   final int levelNumber;
   final PhaseTheme theme;
 
-  const _LevelNode({
-    required this.levelNumber,
+  const _LevelNode({required this.levelNumber, required this.theme});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final highest    = ref.watch(highestLvlProvider);
+    final isNext     = levelNumber == highest;
+    final isUnlocked = levelNumber <= highest;
+    final levelDef   = kLevels[levelNumber - 1];
+
+    if (isNext) {
+      // Only this one node creates an AnimationController.
+      return _AnimatedLevelNode(
+        levelDef: levelDef,
+        theme: theme,
+        onTap: () => ref.read(gameProvider.notifier).startLevel(levelNumber - 1),
+      );
+    }
+
+    return _StaticLevelNode(
+      levelDef: levelDef,
+      isUnlocked: isUnlocked,
+      theme: theme,
+      onTap: isUnlocked
+          ? () => ref.read(gameProvider.notifier).startLevel(levelNumber - 1)
+          : null,
+    );
+  }
+}
+
+// ── Animated Node — only the "next" level ────────────────────────────────────
+// Exactly ONE of these exists at a time, so exactly ONE AnimationController.
+
+class _AnimatedLevelNode extends StatefulWidget {
+  final LevelDefinition levelDef;
+  final PhaseTheme theme;
+  final VoidCallback onTap;
+
+  const _AnimatedLevelNode({
+    required this.levelDef,
     required this.theme,
+    required this.onTap,
   });
 
   @override
-  ConsumerState<_LevelNode> createState() => _LevelNodeState();
+  State<_AnimatedLevelNode> createState() => _AnimatedLevelNodeState();
 }
 
-class _LevelNodeState extends ConsumerState<_LevelNode>
+class _AnimatedLevelNodeState extends State<_AnimatedLevelNode>
     with SingleTickerProviderStateMixin {
   late AnimationController _bounce;
   late Animation<double> _bounceAnim;
@@ -203,75 +245,68 @@ class _LevelNodeState extends ConsumerState<_LevelNode>
   @override
   void initState() {
     super.initState();
-    // Create the controller but do NOT start repeating yet.
-    // Only the "next" unlocked level should animate; starting all 50
-    // animation controllers simultaneously causes the 4-5s UI freeze.
     _bounce = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
-    );
+    )..repeat(reverse: true);
+
     _bounceAnim = Tween<double>(begin: 0, end: -6).animate(
       CurvedAnimation(parent: _bounce, curve: Curves.easeInOut),
     );
   }
 
   @override
-  void dispose() { _bounce.dispose(); super.dispose(); }
+  void dispose() {
+    _bounce.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final highest    = ref.watch(highestLvlProvider);
-    final isUnlocked = widget.levelNumber <= highest;
-    final isNext     = widget.levelNumber == highest;
-
-    // Start/stop the bounce animation based on whether this is the next level.
-    // Called during build so it reacts to highestLvlProvider changes.
-    if (isNext) {
-      if (!_bounce.isAnimating) _bounce.repeat(reverse: true);
-    } else {
-      if (_bounce.isAnimating) {
-        _bounce.stop();
-        _bounce.reset();
-      }
-    }
-
-    final levelDef = kLevels[widget.levelNumber - 1];
-
-    if (isNext) {
-      return AnimatedBuilder(
-        animation: _bounceAnim,
-        builder: (_, __) => Transform.translate(
-          offset: Offset(0, _bounceAnim.value),
-          child: _NodeBody(
-            levelDef: levelDef,
-            isUnlocked: true,
-            isGlowing: true,
-            theme: widget.theme,
-            onTap: () => ref.read(gameProvider.notifier).startLevel(widget.levelNumber - 1),
-          ),
+    return AnimatedBuilder(
+      animation: _bounceAnim,
+      builder: (_, __) => Transform.translate(
+        offset: Offset(0, _bounceAnim.value),
+        child: _NodeBody(
+          levelDef: widget.levelDef,
+          isUnlocked: true,
+          isGlowing: true,
+          theme: widget.theme,
+          onTap: widget.onTap,
         ),
-      );
-    }
-
-    if (isUnlocked) {
-      return _NodeBody(
-        levelDef: levelDef,
-        isUnlocked: true,
-        isGlowing: false,
-        theme: widget.theme,
-        onTap: () => ref.read(gameProvider.notifier).startLevel(widget.levelNumber - 1),
-      );
-    }
-
-    return _NodeBody(
-      levelDef: levelDef,
-      isUnlocked: false,
-      isGlowing: false,
-      theme: widget.theme,
-      onTap: null,
+      ),
     );
   }
 }
+
+// ── Static Node — all other levels (no AnimationController) ──────────────────
+
+class _StaticLevelNode extends StatelessWidget {
+  final LevelDefinition levelDef;
+  final bool isUnlocked;
+  final PhaseTheme theme;
+  final VoidCallback? onTap;
+
+  const _StaticLevelNode({
+    required this.levelDef,
+    required this.isUnlocked,
+    required this.theme,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _NodeBody(
+      levelDef: levelDef,
+      isUnlocked: isUnlocked,
+      isGlowing: false,
+      theme: theme,
+      onTap: onTap,
+    );
+  }
+}
+
+// ─── Shared Node Body ─────────────────────────────────────────────────────────
 
 class _NodeBody extends StatelessWidget {
   final LevelDefinition levelDef;

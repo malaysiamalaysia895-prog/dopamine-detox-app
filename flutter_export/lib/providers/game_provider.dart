@@ -237,6 +237,12 @@ class GameNotifier extends StateNotifier<GameState> {
     final grid = _buildInitialGrid(cfg);
     final base = cfg.baseCoins;
 
+    // CRITICAL FIX: Do NOT start the timer here. The story dialog is about to
+    // be shown, and the player cannot interact with the board while it is open.
+    // Starting the timer now would mean precious seconds tick away while the
+    // player reads the level brief, AND could fire ActiveDialog.timeFail while
+    // ActiveDialog.story is still open → bad state → crash / frozen UI.
+    // The timer is started inside dismissStory() once the player taps "Let's Go".
     state = state.copyWith(
       screen:             AppScreen.game,
       currentLevelIndex:  safeIndex,
@@ -249,14 +255,13 @@ class GameNotifier extends StateNotifier<GameState> {
       quotaRequired:      cfg.quotaMap,
       quotaDelivered:     {},
       timerSeconds:       cfg.timeLimitSeconds,
-      timerActive:        cfg.hasTimer,
+      timerActive:        false,   // timer NOT active yet — starts after story is dismissed
       timerExpiredOnce:   false,
       activeDialog:       ActiveDialog.story,
       deletionModeActive: false,
       pendingAnimations:  const [],
     );
 
-    if (cfg.hasTimer) _startTimer();
     // Audio is guarded by try-catch inside AudioManager
     AudioManager.instance.playBgm(themeOf(cfg.phase).bgmAsset);
   }
@@ -318,7 +323,18 @@ class GameNotifier extends StateNotifier<GameState> {
   // ── Story Dialog ──────────────────────────────────────────────────────────
 
   void dismissStory() {
-    state = state.copyWith(activeDialog: ActiveDialog.none);
+    final cfg = state.currentLevel;
+    // CRITICAL FIX: Start the countdown timer HERE, not in startLevel().
+    // The timer must only run while the player can actually interact with
+    // the board. Starting it from startLevel() (while the story dialog is
+    // blocking all input) counted down time the player couldn't use, and
+    // also allowed timeFail to fire while the story dialog was still open,
+    // causing a bad-state crash on the "Let's Go" button tap.
+    state = state.copyWith(
+      activeDialog: ActiveDialog.none,
+      timerActive:  cfg.hasTimer,
+    );
+    if (cfg.hasTimer) _startTimer();
   }
 
   // ── Spawn Item ────────────────────────────────────────────────────────────
