@@ -46,7 +46,7 @@ const double _kSfxVolume = 1.00; // 100 % — full clarity on every interaction
 const String _kDefaultBgm = 'audio/bgm_ambient.mp3';
 
 // ── Audio context: BGM — holds full focus, loops indefinitely ─────────────────
-const AudioContext _kBgmContext = AudioContext(
+final AudioContext _kBgmContext = AudioContext(
   android: AudioContextAndroid(
     // Full, persistent focus — the BGM owns audio for the session.
     audioFocus: AndroidAudioFocus.gain,
@@ -57,7 +57,6 @@ const AudioContext _kBgmContext = AudioContext(
     isSpeakerphoneOn: false,
   ),
   iOS: AudioContextIOS(
-    defaultToSpeaker: true,
     // mixWithOthers lets BGM coexist with SFX on the same AVAudioSession.
     category: AVAudioSessionCategory.playback,
     options: {
@@ -68,7 +67,7 @@ const AudioContext _kBgmContext = AudioContext(
 );
 
 // ── Audio context: SFX — no focus request, always mixes with BGM ──────────────
-const AudioContext _kSfxContext = AudioContext(
+final AudioContext _kSfxContext = AudioContext(
   android: AudioContextAndroid(
     // THE CRITICAL FIX: AudioFocus.none means this player NEVER sends
     // AUDIOFOCUS_GAIN to Android, so the OS never evicts the BGM player.
@@ -79,7 +78,6 @@ const AudioContext _kSfxContext = AudioContext(
     isSpeakerphoneOn: false,
   ),
   iOS: AudioContextIOS(
-    defaultToSpeaker: true,
     // ambient category + mixWithOthers = SFX mixes on top of BGM on iOS.
     category: AVAudioSessionCategory.ambient,
     options: {
