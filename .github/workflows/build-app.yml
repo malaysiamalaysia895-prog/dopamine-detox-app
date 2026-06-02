@@ -30,28 +30,36 @@ jobs:
           
           flutter clean
           
-          # Kachra saaf karein
+          # 1. Kachra saaf karein
           rm -f android/build.gradle android/build.gradle.kts
           rm -f android/settings.gradle android/settings.gradle.kts
           rm -f android/app/build.gradle android/app/build.gradle.kts
           
-          # Fresh Android files banayein
+          # 2. Fresh Android files banayein
           flutter create .
           
-          # 3. KOTLIN VERSION FIX: 2.0.0 set kar diya gaya hai
-          echo "kotlin_version=2.0.0" >> android/gradle.properties
+          # 3. KOTLIN & DSL FIX (ASLI SOLUTION)
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
+          # Naye DSL error ko rokne ke liye isko false set kiya:
+          echo "android.newDsl=false" >> android/gradle.properties
+          
+          # settings.gradle file ke andar jaakar 1.9.22 ko 2.0.0 se automatically badalna
+          sed -i 's/1.9.22/2.0.0/g' android/settings.gradle || true
+          sed -i 's/1.9.24/2.0.0/g' android/settings.gradle || true
+          sed -i 's/ext.kotlin_version =.*/ext.kotlin_version = "2.0.0"/g' android/build.gradle || true
           
           # 4. ADS FIX (minSdkVersion 21)
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle || true
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle || true
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle.kts || true
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle.kts || true
           
           flutter pub add google_mobile_ads
           flutter pub get
           
-          # 5. FINAL APK BUILD (Bypass flag ke sath taaki koi naya error na aaye)
-          flutter build apk --release --no-shrink --android-skip-build-dependency-validation
+          # 5. FINAL APK BUILD (Bypass flag hata diya gaya hai)
+          flutter build apk --release --no-shrink
           
           mkdir -p $GITHUB_WORKSPACE/output
           find build -name "*.apk" -exec cp {} $GITHUB_WORKSPACE/output/ \;
