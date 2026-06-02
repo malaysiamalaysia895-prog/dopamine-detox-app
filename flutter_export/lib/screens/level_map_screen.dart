@@ -203,10 +203,13 @@ class _LevelNodeState extends ConsumerState<_LevelNode>
   @override
   void initState() {
     super.initState();
+    // Create the controller but do NOT start repeating yet.
+    // Only the "next" unlocked level should animate; starting all 50
+    // animation controllers simultaneously causes the 4-5s UI freeze.
     _bounce = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
-    )..repeat(reverse: true);
+    );
     _bounceAnim = Tween<double>(begin: 0, end: -6).animate(
       CurvedAnimation(parent: _bounce, curve: Curves.easeInOut),
     );
@@ -220,6 +223,17 @@ class _LevelNodeState extends ConsumerState<_LevelNode>
     final highest    = ref.watch(highestLvlProvider);
     final isUnlocked = widget.levelNumber <= highest;
     final isNext     = widget.levelNumber == highest;
+
+    // Start/stop the bounce animation based on whether this is the next level.
+    // Called during build so it reacts to highestLvlProvider changes.
+    if (isNext) {
+      if (!_bounce.isAnimating) _bounce.repeat(reverse: true);
+    } else {
+      if (_bounce.isAnimating) {
+        _bounce.stop();
+        _bounce.reset();
+      }
+    }
 
     final levelDef = kLevels[widget.levelNumber - 1];
 
