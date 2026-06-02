@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ "Merge-app" ]
+    branches: ["Merge-app"]
   workflow_dispatch:
 
 jobs:
@@ -10,109 +10,42 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
-          
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          
-      - name: The Flawless Build
+          cache: true
+
+      - name: Download Orbitron fonts (not stored in repo)
         run: |
-          PUBSPEC=$(find . -name "pubspec.yaml" | head -n 1)
-          DIR=$(dirname "$PUBSPEC")
-          cd "$DIR"
-          
-          flutter clean
-          
-          # 1. PURANI GRADLE FILES HATA RAHE HAIN (KTS safe rahegi)
-          rm -f android/settings.gradle
-          rm -f android/build.gradle
-          rm -f android/app/build.gradle
-          
-          # 2. KOTLIN FIX (.kts extension ke sath)
-          echo "android.useAndroidX=true" >> android/gradle.properties
-          echo "android.enableJetifier=true" >> android/gradle.properties
-          echo "android.newDsl=false" >> android/gradle.properties
-          sed -i 's/1.9.22/2.0.0/g' android/settings.gradle.kts || true
-          sed -i 's/1.9.24/2.0.0/g' android/settings.gradle.kts || true
-          
-          # 3. ADS FIX (minSdk 21 .kts syntax mein)
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle.kts || true
-          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle.kts || true
-          
-          flutter pub add google_mobile_ads
-          flutter pub get
-          
-          # 4. GAME CODE SPELLING FIX
-          sed -i 's/navigationBarIconBrightness/systemNavigationBarIconBrightness/g' lib/main.dart || true
-          sed -i 's/navigationBarColor/systemNavigationBarColor/g' lib/main.dart || true
-          
-          # 5. ASLI FONTS
-          mkdir -p assets/fonts
-          curl -L -o assets/fonts/Orbitron-Bold.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron-Bold.ttf"
-          curl -L -o assets/fonts/Orbitron-Regular.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron-Regular.ttf"
-          
-          # 6. THE PERFECT MANIFEST FIX (Yeh V1 error aur Black Screen Crash dono ko jad se khatam karega)
-          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.INTERNET"/>
-              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-              
-              <application
-                  android:label="Tech Tycoon Merge"
-                  android:name="${applicationName}"
-                  android:icon="@mipmap/ic_launcher">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:launchMode="singleTop"
-                      android:theme="@style/LaunchTheme"
-                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
-                      android:hardwareAccelerated="true"
-                      android:windowSoftInputMode="adjustResize">
-                      <meta-data android:name="io.flutter.embedding.android.NormalTheme" android:resource="@style/NormalTheme" />
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-                  </activity>
-                  
-                  <meta-data android:name="flutterEmbedding" android:value="2" />
-                  
-                  <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-8566652140087308~1114269136"/>
-              </application>
-              
-              <queries>
-                  <intent>
-                      <action android:name="android.intent.action.VIEW" />
-                      <category android:name="android.intent.category.BROWSABLE" />
-                      <data android:scheme="https" />
-                  </intent>
-              </queries>
-          </manifest>
-          EOF
-          
-          # 7. R8 COMPRESSOR FIX (.kts syntax mein Play Core dependency)
-          echo "" >> android/app/build.gradle.kts
-          echo "dependencies {" >> android/app/build.gradle.kts
-          echo "    implementation(\"com.google.android.play:core:1.10.3\")" >> android/app/build.gradle.kts
-          echo "}" >> android/app/build.gradle.kts
-          
-          # 8. FINAL APK BUILD
-          flutter build apk --release --no-shrink
-          
-          mkdir -p $GITHUB_WORKSPACE/output
-          find build -name "*.apk" -exec cp {} $GITHUB_WORKSPACE/output/ \;
-        
+          mkdir -p flutter_export/assets/fonts
+          curl -fL -o flutter_export/assets/fonts/Orbitron-Bold.ttf \
+            "https://github.com/google/fonts/raw/main/ofl/orbitron/static/Orbitron-Bold.ttf"
+          curl -fL -o flutter_export/assets/fonts/Orbitron-Regular.ttf \
+            "https://github.com/google/fonts/raw/main/ofl/orbitron/static/Orbitron-Regular.ttf"
+
+      - name: Create local.properties
+        run: |
+          echo "flutter.sdk=$FLUTTER_ROOT" > flutter_export/android/local.properties
+          echo "sdk.dir=$ANDROID_SDK_ROOT" >> flutter_export/android/local.properties
+
+      - name: Get dependencies
+        working-directory: flutter_export
+        run: flutter pub get
+
+      - name: Build release APK
+        working-directory: flutter_export
+        run: flutter build apk --release
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Mera-Game-APK
-          path: output/*.apk
-          
+          path: flutter_export/build/app/outputs/flutter-apk/app-release.apk
