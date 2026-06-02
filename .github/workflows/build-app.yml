@@ -194,8 +194,23 @@ jobs:
         working-directory: flutter_export
         run: flutter build apk --release
 
-      - name: Upload APK
+      - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
           name: Mera-Game-APK
           path: flutter_export/build/app/outputs/flutter-apk/app-release.apk
+
+      # ── Debug APK — for testing ads ──────────────────────────────────────────
+      # In a debug build kDebugMode=true so AdManager uses Google's test ad IDs
+      # (ca-app-pub-3940256099942544/...) which ALWAYS show test ads regardless
+      # of device, location, or AdMob account status. Use this APK to verify
+      # that ads load and show correctly before publishing.
+      - name: Build debug APK (for ad testing)
+        working-directory: flutter_export
+        run: flutter build apk --debug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mera-Game-APK-DEBUG
+          path: flutter_export/build/app/outputs/flutter-apk/app-debug.apk

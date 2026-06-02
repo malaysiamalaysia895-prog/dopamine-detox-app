@@ -854,19 +854,6 @@ class _ZeroEnergyDialog extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return _BaseDialog(theme: theme, children: [
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: Colors.amber.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Colors.amber.withOpacity(0.3)),
-        ),
-        child: const Text(
-          'REWARDED AD · ca-app-pub-8566652140087308/7306930941',
-          style: TextStyle(color: Colors.amber, fontSize: 7, fontWeight: FontWeight.bold),
-        ),
-      ),
-      const SizedBox(height: 16),
       const Text('⚡', style: TextStyle(fontSize: 64)),
       const SizedBox(height: 10),
       const Text('Out of Power!',
@@ -971,38 +958,12 @@ class _VictoryDialogState extends ConsumerState<_VictoryDialog> {
       const SizedBox(height: 16),
       // Rule 3 — 3× coins button
       if (!state.coinsMultiplied) ...[
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: Colors.amber.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: const Text(
-            'REWARDED AD · ca-app-pub-8566652140087308/7306930941',
-            style: TextStyle(color: Colors.amber, fontSize: 7),
-          ),
-        ),
-        const SizedBox(height: 8),
         _FullButton('📺 Watch Ad for 3× Coins!',
           color: const Color(0xFFFFD700), dark: true,
           onTap: () => ref.read(gameProvider.notifier).watchAdForMultiplier()),
         const SizedBox(height: 10),
       ],
-      // Rule 4 — Next Level / interstitial gate
-      if (isEven && !isLast) ...[
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.05),
-            borderRadius: BorderRadius.circular(5),
-          ),
-          child: const Text(
-            'INTERSTITIAL · ca-app-pub-8566652140087308/3659026052',
-            style: TextStyle(color: Colors.white24, fontSize: 7),
-          ),
-        ),
-        const SizedBox(height: 8),
-      ],
+      // Rule 4 — Next Level / interstitial gate (ad plays automatically)
       _busy
           ? const CircularProgressIndicator(color: Colors.white38)
           : _FullButton(
@@ -1040,15 +1001,6 @@ class _TimeFailDialog extends ConsumerWidget {
       const SizedBox(height: 20),
       // Time extension ad button (Phase 4+)
       if (level.allowTimeExtension) ...[
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: Colors.amber.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
-          child: const Text(
-            'REWARDED AD · ca-app-pub-8566652140087308/7306930941',
-            style: TextStyle(color: Colors.amber, fontSize: 7)),
-        ),
-        const SizedBox(height: 8),
         _FullButton('📺 Watch Ad for +60 Seconds! ⏳',
           color: const Color(0xFFFFD700), dark: true,
           onTap: () => ref.read(gameProvider.notifier).watchAdForTimeExtension()),

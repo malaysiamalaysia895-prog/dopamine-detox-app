@@ -24,9 +24,15 @@ class AudioManager with WidgetsBindingObserver {
   Future<void> initialize() async {
     try {
       WidgetsBinding.instance.addObserver(this);
+      // CRITICAL: Set _initialized = true FIRST, before any platform calls.
+      // In audioplayers ^6.0.0 on Android, setReleaseMode/setVolume can throw
+      // if the native channel has a timing issue on cold start. If we waited
+      // until AFTER those calls, any exception would leave _initialized = false
+      // forever — silently killing all BGM and SFX. Setting it first means
+      // every play() call still attempts to run (each has its own try-catch).
+      _initialized = true;
       await _bgm.setReleaseMode(ReleaseMode.loop);
       await _bgm.setVolume(0.6);
-      _initialized = true;
     } catch (e) {
       debugPrint('[Audio] initialize() failed: $e');
     }
