@@ -7,6 +7,7 @@
 import 'dart:math';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import '../models/models.dart';
 
 // ─── PHASE 1: Floating Dust Particles (Garage) ────────────────────────────────
 
