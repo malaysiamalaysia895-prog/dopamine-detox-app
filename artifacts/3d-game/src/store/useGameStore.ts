@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 import { LEVELS, LevelConfig, getNextItem, getBaseItemForPhase } from "../data/gameData";
 
 export type CellObstacle = "dusty_web" | "locked_crate" | "black_hole" | null;
@@ -14,6 +15,7 @@ export interface GridCell {
 
 export interface GameState {
   currentLevel: number;
+  highestLevelReached: number;
   coins: number;
   totalCoins: number;
   energy: number;
@@ -69,7 +71,6 @@ function buildGrid(cfg: LevelConfig): GridCell[][] {
     }
   }
 
-  // Seed a few base items on free cells
   const baseItem = getBaseItemForPhase(cfg.theme);
   const freeCells = allPositions.filter(([c, r]) => !grid[c][r].obstacle);
   const starterCount = Math.min(Math.max(2, Math.floor(freeCells.length * 0.18)), freeCells.length);
@@ -99,129 +100,143 @@ function checkWin(grid: GridCell[][], targetItemId: string): boolean {
   return grid.some(col => col.some(cell => cell.itemId === targetItemId));
 }
 
-export const useGameStore = create<GameState & GameActions>((set, get) => ({
-  currentLevel: 0,
-  coins: 0,
-  totalCoins: 0,
-  energy: MAX_ENERGY,
-  maxEnergy: MAX_ENERGY,
-  grid: [],
-  phase: "menu",
-  levelCompleteCoins: 0,
-  showEnergyWarning: false,
-  timerSeconds: 0,
-  timerActive: false,
-
-  getCurrentLevelConfig: () => LEVELS[get().currentLevel],
-
-  startLevel: (levelIndex: number) => {
-    const cfg = LEVELS[levelIndex];
-    if (!cfg) return;
-    set({
-      currentLevel: levelIndex,
-      grid: buildGrid(cfg),
-      phase: "playing",
+export const useGameStore = create<GameState & GameActions>()(
+  persist(
+    (set, get) => ({
+      currentLevel: 0,
+      highestLevelReached: -1,
+      coins: 0,
+      totalCoins: 0,
+      energy: MAX_ENERGY,
+      maxEnergy: MAX_ENERGY,
+      grid: [],
+      phase: "menu" as const,
       levelCompleteCoins: 0,
       showEnergyWarning: false,
-      timerActive: cfg.obstacles.includes("timed_order"),
-      timerSeconds: cfg.timedOrderSeconds ?? 0,
-    });
-  },
+      timerSeconds: 0,
+      timerActive: false,
 
-  spawnItem: (col: number, row: number) => {
-    const state = get();
-    const cfg = LEVELS[state.currentLevel];
-    const cell = state.grid[col]?.[row];
-    if (!cell || cell.locked || cell.obstacle === "black_hole") return;
-    if (cell.itemId !== null) return;
+      getCurrentLevelConfig: () => LEVELS[get().currentLevel],
 
-    // ── Rule 2 gate: only show lockout wall if level allows it ──────────────
-    if (state.energy === 0) {
-      if (cfg.allowZeroEnergyLockout) set({ showEnergyWarning: true });
-      return;
-    }
+      startLevel: (levelIndex: number) => {
+        const cfg = LEVELS[levelIndex];
+        if (!cfg) return;
+        set({
+          currentLevel: levelIndex,
+          grid: buildGrid(cfg),
+          phase: "playing",
+          energy: MAX_ENERGY,
+          levelCompleteCoins: 0,
+          showEnergyWarning: false,
+          timerActive: cfg.obstacles.includes("timed_order"),
+          timerSeconds: cfg.timedOrderSeconds ?? 0,
+        });
+      },
 
-    const rawCost = cfg.energyCostPerSpawn * (cfg.fasterEnergyDrain ? 1.5 : 1);
-    const energyCost = Math.round(rawCost);
-    const baseItem = getBaseItemForPhase(cfg.theme);
+      spawnItem: (col: number, row: number) => {
+        const state = get();
+        const cfg = LEVELS[state.currentLevel];
+        const cell = state.grid[col]?.[row];
+        if (!cell || cell.locked || cell.obstacle === "black_hole") return;
+        if (cell.itemId !== null) return;
 
-    const newGrid = state.grid.map(colArr => colArr.map(c => ({ ...c })));
-    newGrid[col][row] = { ...newGrid[col][row], itemId: baseItem.id };
-    const newEnergy = Math.max(0, state.energy - energyCost);
+        if (state.energy === 0) {
+          if (cfg.allowZeroEnergyLockout) set({ showEnergyWarning: true });
+          return;
+        }
 
-    set({ grid: newGrid, energy: newEnergy, showEnergyWarning: false });
-  },
+        const rawCost = cfg.energyCostPerSpawn * (cfg.fasterEnergyDrain ? 1.5 : 1);
+        const energyCost = Math.round(rawCost);
+        const baseItem = getBaseItemForPhase(cfg.theme);
 
-  moveItem: (fromCol, fromRow, toCol, toRow) => {
-    const state = get();
-    const fromCell = state.grid[fromCol]?.[fromRow];
-    const toCell   = state.grid[toCol]?.[toRow];
-    if (!fromCell || !toCell || fromCell.itemId === null) return;
+        const newGrid = state.grid.map(colArr => colArr.map(c => ({ ...c })));
+        newGrid[col][row] = { ...newGrid[col][row], itemId: baseItem.id };
+        const newEnergy = Math.max(0, state.energy - energyCost);
 
-    // Black hole destroys the dragged item
-    if (toCell.obstacle === "black_hole") {
-      const newGrid = state.grid.map(c => c.map(cell => ({ ...cell })));
-      newGrid[fromCol][fromRow] = { ...newGrid[fromCol][fromRow], itemId: null };
-      set({ grid: newGrid });
-      return;
-    }
+        set({ grid: newGrid, energy: newEnergy, showEnergyWarning: false });
+      },
 
-    if (toCell.locked) return;
+      moveItem: (fromCol, fromRow, toCol, toRow) => {
+        const state = get();
+        const fromCell = state.grid[fromCol]?.[fromRow];
+        const toCell   = state.grid[toCol]?.[toRow];
+        if (!fromCell || !toCell || fromCell.itemId === null) return;
 
-    const cfg = LEVELS[state.currentLevel];
-    const newGrid = state.grid.map(c => c.map(cell => ({ ...cell })));
+        if (toCell.obstacle === "black_hole") {
+          const newGrid = state.grid.map(c => c.map(cell => ({ ...cell })));
+          newGrid[fromCol][fromRow] = { ...newGrid[fromCol][fromRow], itemId: null };
+          set({ grid: newGrid });
+          return;
+        }
 
-    if (toCell.itemId === null) {
-      // Simple move
-      newGrid[toCol][toRow]   = { ...newGrid[toCol][toRow],   itemId: fromCell.itemId };
-      newGrid[fromCol][fromRow] = { ...newGrid[fromCol][fromRow], itemId: null };
-      tryUnlockAdjacent(newGrid, toCol, toRow);
-    } else if (toCell.itemId === fromCell.itemId) {
-      // Merge → next tier
-      const merged = getNextItem(fromCell.itemId);
-      if (merged) {
-        newGrid[toCol][toRow]   = { ...newGrid[toCol][toRow],   itemId: merged.id };
-        newGrid[fromCol][fromRow] = { ...newGrid[fromCol][fromRow], itemId: null };
-        tryUnlockAdjacent(newGrid, toCol, toRow);
+        if (toCell.locked) return;
+
+        const cfg = LEVELS[state.currentLevel];
+        const newGrid = state.grid.map(c => c.map(cell => ({ ...cell })));
+
+        if (toCell.itemId === null) {
+          newGrid[toCol][toRow]     = { ...newGrid[toCol][toRow],     itemId: fromCell.itemId };
+          newGrid[fromCol][fromRow] = { ...newGrid[fromCol][fromRow], itemId: null };
+          tryUnlockAdjacent(newGrid, toCol, toRow);
+        } else if (toCell.itemId === fromCell.itemId) {
+          const merged = getNextItem(fromCell.itemId);
+          if (merged) {
+            newGrid[toCol][toRow]     = { ...newGrid[toCol][toRow],     itemId: merged.id };
+            newGrid[fromCol][fromRow] = { ...newGrid[fromCol][fromRow], itemId: null };
+            tryUnlockAdjacent(newGrid, toCol, toRow);
+            set({ grid: newGrid });
+            if (checkWin(newGrid, cfg.targetItemId)) { get().completeLevel(); }
+            return;
+          }
+        } else {
+          newGrid[toCol][toRow]     = { ...newGrid[toCol][toRow],     itemId: fromCell.itemId };
+          newGrid[fromCol][fromRow] = { ...newGrid[fromCol][fromRow], itemId: toCell.itemId };
+        }
+
         set({ grid: newGrid });
-        if (checkWin(newGrid, cfg.targetItemId)) { get().completeLevel(); }
-        return;
-      }
-    } else {
-      // Swap
-      newGrid[toCol][toRow]   = { ...newGrid[toCol][toRow],   itemId: fromCell.itemId };
-      newGrid[fromCol][fromRow] = { ...newGrid[fromCol][fromRow], itemId: toCell.itemId };
+      },
+
+      addEnergy: (amount) => {
+        set(s => ({
+          energy: Math.min(MAX_ENERGY, s.energy + amount),
+          showEnergyWarning: false,
+        }));
+      },
+
+      completeLevel: () => {
+        const { currentLevel } = get();
+        const cfg = LEVELS[currentLevel];
+        set(s => ({
+          phase: "level_complete",
+          levelCompleteCoins: cfg.baseCoins,
+          timerActive: false,
+          highestLevelReached: Math.max(s.highestLevelReached, currentLevel),
+        }));
+      },
+
+      multiplyCoins: (factor) => {
+        set(s => ({ levelCompleteCoins: s.levelCompleteCoins * factor }));
+      },
+
+      setPhase: (phase) => set({ phase }),
+
+      tickTimer: () => {
+        const { timerActive, timerSeconds } = get();
+        if (!timerActive || timerSeconds <= 0) return;
+        const next = timerSeconds - 1;
+        if (next <= 0) set({ timerSeconds: 0, timerActive: false, phase: "game_over" });
+        else set({ timerSeconds: next });
+      },
+
+      dismissEnergyWarning: () => set({ showEnergyWarning: false }),
+    }),
+    {
+      name: "tech-tycoon-merge-save",
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        totalCoins: state.totalCoins,
+        highestLevelReached: state.highestLevelReached,
+      }),
     }
-
-    set({ grid: newGrid });
-  },
-
-  addEnergy: (amount) => {
-    set(s => ({
-      energy: Math.min(MAX_ENERGY, s.energy + amount),
-      showEnergyWarning: false,
-    }));
-  },
-
-  completeLevel: () => {
-    const cfg = LEVELS[get().currentLevel];
-    set({ phase: "level_complete", levelCompleteCoins: cfg.baseCoins, timerActive: false });
-  },
-
-  // ── Rule 3: called inside rewarded ad onSuccess callback ──────────────────
-  multiplyCoins: (factor) => {
-    set(s => ({ levelCompleteCoins: s.levelCompleteCoins * factor }));
-  },
-
-  setPhase: (phase) => set({ phase }),
-
-  tickTimer: () => {
-    const { timerActive, timerSeconds } = get();
-    if (!timerActive || timerSeconds <= 0) return;
-    const next = timerSeconds - 1;
-    if (next <= 0) set({ timerSeconds: 0, timerActive: false, phase: "game_over" });
-    else set({ timerSeconds: next });
-  },
-
-  dismissEnergyWarning: () => set({ showEnergyWarning: false }),
-}));
+  )
+);

@@ -11,7 +11,11 @@ const PHASES = [
 ];
 
 export function MenuPage() {
-  const { totalCoins, startLevel } = useGameStore();
+  const { totalCoins, highestLevelReached, startLevel } = useGameStore();
+
+  const resumeLevelIndex = Math.min(highestLevelReached + 1, LEVELS.length - 1);
+  const resumeLevelDisplay = LEVELS[resumeLevelIndex]?.level ?? 1;
+  const hasProgress = highestLevelReached >= 0;
 
   return (
     <div className="min-h-screen bg-black flex flex-col overflow-y-auto">
@@ -52,24 +56,50 @@ export function MenuPage() {
           50 Levels · 5 Phases · From Garage to Galaxy
         </motion.p>
         {totalCoins > 0 && (
-          <div className="relative mt-3 px-4 py-1.5 bg-yellow-900/40 border border-yellow-500/30 rounded-full">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 0.4 }}
+            className="relative mt-3 px-4 py-1.5 bg-yellow-900/40 border border-yellow-500/30 rounded-full"
+          >
             <span className="text-yellow-400 font-bold text-sm">💰 {totalCoins.toLocaleString()} coins</span>
-          </div>
+          </motion.div>
         )}
       </div>
 
-      {/* Start buttons */}
-      <div className="px-4 pb-2">
+      {/* Action buttons */}
+      <div className="px-4 pb-2 flex flex-col gap-2">
+        {/* Continue button — only shown when player has completed at least one level */}
+        {hasProgress && (
+          <motion.button
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.4 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={() => startLevel(resumeLevelIndex)}
+            className="w-full py-4 rounded-2xl font-black text-xl text-white border-2 border-cyan-400/60 relative overflow-hidden"
+            style={{ background: "linear-gradient(135deg, #003344, #005566)" }}
+          >
+            <motion.div
+              className="absolute inset-0 opacity-20"
+              animate={{ backgroundPosition: ["0% 50%", "100% 50%", "0% 50%"] }}
+              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+              style={{ background: "linear-gradient(90deg, transparent, #00E5FF55, transparent)", backgroundSize: "200% 100%" }}
+            />
+            <span className="relative">▶ Continue — Level {resumeLevelDisplay}</span>
+          </motion.button>
+        )}
+
         <motion.button
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.45 }}
+          transition={{ delay: hasProgress ? 0.5 : 0.45 }}
           whileTap={{ scale: 0.97 }}
           onClick={() => startLevel(0)}
           className="w-full py-4 rounded-2xl font-black text-xl text-black"
           style={{ background: "linear-gradient(135deg, #00E5FF, #0080FF)" }}
         >
-          ▶ Start Game
+          {hasProgress ? "↩ Restart from Level 1" : "▶ Start Game"}
         </motion.button>
       </div>
 
@@ -78,7 +108,12 @@ export function MenuPage() {
         <h2 className="text-white/40 text-xs uppercase tracking-widest text-center">5 Epic Phases</h2>
         {PHASES.map((p, i) => {
           const colors = PHASE_THEMES[p.theme];
-          const firstLevel = LEVELS.find(l => l.phase === p.phase)!;
+          const phaseStartIndex = (p.phase - 1) * 10;
+          const phaseHighest = Math.min(highestLevelReached - phaseStartIndex + 1, 10);
+          const phaseProgress = hasProgress && phaseHighest > 0
+            ? `${Math.min(phaseHighest, 10)}/10`
+            : null;
+
           return (
             <motion.button
               key={p.phase}
@@ -86,7 +121,7 @@ export function MenuPage() {
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.5 + i * 0.07 }}
               whileTap={{ scale: 0.98 }}
-              onClick={() => startLevel((p.phase - 1) * 10)}
+              onClick={() => startLevel(phaseStartIndex)}
               className="flex items-center gap-3 px-4 py-3 rounded-xl border text-left"
               style={{ borderColor: colors.primary + "44", background: colors.primary + "11" }}
             >
@@ -100,7 +135,16 @@ export function MenuPage() {
                 <div className="font-bold text-white text-sm truncate">{p.name}</div>
                 <div className="text-white/40 text-xs">Levels {p.levels}</div>
               </div>
-              <div className="text-white/30 text-xs">{p.theme === "silicon" || p.theme === "universe" ? "⚡Fast drain" : ""}</div>
+              <div className="flex flex-col items-end gap-0.5">
+                {phaseProgress && (
+                  <span className="text-[10px] font-bold" style={{ color: colors.primary }}>
+                    {phaseProgress} ✓
+                  </span>
+                )}
+                <span className="text-white/30 text-xs">
+                  {p.theme === "silicon" || p.theme === "universe" ? "⚡Fast" : ""}
+                </span>
+              </div>
               <span style={{ color: colors.primary }} className="font-bold text-sm">→</span>
             </motion.button>
           );
