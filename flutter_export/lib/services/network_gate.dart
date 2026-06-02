@@ -419,7 +419,7 @@ class _StaticNoise extends StatelessWidget {
 class _NoisePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final rng = Object.hashCode(size) ^ 0xDEADBEEF; // stable across frames
+    final rng = size.hashCode ^ 0xDEADBEEF; // stable across frames
     final paint = Paint();
     for (int i = 0; i < 200; i++) {
       // Deterministic pseudo-random from index
