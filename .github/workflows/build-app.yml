@@ -30,48 +30,81 @@ jobs:
           
           flutter clean
           
-          # 1. KACHRA SAAF (Sirf purani .gradle files, .kts safe rahengi)
+          # 1. PURANI GRADLE FILES HATA RAHE HAIN (KTS safe rahegi)
           rm -f android/settings.gradle
           rm -f android/build.gradle
           rm -f android/app/build.gradle
           
-          # 2. V1 TO V2 EMBEDDING FIX (Yeh ek line aapke error ko jad se khatam kar degi)
-          sed -i '/<\/application>/i \        <meta-data android:name="flutterEmbedding" android:value="2" />' android/app/src/main/AndroidManifest.xml || true
-          
-          # 3. KOTLIN FIX (.kts extension ke sath)
+          # 2. KOTLIN FIX (.kts extension ke sath)
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
           echo "android.newDsl=false" >> android/gradle.properties
           sed -i 's/1.9.22/2.0.0/g' android/settings.gradle.kts || true
           sed -i 's/1.9.24/2.0.0/g' android/settings.gradle.kts || true
           
-          # 4. ADS FIX (minSdk 21 .kts syntax mein)
+          # 3. ADS FIX (minSdk 21 .kts syntax mein)
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle.kts || true
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle.kts || true
           
           flutter pub add google_mobile_ads
           flutter pub get
           
-          # 5. GAME CODE SPELLING FIX
+          # 4. GAME CODE SPELLING FIX
           sed -i 's/navigationBarIconBrightness/systemNavigationBarIconBrightness/g' lib/main.dart || true
           sed -i 's/navigationBarColor/systemNavigationBarColor/g' lib/main.dart || true
           
-          # 6. ASLI FONTS
+          # 5. ASLI FONTS
           mkdir -p assets/fonts
           curl -L -o assets/fonts/Orbitron-Bold.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron-Bold.ttf"
           curl -L -o assets/fonts/Orbitron-Regular.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron-Regular.ttf"
           
-          # 7. CRASH / BLACK SCREEN FIX (Internet permissions & AdMob ID safe injection)
-          sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>' android/app/src/main/AndroidManifest.xml || true
-          sed -i '/<\/application>/i \        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-8566652140087308~1114269136"/>' android/app/src/main/AndroidManifest.xml || true
+          # 6. THE PERFECT MANIFEST FIX (Yeh V1 error aur Black Screen Crash dono ko jad se khatam karega)
+          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+              
+              <application
+                  android:label="Tech Tycoon Merge"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data android:name="io.flutter.embedding.android.NormalTheme" android:resource="@style/NormalTheme" />
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  
+                  <meta-data android:name="flutterEmbedding" android:value="2" />
+                  
+                  <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-8566652140087308~1114269136"/>
+              </application>
+              
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.VIEW" />
+                      <category android:name="android.intent.category.BROWSABLE" />
+                      <data android:scheme="https" />
+                  </intent>
+              </queries>
+          </manifest>
+          EOF
           
-          # 8. R8 COMPRESSOR FIX (.kts syntax mein Play Core dependency bina file tode)
+          # 7. R8 COMPRESSOR FIX (.kts syntax mein Play Core dependency)
           echo "" >> android/app/build.gradle.kts
           echo "dependencies {" >> android/app/build.gradle.kts
           echo "    implementation(\"com.google.android.play:core:1.10.3\")" >> android/app/build.gradle.kts
           echo "}" >> android/app/build.gradle.kts
           
-          # 9. FINAL APK BUILD
+          # 8. FINAL APK BUILD
           flutter build apk --release --no-shrink
           
           mkdir -p $GITHUB_WORKSPACE/output
@@ -82,3 +115,4 @@ jobs:
         with:
           name: Mera-Game-APK
           path: output/*.apk
+          
