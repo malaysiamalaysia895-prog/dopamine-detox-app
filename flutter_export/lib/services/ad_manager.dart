@@ -3,6 +3,33 @@
 // Tech Tycoon Merge
 // google_mobile_ads: ^5.1.0
 //
+// ════════════════════════════════════════════════════════════
+// AD MONETISATION STRATEGY — Anti-Fatigue Rules
+// ════════════════════════════════════════════════════════════
+//
+// Rule 1 — Grace Period
+//   No Interstitials for levels 1-3. First eligible level: 4.
+//   Let the player get hooked before showing any forced ads.
+//
+// Rule 2 — 3-Minute Frequency Cap
+//   Even when eligible (level ≥ 4), skip if < 180 s have elapsed
+//   since the last successfully-shown Interstitial.
+//   Tracked via _lastInterstitialShownAt (in-memory per session).
+//
+// Rule 3 — Rewarded ↔ Interstitial Mutual Exclusion
+//   If the player already watched a Rewarded Ad on the Victory
+//   screen (3× coins), the Interstitial is suppressed for that
+//   transition.  Never stack two ads back-to-back.
+//
+// Rule 4 — Gameplay Is Sacrosanct
+//   canShowInterstitial() is ONLY called when the player taps
+//   "Next Level" or "Restart Level". The timer never fires an ad
+//   proactively during active play.
+//
+// Rule 5 — Reward Validation
+//   Coins / Energy are granted ONLY inside onUserEarnedReward.
+//   No reward on skip, early close, or failed load.
+//
 // AndroidManifest.xml — inside <application>:
 //   <meta-data
 //     android:name="com.google.android.gms.ads.APPLICATION_ID"
@@ -16,14 +43,23 @@
 import 'package:flutter/foundation.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
-// ─── Real Ad Unit IDs ─────────────────────────────────────────────────────────
+// ─── Ad Policy Constants ──────────────────────────────────────────────────────
+
+/// Minimum level number at which Interstitials are permitted.
+/// Levels 1–3 are a grace period — no forced ads.
+const int _kInterstitialGraceLevel = 4;
+
+/// Minimum seconds between two Interstitial shows (frequency cap).
+const Duration _kInterstitialCooldown = Duration(seconds: 180);
+
+// ─── Ad Unit IDs ─────────────────────────────────────────────────────────────
 
 class AdIds {
   static const String appId             = 'ca-app-pub-8566652140087308~1114269136';
   static const String _rewardedReal     = 'ca-app-pub-8566652140087308/7306930941';
   static const String _interstitialReal = 'ca-app-pub-8566652140087308/3659026052';
 
-  // Google Test IDs
+  // Google Test IDs (used automatically in debug builds)
   static const String _rewardedTest     = 'ca-app-pub-3940256099942544/5224354917';
   static const String _interstitialTest = 'ca-app-pub-3940256099942544/1033173712';
 
@@ -46,6 +82,10 @@ class AdManager {
 
   VoidCallback? _pendingInterstitialDismiss;
 
+  /// Timestamp of the most-recently-shown Interstitial Ad.
+  /// null means no Interstitial has been shown this session.
+  DateTime? _lastInterstitialShownAt;
+
   // ── Init ──────────────────────────────────────────────────────────────────
 
   Future<void> initialize() async {
@@ -60,10 +100,57 @@ class AdManager {
     }
   }
 
+  // ── Interstitial Policy Gate ──────────────────────────────────────────────
+
+  /// Returns true ONLY when all anti-fatigue rules are satisfied.
+  ///
+  /// Call this ONCE per "Next Level" / "Restart Level" tap — never
+  /// proactively during gameplay.
+  ///
+  /// [levelNumber]       — the level the player just completed / is restarting.
+  /// [rewardedJustWatched] — true if the player voluntarily watched a Rewarded
+  ///                        Ad on the Victory screen for this transition.
+  bool canShowInterstitial(
+    int levelNumber, {
+    required bool rewardedJustWatched,
+  }) {
+    // Rule 1: Grace period — protect the first 3 levels
+    if (levelNumber < _kInterstitialGraceLevel) {
+      debugPrint(
+        '[Ad] Interstitial SKIPPED — grace period '
+        '(level $levelNumber < $_kInterstitialGraceLevel)',
+      );
+      return false;
+    }
+
+    // Rule 3: Mutual exclusion — never stack forced ad after opt-in rewarded
+    if (rewardedJustWatched) {
+      debugPrint(
+        '[Ad] Interstitial SKIPPED — rewarded ad already watched this victory',
+      );
+      return false;
+    }
+
+    // Rule 2: 3-minute frequency cap
+    if (_lastInterstitialShownAt != null) {
+      final elapsed = DateTime.now().difference(_lastInterstitialShownAt!);
+      if (elapsed < _kInterstitialCooldown) {
+        final remaining = _kInterstitialCooldown - elapsed;
+        debugPrint(
+          '[Ad] Interstitial SKIPPED — cooldown active '
+          '(${elapsed.inSeconds}s elapsed, ${remaining.inSeconds}s remaining)',
+        );
+        return false;
+      }
+    }
+
+    debugPrint('[Ad] Interstitial ALLOWED (level $levelNumber)');
+    return true;
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
   // REWARDED AD
-  // Used for: Zero Energy (+50⚡), Grid Full Rescue (delete 1 item),
-  //           Victory Multiplier (3× Coins), Time Extension (+60s).
+  // Rule 5: Reward granted ONLY inside onUserEarnedReward callback.
   // ══════════════════════════════════════════════════════════════════════════
 
   void _loadRewarded() {
@@ -84,7 +171,6 @@ class AdManager {
           onAdFailedToLoad: (err) {
             _rewardedLoading = false;
             debugPrint('[Ad] Rewarded failed to load: $err');
-            // Retry after 10 seconds (reduced from 30s for faster recovery)
             Future.delayed(const Duration(seconds: 10), _loadRewarded);
           },
         ),
@@ -101,7 +187,7 @@ class AdManager {
         try { ad.dispose(); } catch (_) {}
         _rewardedAd = null;
         _loadRewarded();
-        debugPrint('[Ad] Rewarded dismissed (no reward earned)');
+        debugPrint('[Ad] Rewarded dismissed (no reward — user closed early)');
       },
       onAdFailedToShowFullScreenContent: (ad, err) {
         try { ad.dispose(); } catch (_) {}
@@ -114,15 +200,13 @@ class AdManager {
 
   /// Show a Rewarded Ad.
   ///
-  /// [onReward] fires ONLY when the user completes the full ad view.
+  /// [onReward] fires ONLY when the user completes the full ad view
+  /// (AdMob onUserEarnedReward callback). Never fires on skip or failure.
+  ///
   /// Waits up to 5 s for SDK init, then up to 3 s for the ad to load.
-  /// Returns true if the ad was shown, false if not ready.
+  /// Returns true if the ad was shown, false otherwise.
   Future<bool> showRewarded({required VoidCallback onReward}) async {
-    // ROOT CAUSE FIX: MobileAds.initialize() can take 1-4 s on cold start.
-    // If the user taps "Watch Ad" before it finishes, _initialized=false,
-    // _loadRewarded() was never called, _rewardedLoading=false → the poll
-    // below is skipped entirely → ad returns "not ready" forever.
-    // Solution: wait here until the SDK reports ready (max 5 s).
+    // Wait up to 5 s for the SDK to finish initialising on cold start.
     if (!_initialized) {
       debugPrint('[Ad] SDK not yet initialized — waiting up to 5s…');
       for (int i = 0; i < 25; i++) {
@@ -134,10 +218,8 @@ class AdManager {
       debugPrint('[Ad] SDK failed to initialize — skipping rewarded ad');
       return false;
     }
-    // Kick off loading if it somehow hasn't started yet
     if (_rewardedAd == null && !_rewardedLoading) _loadRewarded();
 
-    // If ad is actively loading, wait up to 3 s for it to become ready
     if (_rewardedAd == null && _rewardedLoading) {
       debugPrint('[Ad] Rewarded loading — waiting up to 3s…');
       for (int i = 0; i < 15; i++) {
@@ -147,7 +229,7 @@ class AdManager {
     }
 
     if (_rewardedAd == null) {
-      debugPrint('[Ad] Rewarded not ready — skipping');
+      debugPrint('[Ad] Rewarded not ready — skipping (no reward given)');
       if (!_rewardedLoading) _loadRewarded();
       return false;
     }
@@ -156,7 +238,8 @@ class AdManager {
     _rewardedAd = null;
     try {
       ad.show(onUserEarnedReward: (_, reward) {
-        debugPrint('[Ad] Reward earned ✓');
+        // Rule 5 enforcement: reward is granted here and ONLY here.
+        debugPrint('[Ad] Reward earned ✓ (onUserEarnedReward)');
         try { onReward(); } catch (e) {
           debugPrint('[Ad] onReward callback threw: $e');
         }
@@ -172,8 +255,9 @@ class AdManager {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // INTERSTITIAL AD — Rule 4: fires on even-numbered level completions
-  // CRITICAL: next level loads ONLY inside onAdDismissedFullScreenContent
+  // INTERSTITIAL AD
+  // CRITICAL: next level loads ONLY inside onAdDismissedFullScreenContent.
+  // Timestamp recorded the moment ad.show() succeeds to start the cooldown.
   // ══════════════════════════════════════════════════════════════════════════
 
   void _loadInterstitial() {
@@ -194,9 +278,8 @@ class AdManager {
           onAdFailedToLoad: (err) {
             _interstitialLoading = false;
             debugPrint('[Ad] Interstitial failed to load: $err');
-            // Still fire the pending callback so the player is never permanently blocked
+            // Fire pending callback so player is never permanently blocked
             _firePendingDismiss();
-            // Retry after 10 seconds (reduced from 30s for faster recovery)
             Future.delayed(const Duration(seconds: 10), _loadInterstitial);
           },
         ),
@@ -211,7 +294,7 @@ class AdManager {
   void _setupInterstitialCallbacks() {
     _interstitialAd?.fullScreenContentCallback = FullScreenContentCallback(
       onAdDismissedFullScreenContent: (ad) {
-        debugPrint('[Ad] Interstitial dismissed — loading next level');
+        debugPrint('[Ad] Interstitial dismissed — proceeding to next screen');
         try { ad.dispose(); } catch (_) {}
         _interstitialAd = null;
         _firePendingDismiss();
@@ -237,11 +320,14 @@ class AdManager {
     }
   }
 
-  /// Show Interstitial for Rule 4. [onDismiss] fires after the ad is closed.
+  /// Show Interstitial Ad. [onDismiss] fires after the ad is closed.
+  ///
+  /// IMPORTANT: Callers MUST check [canShowInterstitial] before calling this.
+  /// This method does NOT enforce policy — it just shows the loaded ad.
+  ///
   /// Waits up to 5 s for SDK init, then up to 3 s for the ad to load.
-  /// CRITICAL: caller must NOT load the next level before onDismiss fires.
+  /// Returns true if the ad was shown. Always eventually fires [onDismiss].
   Future<bool> showInterstitial({required VoidCallback onDismiss}) async {
-    // Same SDK-init wait as showRewarded — see comment there for root cause.
     if (!_initialized) {
       debugPrint('[Ad] SDK not yet initialized — waiting up to 5s…');
       for (int i = 0; i < 25; i++) {
@@ -254,10 +340,8 @@ class AdManager {
       try { onDismiss(); } catch (_) {}
       return false;
     }
-    // Kick off loading if it somehow hasn't started yet
     if (_interstitialAd == null && !_interstitialLoading) _loadInterstitial();
 
-    // If ad is actively loading, wait up to 3 s for it to become ready
     if (_interstitialAd == null && _interstitialLoading) {
       debugPrint('[Ad] Interstitial loading — waiting up to 3s…');
       for (int i = 0; i < 15; i++) {
@@ -278,12 +362,16 @@ class AdManager {
     _pendingInterstitialDismiss = onDismiss;
     final ad = _interstitialAd!;
     _interstitialAd = null;
-    // NOTE: Do NOT call _loadInterstitial() here.
-    // The dismiss/failedToShow callbacks already call it after the ad closes.
+
     try {
+      // Record the timestamp the INSTANT the ad fires — this starts the
+      // 3-minute cooldown clock regardless of how long the user watches it.
+      _lastInterstitialShownAt = DateTime.now();
       ad.show();
     } catch (e) {
       debugPrint('[Ad] showInterstitial() show() threw: $e');
+      // Roll back timestamp — the ad never actually showed
+      _lastInterstitialShownAt = null;
       try { ad.dispose(); } catch (_) {}
       _firePendingDismiss();
       _loadInterstitial();
@@ -292,14 +380,11 @@ class AdManager {
     return true;
   }
 
-  /// Pre-warm the interstitial immediately when an even-numbered level
-  /// completes — while the player is still on the Victory dialog (reading
-  /// story text, tapping the 3× coin ad, etc.).  By the time they hit
-  /// "Next Level" the download is already done, so Rule 4 fires instantly
-  /// instead of making them wait for the 3-second loading poll.
+  /// Pre-warm the interstitial while the player is on the Victory dialog.
   ///
-  /// Safe to call at any time: if the ad is already loaded or loading,
-  /// _loadInterstitial() is a no-op.
+  /// Call this when a level completes and the level number >= 4.
+  /// By the time the player taps "Next Level", the download is already done.
+  /// Safe to call at any time: no-op if already loaded or loading.
   void prewarmInterstitial() => _loadInterstitial();
 
   void dispose() {
