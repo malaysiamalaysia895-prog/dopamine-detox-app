@@ -10,6 +10,7 @@ import '../models/models.dart';
 import '../providers/game_provider.dart';
 import '../themes/phase_themes.dart';
 import '../painters/painters.dart';
+import 'settings_screen.dart';
 
 class LevelMapScreen extends ConsumerWidget {
   const LevelMapScreen({super.key});
@@ -65,6 +66,20 @@ class _Header extends ConsumerWidget {
           ),
           const Spacer(),
           _CoinBadge(coins: totalCoins),
+          const SizedBox(width: 10),
+          // Settings gear
+          GestureDetector(
+            onTap: () => showSettingsSheet(context),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.08),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white12),
+              ),
+              child: const Icon(Icons.settings_outlined, color: Colors.white60, size: 18),
+            ),
+          ),
         ],
       ),
     );

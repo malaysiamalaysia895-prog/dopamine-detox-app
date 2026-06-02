@@ -14,6 +14,8 @@ import '../themes/phase_themes.dart';
 import '../painters/painters.dart';
 import '../services/ad_manager.dart';
 import '../services/audio_manager.dart';
+import '../providers/settings_provider.dart';
+import 'settings_screen.dart';
 
 class GameBoardScreen extends ConsumerWidget {
   const GameBoardScreen({super.key});
@@ -104,10 +106,39 @@ class _TopBar extends ConsumerWidget {
                   style: const TextStyle(color: Color(0xFFFFD700), fontWeight: FontWeight.w900, fontSize: 16)),
               ]),
               const SizedBox(width: 6),
-              // Mute
+              // Mute toggle — reactive to settingsProvider
+              Consumer(builder: (_, ref2, __) {
+                final muted = ref2.watch(settingsProvider).muted;
+                return GestureDetector(
+                  onTap: () => ref2.read(settingsProvider.notifier).setMuted(!muted),
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: muted
+                          ? Colors.red.withOpacity(0.2)
+                          : Colors.white.withOpacity(0.08),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      muted ? Icons.volume_off : Icons.volume_up,
+                      color: muted ? Colors.red : Colors.white38,
+                      size: 16,
+                    ),
+                  ),
+                );
+              }),
+              const SizedBox(width: 6),
+              // Settings gear
               GestureDetector(
-                onTap: AudioManager.instance.toggleMute,
-                child: const Icon(Icons.volume_up, color: Colors.white38, size: 18),
+                onTap: () => showSettingsSheet(context),
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.08),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.settings_outlined, color: Colors.white38, size: 16),
+                ),
               ),
             ],
           ),
