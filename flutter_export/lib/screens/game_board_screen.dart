@@ -483,10 +483,11 @@ class _GridCellState extends ConsumerState<_GridCell>
       for (final anim in next) {
         if (anim.col == widget.col && anim.row == widget.row) {
           switch (anim.type) {
-            case AnimType.spawn:   _triggerSpawn();  break;
-            case AnimType.merge:   _triggerMerge();  break;
-            case AnimType.error:   _triggerError();  break;
-            case AnimType.unlock:  _triggerSpawn();  break;
+            case AnimType.spawn:      _triggerSpawn();  break;
+            case AnimType.merge:      _triggerMerge();  break;
+            case AnimType.error:      _triggerError();  break;
+            case AnimType.unlock:     _triggerSpawn();  break;
+            case AnimType.hazardHit:  break; // handled by _HazardFlashOverlay
           }
           ref.read(gameProvider.notifier).consumeAnimation(anim);
         }
