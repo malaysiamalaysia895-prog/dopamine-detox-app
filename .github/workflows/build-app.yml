@@ -38,13 +38,11 @@ jobs:
           # 2. Fresh Android files banayein
           flutter create .
           
-          # 3. KOTLIN & DSL FIX (ASLI SOLUTION)
+          # 3. KOTLIN & DSL FIX (Jo successfully kaam kar gaya)
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
-          # Naye DSL error ko rokne ke liye isko false set kiya:
           echo "android.newDsl=false" >> android/gradle.properties
           
-          # settings.gradle file ke andar jaakar 1.9.22 ko 2.0.0 se automatically badalna
           sed -i 's/1.9.22/2.0.0/g' android/settings.gradle || true
           sed -i 's/1.9.24/2.0.0/g' android/settings.gradle || true
           sed -i 's/ext.kotlin_version =.*/ext.kotlin_version = "2.0.0"/g' android/build.gradle || true
@@ -58,7 +56,11 @@ jobs:
           flutter pub add google_mobile_ads
           flutter pub get
           
-          # 5. FINAL APK BUILD
+          # 5. DART SPELLING FIX (Jo current error ko automatically theek kar dega)
+          sed -i 's/navigationBarIconBrightness/systemNavigationBarIconBrightness/g' lib/main.dart || true
+          sed -i 's/navigationBarColor/systemNavigationBarColor/g' lib/main.dart || true
+          
+          # 6. FINAL APK BUILD
           flutter build apk --release --no-shrink
           
           mkdir -p $GITHUB_WORKSPACE/output
