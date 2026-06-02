@@ -115,9 +115,28 @@ class AdManager {
   /// Show a Rewarded Ad.
   ///
   /// [onReward] fires ONLY when the user completes the full ad view.
-  /// If the ad is still loading, waits up to 3 seconds before giving up.
+  /// Waits up to 5 s for SDK init, then up to 3 s for the ad to load.
   /// Returns true if the ad was shown, false if not ready.
   Future<bool> showRewarded({required VoidCallback onReward}) async {
+    // ROOT CAUSE FIX: MobileAds.initialize() can take 1-4 s on cold start.
+    // If the user taps "Watch Ad" before it finishes, _initialized=false,
+    // _loadRewarded() was never called, _rewardedLoading=false → the poll
+    // below is skipped entirely → ad returns "not ready" forever.
+    // Solution: wait here until the SDK reports ready (max 5 s).
+    if (!_initialized) {
+      debugPrint('[Ad] SDK not yet initialized — waiting up to 5s…');
+      for (int i = 0; i < 25; i++) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        if (_initialized) break;
+      }
+    }
+    if (!_initialized) {
+      debugPrint('[Ad] SDK failed to initialize — skipping rewarded ad');
+      return false;
+    }
+    // Kick off loading if it somehow hasn't started yet
+    if (_rewardedAd == null && !_rewardedLoading) _loadRewarded();
+
     // If ad is actively loading, wait up to 3 s for it to become ready
     if (_rewardedAd == null && _rewardedLoading) {
       debugPrint('[Ad] Rewarded loading — waiting up to 3s…');
@@ -219,9 +238,25 @@ class AdManager {
   }
 
   /// Show Interstitial for Rule 4. [onDismiss] fires after the ad is closed.
-  /// If the ad is still loading, waits up to 3 seconds before falling through.
+  /// Waits up to 5 s for SDK init, then up to 3 s for the ad to load.
   /// CRITICAL: caller must NOT load the next level before onDismiss fires.
   Future<bool> showInterstitial({required VoidCallback onDismiss}) async {
+    // Same SDK-init wait as showRewarded — see comment there for root cause.
+    if (!_initialized) {
+      debugPrint('[Ad] SDK not yet initialized — waiting up to 5s…');
+      for (int i = 0; i < 25; i++) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        if (_initialized) break;
+      }
+    }
+    if (!_initialized) {
+      debugPrint('[Ad] SDK failed to initialize — skipping interstitial');
+      try { onDismiss(); } catch (_) {}
+      return false;
+    }
+    // Kick off loading if it somehow hasn't started yet
+    if (_interstitialAd == null && !_interstitialLoading) _loadInterstitial();
+
     // If ad is actively loading, wait up to 3 s for it to become ready
     if (_interstitialAd == null && _interstitialLoading) {
       debugPrint('[Ad] Interstitial loading — waiting up to 3s…');
