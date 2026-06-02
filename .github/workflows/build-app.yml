@@ -22,27 +22,26 @@ jobs:
         with:
           channel: 'stable'
           
-      - name: Build with Google Ads Support
+      - name: Update Ads & Build App
         run: |
           PUBSPEC=$(find . -name "pubspec.yaml" | head -n 1)
           DIR=$(dirname "$PUBSPEC")
           cd "$DIR"
           
-          # 1. Flutter clean karein taaki purani cache hat jaye
+          # 1. Purani cache saaf karein
           flutter clean
           
-          # 2. Android directory ko fresh generate karein
+          # 2. SABSE ZAROORI: Ads wale package ko automatically update karein
+          flutter pub add google_mobile_ads
+          
+          # 3. Naye system ke hisaab se Android files banayein
           flutter create .
           
-          # 3. Dependencies update karein
+          # 4. Saare naye packages download karein
           flutter pub get
           
-          # 4. Ads ke liye 'android/gradle.properties' mein property add karein
-          echo "android.useAndroidX=true" >> android/gradle.properties
-          echo "android.enableJetifier=true" >> android/gradle.properties
-          
-          # 5. Final APK Build
-          flutter build apk --release
+          # 5. Final APK Build karein
+          flutter build apk --release --no-shrink
           
           mkdir -p $GITHUB_WORKSPACE/output
           find build -name "*.apk" -exec cp {} $GITHUB_WORKSPACE/output/ \;
