@@ -525,10 +525,8 @@ class GameNotifier extends StateNotifier<GameState> {
       AudioManager.instance.resumeBgm();
     });
     if (!shown) {
-      state = state.copyWith(
-        energy:       min(20, state.maxEnergy),
-        activeDialog: ActiveDialog.none,
-      );
+      // Ad not ready — do NOT give free energy.
+      // Keep the dialog open so the player can retry once the ad loads.
       AudioManager.instance.resumeBgm();
     }
   }

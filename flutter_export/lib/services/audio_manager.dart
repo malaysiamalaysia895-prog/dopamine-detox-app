@@ -13,7 +13,6 @@ class AudioManager with WidgetsBindingObserver {
   static final AudioManager instance = AudioManager._();
 
   final AudioPlayer _bgm = AudioPlayer();
-  final AudioPlayer _sfx = AudioPlayer();
 
   String? _currentBgmAsset;
   bool _bgmPaused = false;
@@ -27,7 +26,6 @@ class AudioManager with WidgetsBindingObserver {
       WidgetsBinding.instance.addObserver(this);
       await _bgm.setReleaseMode(ReleaseMode.loop);
       await _bgm.setVolume(0.6);
-      await _sfx.setVolume(1.0);
       _initialized = true;
     } catch (e) {
       debugPrint('[Audio] initialize() failed: $e');
@@ -82,6 +80,7 @@ class AudioManager with WidgetsBindingObserver {
   }
 
   // ── Public SFX controls ───────────────────────────────────────────────────
+  // Each SFX creates its own AudioPlayer so sounds never cut each other off.
 
   Future<void> playSpawnPop()    => _playSfx('audio/spawn_pop.mp3');
   Future<void> playMergeSnap()   => _playSfx('audio/merge_snap.mp3');
@@ -93,7 +92,14 @@ class AudioManager with WidgetsBindingObserver {
   Future<void> _playSfx(String asset) async {
     if (!_initialized || _muted) return;
     try {
-      await _sfx.play(AssetSource(asset));
+      // Create a fresh player for every SFX call so sounds never
+      // interrupt each other (e.g. rapid spawns/merges).
+      final player = AudioPlayer();
+      await player.play(AssetSource(asset));
+      // Dispose the player automatically once the sound finishes.
+      player.onPlayerComplete.first
+          .then((_) => player.dispose())
+          .catchError((_) => player.dispose());
     } catch (e) {
       debugPrint('[Audio] _playSfx($asset) failed: $e');
     }
@@ -107,10 +113,8 @@ class AudioManager with WidgetsBindingObserver {
     try {
       if (_muted) {
         _bgm.setVolume(0);
-        _sfx.setVolume(0);
       } else {
         _bgm.setVolume(0.6);
-        _sfx.setVolume(1.0);
         if (!_bgmPaused && _currentBgmAsset != null) _bgm.resume();
       }
     } catch (e) {
@@ -131,7 +135,6 @@ class AudioManager with WidgetsBindingObserver {
         case AppLifecycleState.inactive:
         case AppLifecycleState.detached:
           _bgm.pause();
-          _sfx.pause();
           break;
         case AppLifecycleState.resumed:
           if (!_bgmPaused && !_muted && _currentBgmAsset != null) {
@@ -150,7 +153,6 @@ class AudioManager with WidgetsBindingObserver {
     try {
       WidgetsBinding.instance.removeObserver(this);
       _bgm.dispose();
-      _sfx.dispose();
     } catch (e) {
       debugPrint('[Audio] dispose() failed: $e');
     }

@@ -84,7 +84,8 @@ class AdManager {
           onAdFailedToLoad: (err) {
             _rewardedLoading = false;
             debugPrint('[Ad] Rewarded failed to load: $err');
-            Future.delayed(const Duration(seconds: 30), _loadRewarded);
+            // Retry after 10 seconds (reduced from 30s for faster recovery)
+            Future.delayed(const Duration(seconds: 10), _loadRewarded);
           },
         ),
       );
@@ -114,13 +115,24 @@ class AdManager {
   /// Show a Rewarded Ad.
   ///
   /// [onReward] fires ONLY when the user completes the full ad view.
-  /// Returns true if the ad was shown, false if not ready (fallback fires automatically).
+  /// If the ad is still loading, waits up to 3 seconds before giving up.
+  /// Returns true if the ad was shown, false if not ready.
   Future<bool> showRewarded({required VoidCallback onReward}) async {
+    // If ad is actively loading, wait up to 3 s for it to become ready
+    if (_rewardedAd == null && _rewardedLoading) {
+      debugPrint('[Ad] Rewarded loading — waiting up to 3s…');
+      for (int i = 0; i < 15; i++) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        if (_rewardedAd != null) break;
+      }
+    }
+
     if (_rewardedAd == null) {
       debugPrint('[Ad] Rewarded not ready — skipping');
-      _loadRewarded();
+      if (!_rewardedLoading) _loadRewarded();
       return false;
     }
+
     final ad = _rewardedAd!;
     _rewardedAd = null;
     try {
@@ -165,7 +177,8 @@ class AdManager {
             debugPrint('[Ad] Interstitial failed to load: $err');
             // Still fire the pending callback so the player is never permanently blocked
             _firePendingDismiss();
-            Future.delayed(const Duration(seconds: 30), _loadInterstitial);
+            // Retry after 10 seconds (reduced from 30s for faster recovery)
+            Future.delayed(const Duration(seconds: 10), _loadInterstitial);
           },
         ),
       );
@@ -206,16 +219,27 @@ class AdManager {
   }
 
   /// Show Interstitial for Rule 4. [onDismiss] fires after the ad is closed.
+  /// If the ad is still loading, waits up to 3 seconds before falling through.
   /// CRITICAL: caller must NOT load the next level before onDismiss fires.
   Future<bool> showInterstitial({required VoidCallback onDismiss}) async {
+    // If ad is actively loading, wait up to 3 s for it to become ready
+    if (_interstitialAd == null && _interstitialLoading) {
+      debugPrint('[Ad] Interstitial loading — waiting up to 3s…');
+      for (int i = 0; i < 15; i++) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        if (_interstitialAd != null) break;
+      }
+    }
+
     if (_interstitialAd == null) {
       debugPrint('[Ad] Interstitial not ready — passing through');
       try { onDismiss(); } catch (e) {
         debugPrint('[Ad] showInterstitial fallback onDismiss threw: $e');
       }
-      _loadInterstitial();
+      if (!_interstitialLoading) _loadInterstitial();
       return false;
     }
+
     _pendingInterstitialDismiss = onDismiss;
     final ad = _interstitialAd!;
     _interstitialAd = null;

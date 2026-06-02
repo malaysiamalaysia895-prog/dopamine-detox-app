@@ -875,16 +875,18 @@ class _ZeroEnergyDialog extends ConsumerWidget {
       const Text('Watch a short video to recharge +50 ⚡',
         textAlign: TextAlign.center,
         style: TextStyle(color: Colors.white54, fontSize: 14)),
-      const SizedBox(height: 24),
+      const SizedBox(height: 4),
+      const Text('No ad? Tap below to retry or restart.',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: Colors.white24, fontSize: 11)),
+      const SizedBox(height: 20),
       _FullButton('📺 Watch Ad for +50 ⚡',
         color: const Color(0xFFFFD700), dark: true,
         onTap: () => ref.read(gameProvider.notifier).watchAdForEnergy()),
       const SizedBox(height: 10),
-      TextButton(
-        onPressed: () => ref.read(gameProvider.notifier)
-            .dismissVictory(),  // reuse — just closes dialog
-        child: const Text('Maybe Later', style: TextStyle(color: Colors.white30)),
-      ),
+      _FullButton('🔄 Restart Level',
+        color: Colors.white10, dark: false,
+        onTap: () => ref.read(gameProvider.notifier).retryLevel()),
     ]);
   }
 }
