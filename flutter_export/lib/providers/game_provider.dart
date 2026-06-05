@@ -12,6 +12,7 @@ import '../models/models.dart';
 import '../services/audio_manager.dart';
 import '../services/ad_manager.dart';
 import '../themes/phase_themes.dart';
+import '../controllers/malware_controller.dart';
 
 // ─── Persistence Keys ─────────────────────────────────────────────────────────
 
@@ -220,6 +221,10 @@ class GameNotifier extends StateNotifier<GameState> {
 
   Timer? _timer;
   Timer? _glitchTeleportTimer;
+  final MalwareController _malware = MalwareController();
+
+  /// Exposed so the UI layer can wire [MalwareOverlay] without a separate Provider.
+  MalwareController get malwareController => _malware;
   final Random _rng = Random();
 
   /// True if the player voluntarily watched the Rewarded Ad (3× coins) on the
@@ -257,6 +262,7 @@ class GameNotifier extends StateNotifier<GameState> {
   void goToMap() {
     _timer?.cancel();
     _stopGlitchTimer();
+    _malware.reset();
     final level = state.currentLevel;
     state = state.copyWith(screen: AppScreen.map, timerActive: false);
     AudioManager.instance.playBgm(themeOf(level.phase).bgmAsset);
@@ -592,6 +598,42 @@ class GameNotifier extends StateNotifier<GameState> {
     );
     if (cfg.hasTimer) _startTimer();
     if (_glitchCountForLevel(cfg.number) > 0) _startGlitchTimer();
+
+    // ── Malware boss trigger ─────────────────────────────────────────────────
+    // Fires here (after story dismiss) so the player has full access to the
+    // board before the 20-second countdown starts.  Level 5 enters tutorial
+    // phase first (game paused until player merges or taps Skip).
+    final lvlNum = cfg.number;
+    if (kMalwareLevels.containsKey(lvlNum)) {
+      // Find a matching item pair to highlight in the L5 tutorial.
+      (int, int)? tutFrom;
+      (int, int)? tutTo;
+      if (lvlNum == 5) {
+        outer:
+        for (int c = 0; c < cfg.gridCols; c++) {
+          for (int r = 0; r < cfg.gridRows; r++) {
+            final id = state.grid[c][r].itemId;
+            if (id == null) continue;
+            for (int c2 = 0; c2 < cfg.gridCols; c2++) {
+              for (int r2 = 0; r2 < cfg.gridRows; r2++) {
+                if (c2 == c && r2 == r) continue;
+                if (state.grid[c2][r2].itemId == id) {
+                  tutFrom = (c, r);
+                  tutTo   = (c2, r2);
+                  break outer;
+                }
+              }
+            }
+          }
+        }
+      }
+      _malware.triggerForLevel(
+        lvlNum,
+        onClearGrid: clearAllItems,
+        tutFrom: tutFrom,
+        tutTo:   tutTo,
+      );
+    }
   }
 
   // ── Spawn Item ────────────────────────────────────────────────────────────
@@ -731,6 +773,15 @@ class GameNotifier extends StateNotifier<GameState> {
     state = state.copyWith(grid: newGrid, pendingAnimations: anims);
 
     AudioManager.instance.playMergeSnap();
+
+    // ── Malware boss hook ────────────────────────────────────────────────────
+    // Level 5 tutorial: first merge by the player starts the countdown AND
+    // counts toward the required merge total.
+    // All other boss levels / subsequent merges: just increment the counter.
+    if (_malware.phase == MalwarePhase.tutorial) {
+      _malware.startAfterTutorial(); // phase → active, countdown begins
+    }
+    _malware.onItemMerged();         // increments mergesDone (only when active)
   }
 
   void _unlockAdjacent(List<List<GridCell>> grid, int col, int row) {
@@ -779,9 +830,25 @@ class GameNotifier extends StateNotifier<GameState> {
 
   // ── Level Complete ────────────────────────────────────────────────────────
 
+  // ── Clear All Items (Malware loss punishment) ─────────────────────────────
+
+  void clearAllItems() {
+    final cfg     = state.currentLevel;
+    final newGrid = _cloneGrid();
+    for (int c = 0; c < cfg.gridCols; c++) {
+      for (int r = 0; r < cfg.gridRows; r++) {
+        if (newGrid[c][r].itemId != null) {
+          newGrid[c][r] = newGrid[c][r].clearItem();
+        }
+      }
+    }
+    state = state.copyWith(grid: newGrid);
+  }
+
   void _onLevelComplete() {
     _timer?.cancel();
     _stopGlitchTimer();
+    _malware.reset();
     AudioManager.instance.pauseBgm();
     AudioManager.instance.playVictory();
 
@@ -1039,6 +1106,7 @@ class GameNotifier extends StateNotifier<GameState> {
   void dispose() {
     _timer?.cancel();
     _stopGlitchTimer();
+    _malware.dispose();
     super.dispose();
   }
 }

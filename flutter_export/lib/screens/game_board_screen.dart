@@ -15,6 +15,7 @@ import '../painters/painters.dart';
 import '../services/ad_manager.dart';
 import '../services/audio_manager.dart';
 import '../providers/settings_provider.dart';
+import '../widgets/malware_overlay.dart';
 import 'settings_screen.dart';
 
 class GameBoardScreen extends ConsumerWidget {
@@ -48,6 +49,8 @@ class GameBoardScreen extends ConsumerWidget {
                   ),
                   // Hazard hit flash — full-screen red blip
                   const _HazardFlashOverlay(),
+                  // Malware Boss overlay — active on levels 5, 7, 9, 10
+                  _MalwareBossOverlay(),
                   // Dialog overlay layer
                   _DialogLayer(theme: theme),
                 ],
@@ -1578,6 +1581,21 @@ class _FullButton extends StatelessWidget {
         ),
         child: Text(label),
       ),
+    );
+  }
+}
+
+// ─── Malware Boss Overlay ─────────────────────────────────────────────────────
+
+/// Sits above the grid in the Stack. Reads the MalwareController directly from
+/// the GameNotifier (no extra Provider needed) and renders the correct phase UI.
+class _MalwareBossOverlay extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.read(gameProvider.notifier).malwareController;
+    return MalwareOverlay(
+      controller: controller,
+      onTutorialSkip: () => controller.startAfterTutorial(),
     );
   }
 }
