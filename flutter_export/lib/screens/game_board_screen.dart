@@ -557,6 +557,23 @@ class _GridCellState extends ConsumerState<_GridCell>
           );
         },
       );
+    } else if (cell.isHazard || cell.isGlitch || cell.isMystery) {
+      // Obstacle cells that react when items are dragged onto them.
+      // Without this DragTarget these cells receive no drop events and
+      // obstacle effects (hazard penalty, glitch buzz, mystery-box reveal)
+      // never fire — they only fired on direct tap.  This is the bug fix.
+      cellBody = DragTarget<_DragData>(
+        onWillAcceptWithDetails: (_) => true,
+        onLeave: (_) => setState(() => _highlighted = false),
+        onAcceptWithDetails: (details) {
+          setState(() => _highlighted = false);
+          ref.read(gameProvider.notifier).handleDrag(
+            details.data.col, details.data.row,
+            toCol: widget.col, toRow: widget.row,
+          );
+        },
+        builder: (ctx, candidates, rejected) => decoration,
+      );
     }
 
     return AnimatedBuilder(
