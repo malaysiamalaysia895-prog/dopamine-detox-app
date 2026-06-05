@@ -885,6 +885,23 @@ class _GridCellState extends ConsumerState<_GridCell>
         },
       );
     }
+    // ── Hazard / Decoy obstacle cells — drag target ───────────────────────────
+    // BUG FIX: these cells had no DragTarget so drops were silently ignored.
+    // hazardTrap → tapHazard penalty, glitchedDecoy → tapDecoy penalty.
+    else if (cell.isHazard || cell.isDecoy) {
+      cellBody = DragTarget<_DragData>(
+        onWillAcceptWithDetails: (_) => true,
+        onLeave: (_) => setState(() => _highlighted = false),
+        onAcceptWithDetails: (details) {
+          setState(() => _highlighted = false);
+          ref.read(gameProvider.notifier).handleDrag(
+            details.data.col, details.data.row,
+            toCol: widget.col, toRow: widget.row,
+          );
+        },
+        builder: (ctx, candidates, rejected) => decoration,
+      );
+    }
 
     // ── Merge glow ring overlay ───────────────────────────────────────────────
     final withGlow = AnimatedBuilder(
