@@ -700,8 +700,7 @@ class GameNotifier extends StateNotifier<GameState> {
     final to = state.grid[toCol][toRow];
 
     if (to.isBlocked) {
-      // Glitch hazard: player tried to drag/merge an item onto it — energy penalty.
-      // All other blocked obstacles (web, crate, blackhole) → silent reject.
+      // Glitch hazard: player dragged an item onto it — energy penalty.
       if (to.obstacle == ObstacleType.glitchHazard) {
         AudioManager.instance.playErrorBuzz();
         final newEnergy = (state.energy - 20).clamp(0, state.maxEnergy);
@@ -723,6 +722,17 @@ class GameNotifier extends StateNotifier<GameState> {
           );
         }
       }
+      // Hazard Trap: dragging an item onto it triggers the same penalty as tapping it.
+      // BUG FIX: previously this fell through silently; now it fires tapHazard.
+      else if (to.obstacle == ObstacleType.hazardTrap) {
+        tapHazard(toCol, toRow);
+      }
+      // Mystery Box: dragging an item onto it triggers the same reward/penalty as tapping.
+      // BUG FIX: previously this fell through silently; now it fires tapMysteryBox.
+      else if (to.obstacle == ObstacleType.mysteryBox) {
+        tapMysteryBox(toCol, toRow);
+      }
+      // All other blocked obstacles (web, crate, blackhole) → silent reject.
       return;
     }
 
