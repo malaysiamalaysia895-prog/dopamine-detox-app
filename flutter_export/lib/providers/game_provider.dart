@@ -1,18 +1,125 @@
-    if (to.isBlocked) {
-      // Glitch hazard: player dragged an item onto it — energy penalty.
-      // ===
-      // Hazard Trap: dragging an item onto it triggers the same penalty as tapping.
-      // BUG FIX: previously fell through silently; now fires tapHazard.
-      else if (to.obstacle == ObstacleType.hazardTrap) {
-        tapHazard(toCol, toRow);
-      }
-      // Mystery Box: dragging triggers same reward/penalty as tapping.
-      // BUG FIX: previously fell through silently; now fires tapMysteryBox.
-      else if (to.obstacle == ObstacleType.mysteryBox) {
-        tapMysteryBox(toCol, toRow);
-      }
-      // All other blocked obstacles (web, crate, blackhole) → silent reject.
-      return;
+// ============================================================
+// game_provider.dart — Full Riverpod Game State
+// Tech Tycoon Merge
+// ============================================================
+
+import 'dart:async';
+import 'dart:math';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../models/models.dart';
+import '../services/audio_manager.dart';
+import '../services/ad_manager.dart';
+import '../themes/phase_themes.dart';
+
+// ─── Persistence Keys ─────────────────────────────────────────────────────────
+
+const _kHighestLevel = 'highest_unlocked_level';
+const _kTotalCoins   = 'total_coins';
+
+// ─── Popup / Dialog Type ──────────────────────────────────────────────────────
+
+enum ActiveDialog {
+  none,
+  story,
+  zeroEnergy,
+  gridFull,
+  victory,
+  timeFail,
+  gameBeaten,
+}
+
+// ─── Pending Animation ────────────────────────────────────────────────────────
+
+class PendingAnimation {
+  final int col, row;
+  final AnimType type;
+  const PendingAnimation(this.col, this.row, this.type);
+}
+
+enum AnimType { spawn, merge, error, unlock, hazardHit, upwardSpawn, decoyHit }
+
+// ─── Game State (Immutable) ───────────────────────────────────────────────────
+
+@immutable
+class GameState {
+  // Navigation
+  final AppScreen screen;
+  final int currentLevelIndex;     // 0-based
+  final int highestUnlockedLevel;  // 1-based
+
+  // Grid
+  final List<List<GridCell>> grid; // grid[col][row]
+
+  // Economy
+  final int energy;
+  final int maxEnergy;
+  final int totalCoins;
+  final int levelBaseCoins;    // = level.number * 100
+  final int levelEarnedCoins;  // may be ×3 after ad
+  final bool coinsMultiplied;
+
+  // Quota
+  final Map<int, int> quotaRequired;   // itemId → count needed
+  final Map<int, int> quotaDelivered;  // itemId → count delivered
+
+  // Timer
+  final int timerSeconds;
+  final bool timerActive;
+  final bool timerExpiredOnce; // true once 00:00 hit (used for time-extension ad)
+
+  // Dialogs
+  final ActiveDialog activeDialog;
+
+  // Grid-rescue mode: player can tap one item to delete it
+  final bool deletionModeActive;
+
+  // Pending animations (consumed by widget layer)
+  final List<PendingAnimation> pendingAnimations;
+
+  // Supply Drop / Mystery Drop Box state (Levels 11–50)
+  final int supplyDropCol;      // -1 = none active
+  final int supplyDropRow;
+  final int supplyDropCountdown; // seconds remaining (0–10)
+
+  // Glitched Decoy mechanic (Levels 5–20)
+  final int decoyGlitchTick; // increments each glitch cycle → _GlitchedDecoyTile reacts
+
+  const GameState({
+    this.screen = AppScreen.map,
+    this.currentLevelIndex = 0,
+    this.highestUnlockedLevel = 1,
+    this.grid = const [],
+    this.energy = 100,
+    this.maxEnergy = 100,
+    this.totalCoins = 0,
+    this.levelBaseCoins = 0,
+    this.levelEarnedCoins = 0,
+    this.coinsMultiplied = false,
+    this.quotaRequired = const {},
+    this.quotaDelivered = const {},
+    this.timerSeconds = 0,
+    this.timerActive = false,
+    this.timerExpiredOnce = false,
+    this.activeDialog = ActiveDialog.none,
+    this.deletionModeActive = false,
+    this.pendingAnimations = const [],
+    this.supplyDropCol = -1,
+    this.supplyDropRow = -1,
+    this.supplyDropCountdown = 0,
+    this.decoyGlitchTick = 0,
+  });
+
+  LevelDefinition get currentLevel => kLevels[currentLevelIndex];
+
+  double get quotaPercent {
+    if (quotaRequired.isEmpty) return 0;
+    int needed = 0, done = 0;
+    quotaRequired.forEach((id, cnt) {
+      needed += cnt;
+      done   += min(quotaDelivered[id] ?? 0, cnt);
     });
     return needed == 0 ? 1.0 : done / needed;
   }
@@ -497,7 +604,20 @@ class GameNotifier extends StateNotifier<GameState> {
       return;
     }
 
-    if (to.isBlocked) return;
+    if (to.isBlocked) {
+      // Dragging onto a hazard trap → same -20⚡ penalty as tapping it.
+      // BUG FIX: previously fell through with silent return.
+      if (to.isHazard) {
+        tapHazard(toCol, toRow);
+      }
+      // Dragging onto a glitched decoy → same -30⚡ penalty as tapping it.
+      // BUG FIX: previously fell through with silent return.
+      else if (to.isDecoy) {
+        tapDecoy(toCol, toRow);
+      }
+      // All other blocked cells (dustyWeb, lockedCrate, blackHole, lockedItem) → silent reject.
+      return;
+    }
 
     if (to.itemId == null) {
       _moveCell(fromCol, fromRow, toCol, toRow);
