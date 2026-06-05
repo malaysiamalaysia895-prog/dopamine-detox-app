@@ -39,50 +39,91 @@ class PhaseTheme {
     required this.bgmAsset,
   });
 
-  BoxDecoration get backgroundDecoration => BoxDecoration(
-    gradient: RadialGradient(
-      center: Alignment.center,
-      radius: 1.4,
-      colors: [bgCenter, bgMid, bgEdge],
-      stops: const [0.0, 0.5, 1.0],
-    ),
-  );
+  BoxDecoration get backgroundDecoration {
+    // Cinematic dark background — phase primary colour radiates from the
+    // centre into pure black at the edges.  Designed to glow beautifully
+    // behind the frosted-glass game board: the colour is visible in the
+    // corners / edges of the screen and bleeds through the blurred glass.
+    return BoxDecoration(
+      gradient: RadialGradient(
+        center: const Alignment(0.0, -0.15), // slightly above centre
+        radius: 1.15,
+        colors: [
+          Color.lerp(Colors.black, primary, 0.08)!,  // very faint phase centre
+          Color.lerp(Colors.black, primary, 0.03)!,  // near-black mid
+          const Color(0xFF000000),                    // pure black edge
+        ],
+        stops: const [0.0, 0.50, 1.0],
+      ),
+    );
+  }
 
   BoxDecoration gridCellDecoration({bool isEmpty = false, bool isHighlighted = false}) => BoxDecoration(
-    color: isHighlighted
-        ? primary.withOpacity(0.35)
-        : isEmpty
-            ? gridTile.withOpacity(0.4)
-            : gridTile.withOpacity(0.7),
-    borderRadius: BorderRadius.circular(10),
+    // Empty slots: nearly transparent with just a ghost of phase color —
+    // looks like a holographic receptor waiting to receive an item.
+    // Highlighted: brighter phase-color fill for drag-target feedback.
+    gradient: isEmpty && !isHighlighted
+        ? LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              primary.withOpacity(0.06),
+              gridTile.withOpacity(0.10),
+            ],
+          )
+        : null,
+    color: isHighlighted ? primary.withOpacity(0.35) : null,
+    borderRadius: BorderRadius.circular(12),
     border: Border.all(
-      color: isHighlighted ? primary : gridBorder,
-      width: isHighlighted ? 2.5 : 1.5,
+      color: isHighlighted
+          ? primary
+          : isEmpty
+              ? primary.withOpacity(0.18)   // ghost phase-colour border on empty
+              : gridBorder,
+      width: isHighlighted ? 2.5 : isEmpty ? 1.0 : 1.5,
     ),
     boxShadow: [
+      if (!isEmpty || isHighlighted)
+        BoxShadow(
+          color: gridGlow.withOpacity(isHighlighted ? 0.65 : 0.38),
+          blurRadius: isHighlighted ? 16 : 10,
+          spreadRadius: isHighlighted ? 2 : 0,
+        ),
+      if (isEmpty)
+        // Subtle inner-shadow shimmer on empty slot
+        BoxShadow(
+          color: primary.withOpacity(0.08),
+          blurRadius: 8,
+          spreadRadius: -2,
+        ),
       BoxShadow(
-        color: gridGlow.withOpacity(isHighlighted ? 0.6 : 0.25),
-        blurRadius: isHighlighted ? 14 : 6,
-        spreadRadius: isHighlighted ? 2 : 0,
-      ),
-      BoxShadow(
-        color: Colors.black.withOpacity(0.5),
-        blurRadius: 4,
-        offset: const Offset(2, 3),
+        color: Colors.black.withOpacity(isEmpty ? 0.08 : 0.45),
+        blurRadius: isEmpty ? 3 : 5,
+        offset: const Offset(1, 2),
       ),
     ],
   );
 
+  BoxDecoration get gridContainerDecoration => BoxDecoration(
+    borderRadius: BorderRadius.circular(20),
+    border: Border.all(color: primary.withOpacity(0.55), width: 2.0),
+    boxShadow: [
+      BoxShadow(color: gridGlow.withOpacity(0.45), blurRadius: 28, spreadRadius: 4),
+      BoxShadow(color: gridGlow.withOpacity(0.20), blurRadius: 60, spreadRadius: 8),
+    ],
+  );
+
   BoxDecoration get spawnerDecoration => BoxDecoration(
-    gradient: RadialGradient(
-      colors: [spawnerColor, spawnerColor.withOpacity(0.4)],
-      radius: 0.9,
+    gradient: LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [spawnerColor.withOpacity(0.60), spawnerColor.withOpacity(0.28)],
     ),
     borderRadius: BorderRadius.circular(18),
-    border: Border.all(color: spawnerColor, width: 2.5),
+    border: Border.all(color: spawnerColor.withOpacity(0.88), width: 2),
     boxShadow: [
-      BoxShadow(color: spawnerColor.withOpacity(0.7), blurRadius: 20, spreadRadius: 3),
-      BoxShadow(color: Colors.black.withOpacity(0.6), blurRadius: 8, offset: const Offset(0, 4)),
+      BoxShadow(color: spawnerColor.withOpacity(0.38), blurRadius: 16, spreadRadius: 1),
+      BoxShadow(color: Colors.black.withOpacity(0.50), blurRadius: 8, offset: const Offset(0, 3)),
     ],
   );
 }
