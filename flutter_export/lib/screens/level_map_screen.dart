@@ -1,5 +1,6 @@
 // ============================================================
-// level_map_screen.dart — Scrollable 3D Level Selection Map
+// level_map_screen.dart — Scrollable Level Selection Map
+// 5 Themes: Basic Tech, Robotics, Sci-Fi, Galaxy, Cosmic
 // Tech Tycoon Merge
 // ============================================================
 
@@ -56,7 +57,7 @@ class _Header extends ConsumerWidget {
         children: [
           ShaderMask(
             shaderCallback: (r) => const LinearGradient(
-              colors: [Color(0xFF00E5FF), Color(0xFFCC00FF), Color(0xFFFFD700)],
+              colors: [Color(0xFFFF6B35), Color(0xFF42A5F5), Color(0xFF00E5FF), Color(0xFFAA00FF), Color(0xFFFFD700)],
             ).createShader(r),
             child: const Text('Tech Tycoon Merge',
               style: TextStyle(
@@ -67,7 +68,6 @@ class _Header extends ConsumerWidget {
           const Spacer(),
           _CoinBadge(coins: totalCoins),
           const SizedBox(width: 10),
-          // Settings gear
           GestureDetector(
             onTap: () => showSettingsSheet(context),
             child: Container(
@@ -151,6 +151,8 @@ class _PhaseScrollMap extends StatelessWidget {
   }
 }
 
+// ─── Phase Header ─────────────────────────────────────────────────────────────
+
 class _PhaseHeader extends StatelessWidget {
   final PhaseTheme theme;
   final GamePhase phase;
@@ -159,47 +161,106 @@ class _PhaseHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [theme.primary.withOpacity(0.25), Colors.transparent],
+          colors: [theme.primary.withOpacity(0.20), Colors.transparent],
         ),
-        borderRadius: BorderRadius.circular(12),
-        border: Border(left: BorderSide(color: theme.primary, width: 3)),
+        borderRadius: BorderRadius.circular(14),
+        border: Border(left: BorderSide(color: theme.primary, width: 4)),
+        boxShadow: [
+          BoxShadow(color: theme.primary.withOpacity(0.15), blurRadius: 12),
+        ],
       ),
       child: Row(children: [
-        Text(_phaseEmoji(phase), style: const TextStyle(fontSize: 22)),
-        const SizedBox(width: 10),
+        // Theme icon badge
+        Container(
+          width: 44, height: 44,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [theme.primary.withOpacity(0.4), theme.primary.withOpacity(0.1)],
+            ),
+            border: Border.all(color: theme.primary.withOpacity(0.7), width: 2),
+            boxShadow: [BoxShadow(color: theme.primary.withOpacity(0.5), blurRadius: 10)],
+          ),
+          child: Center(
+            child: Text(_phaseEmoji(phase), style: const TextStyle(fontSize: 22)),
+          ),
+        ),
+        const SizedBox(width: 14),
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(theme.name,
             style: TextStyle(
-              color: theme.primary, fontWeight: FontWeight.w900, fontSize: 14)),
+              color: theme.primary,
+              fontWeight: FontWeight.w900,
+              fontSize: 15,
+              letterSpacing: 0.5,
+            )),
+          const SizedBox(height: 2),
           Text(theme.subtitle,
-            style: const TextStyle(color: Colors.white38, fontSize: 11)),
+            style: TextStyle(
+              color: theme.primary.withOpacity(0.55),
+              fontSize: 11,
+              letterSpacing: 0.3,
+            )),
+          const SizedBox(height: 2),
+          Text(_phaseDesc(phase),
+            style: const TextStyle(color: Colors.white38, fontSize: 10)),
         ]),
+        const Spacer(),
+        // Phase tier range badge
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: theme.primary.withOpacity(0.4)),
+            color: theme.primary.withOpacity(0.08),
+          ),
+          child: Text(_phaseTierRange(phase),
+            style: TextStyle(
+              color: theme.primary.withOpacity(0.9),
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.5,
+            )),
+        ),
       ]),
     );
   }
 
   String _phaseEmoji(GamePhase p) {
     switch (p) {
-      case GamePhase.garage:   return '🔌';
-      case GamePhase.office:   return '💻';
-      case GamePhase.silicon:  return '🥽';
-      case GamePhase.megacorp: return '🧠';
-      case GamePhase.universe: return '☀️';
+      case GamePhase.garage: return '🔌';
+      case GamePhase.office:  return '🤖';
+      case GamePhase.silicon:     return '🚀';
+      case GamePhase.megacorp:    return '🛸';
+      case GamePhase.universe:    return '⚫';
+    }
+  }
+
+  String _phaseDesc(GamePhase p) {
+    switch (p) {
+      case GamePhase.garage: return 'Copper Wire → PC Case';
+      case GamePhase.office:  return 'Servo Motor → Full Cyborg';
+      case GamePhase.silicon:     return 'Neon Wire → Spaceship Engine';
+      case GamePhase.megacorp:    return 'Meteorite Shard → Galaxy Portal';
+      case GamePhase.universe:    return 'Dark Matter → Black Hole';
+    }
+  }
+
+  String _phaseTierRange(GamePhase p) {
+    switch (p) {
+      case GamePhase.garage: return 'T1 – T10';
+      case GamePhase.office:  return 'T11 – T20';
+      case GamePhase.silicon:     return 'T21 – T30';
+      case GamePhase.megacorp:    return 'T31 – T40';
+      case GamePhase.universe:    return 'T41 – T50';
     }
   }
 }
 
 // ─── Level Node ───────────────────────────────────────────────────────────────
-// PERFORMANCE FIX: We use a ConsumerWidget to read the highestUnlockedLevel
-// and then delegate to either _AnimatedLevelNode (for the one "next" level
-// that actually needs a bounce) or _StaticLevelNode (for all 49 others).
-//
-// The old approach created 50 AnimationController objects in initState()
-// simultaneously, causing a 4-5 second freeze on the Level Map screen.
-// Now only exactly ONE AnimationController is ever alive at a time.
 
 class _LevelNode extends ConsumerWidget {
   final int levelNumber;
@@ -215,7 +276,6 @@ class _LevelNode extends ConsumerWidget {
     final levelDef   = kLevels[levelNumber - 1];
 
     if (isNext) {
-      // Only this one node creates an AnimationController.
       return _AnimatedLevelNode(
         levelDef: levelDef,
         theme: theme,
@@ -235,7 +295,6 @@ class _LevelNode extends ConsumerWidget {
 }
 
 // ── Animated Node — only the "next" level ────────────────────────────────────
-// Exactly ONE of these exists at a time, so exactly ONE AnimationController.
 
 class _AnimatedLevelNode extends StatefulWidget {
   final LevelDefinition levelDef;
@@ -294,7 +353,7 @@ class _AnimatedLevelNodeState extends State<_AnimatedLevelNode>
   }
 }
 
-// ── Static Node — all other levels (no AnimationController) ──────────────────
+// ── Static Node ───────────────────────────────────────────────────────────────
 
 class _StaticLevelNode extends StatelessWidget {
   final LevelDefinition levelDef;
@@ -338,9 +397,20 @@ class _NodeBody extends StatelessWidget {
     required this.onTap,
   });
 
+  // Tier icon for each level based on its phase's starting item
+  String _tierEmoji(LevelDefinition def) {
+    switch (def.phase) {
+      case GamePhase.garage: return ['🔌','🪢','💾','🔧','🧩','💿','🔋','🌀','🎮','🖥️'][(def.number - 1) % 10];
+      case GamePhase.office:  return ['⚙️','👁️','🤖','🦾','🔋','🧠','🚗','🦿','⚙️','👾'][(def.number - 11) % 10];
+      case GamePhase.silicon:     return ['💡','⚡','🔦','🛸','🧬','🔬','🦺','🛡️','🏍️','🚀'][(def.number - 21) % 10];
+      case GamePhase.megacorp:    return ['🪨','💎','🔥','🛸','🗿','📡','🛰️','🌕','🚀','🌀'][(def.number - 31) % 10];
+      case GamePhase.universe:    return ['⚫','🔭','⭐','🌌','⚛️','💥','🕳️','🌀','🌑','⚫'][(def.number - 41) % 10];
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    const size = 68.0;
+    const size = 72.0;
 
     return GestureDetector(
       onTap: onTap,
@@ -351,47 +421,40 @@ class _NodeBody extends StatelessWidget {
           shape: BoxShape.circle,
           gradient: isUnlocked
               ? RadialGradient(colors: [
-                  theme.primary.withOpacity(0.4),
-                  theme.primary.withOpacity(0.1),
+                  theme.primary.withOpacity(0.45),
+                  theme.primary.withOpacity(0.12),
+                  Colors.black.withOpacity(0.3),
                 ])
-              : const RadialGradient(colors: [Color(0xFF2A2A2A), Color(0xFF111111)]),
+              : const RadialGradient(colors: [Color(0xFF1A1A1A), Color(0xFF0A0A0A)]),
           border: Border.all(
             color: isUnlocked
-                ? (isGlowing ? theme.primary : theme.primary.withOpacity(0.5))
-                : Colors.white12,
+                ? (isGlowing ? theme.primary : theme.primary.withOpacity(0.55))
+                : Colors.white10,
             width: isGlowing ? 3 : 1.5,
           ),
           boxShadow: isGlowing
-              ? [BoxShadow(color: theme.primary.withOpacity(0.8), blurRadius: 20, spreadRadius: 3)]
+              ? [
+                  BoxShadow(color: theme.primary.withOpacity(0.85), blurRadius: 24, spreadRadius: 4),
+                  BoxShadow(color: theme.primary.withOpacity(0.40), blurRadius: 12),
+                ]
               : isUnlocked
-                  ? [BoxShadow(color: theme.primary.withOpacity(0.3), blurRadius: 8)]
+                  ? [BoxShadow(color: theme.primary.withOpacity(0.30), blurRadius: 10)]
                   : null,
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             if (!isUnlocked)
-              const Text('🔒', style: TextStyle(fontSize: 22, color: Colors.white38))
-            else
+              const Text('🔒', style: TextStyle(fontSize: 20, color: Colors.white24))
+            else ...[
+              Text(_tierEmoji(levelDef), style: const TextStyle(fontSize: 18)),
+              const SizedBox(height: 1),
               Text('${levelDef.number}',
                 style: TextStyle(
                   color: isGlowing ? theme.primary : Colors.white,
-                  fontSize: 18,
+                  fontSize: 12,
                   fontWeight: FontWeight.w900,
                 )),
-            if (isUnlocked) ...[
-              const SizedBox(height: 2),
-              Text(
-                levelDef.title.length > 7
-                    ? '${levelDef.title.substring(0, 6)}…'
-                    : levelDef.title,
-                style: TextStyle(
-                  color: theme.primary.withOpacity(0.8),
-                  fontSize: 7,
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
-              ),
             ],
           ],
         ),
@@ -400,7 +463,7 @@ class _NodeBody extends StatelessWidget {
   }
 }
 
-// ─── Static Star Field (map background) ──────────────────────────────────────
+// ─── Static Star Field ────────────────────────────────────────────────────────
 
 class _StaticStarField extends StatelessWidget {
   const _StaticStarField();
@@ -417,13 +480,25 @@ class _StaticStarField extends StatelessWidget {
 class _StarFieldPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final rng = Random(42); // fixed seed for stable map
-    for (int i = 0; i < 120; i++) {
+    final rng = Random(42);
+    for (int i = 0; i < 140; i++) {
       final x = rng.nextDouble() * size.width;
       final y = rng.nextDouble() * size.height;
-      final r = rng.nextDouble() * 1.4 + 0.2;
-      final o = rng.nextDouble() * 0.4 + 0.05;
+      final r = rng.nextDouble() * 1.6 + 0.2;
+      final o = rng.nextDouble() * 0.45 + 0.05;
       canvas.drawCircle(Offset(x, y), r, Paint()..color = Colors.white.withOpacity(o));
+    }
+    // Extra gold/purple dust for cosmic feel
+    for (int i = 0; i < 40; i++) {
+      final x = rng.nextDouble() * size.width;
+      final y = rng.nextDouble() * size.height;
+      final isGold = rng.nextBool();
+      canvas.drawCircle(
+        Offset(x, y),
+        rng.nextDouble() * 1.0 + 0.2,
+        Paint()..color = (isGold ? const Color(0xFFFFD700) : const Color(0xFFAA00FF))
+            .withOpacity(rng.nextDouble() * 0.25 + 0.05),
+      );
     }
   }
 
