@@ -657,7 +657,32 @@ class GameNotifier extends StateNotifier<GameState> {
     if (toCol == null || toRow == null) return;
     final to = state.grid[toCol][toRow];
 
-    if (to.isBlocked) return;
+    if (to.isBlocked) {
+      // Glitch hazard: player tried to drag/merge an item onto it — energy penalty.
+      // All other blocked obstacles (web, crate, blackhole) → silent reject.
+      if (to.obstacle == ObstacleType.glitchHazard) {
+        AudioManager.instance.playErrorBuzz();
+        final newEnergy = (state.energy - 20).clamp(0, state.maxEnergy);
+        final anims = [
+          ...state.pendingAnimations,
+          PendingAnimation(toCol, toRow, AnimType.error),
+          const PendingAnimation(-1, -1, AnimType.hazardHit),
+        ];
+        if (newEnergy <= 0) {
+          state = state.copyWith(
+            energy:            0,
+            activeDialog:      ActiveDialog.zeroEnergy,
+            pendingAnimations: anims,
+          );
+        } else {
+          state = state.copyWith(
+            energy:            newEnergy,
+            pendingAnimations: anims,
+          );
+        }
+      }
+      return;
+    }
 
     if (to.itemId == null) {
       _moveCell(fromCol, fromRow, toCol, toRow);
