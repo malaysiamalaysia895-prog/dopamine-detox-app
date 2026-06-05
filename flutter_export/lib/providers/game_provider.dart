@@ -1,116 +1,18 @@
-// ============================================================
-// game_provider.dart — Full Riverpod Game State
-// Tech Tycoon Merge
-// ============================================================
-
-import 'dart:async';
-import 'dart:math';
-import 'package:flutter/foundation.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../models/models.dart';
-import '../services/audio_manager.dart';
-import '../services/ad_manager.dart';
-import '../themes/phase_themes.dart';
-import '../controllers/malware_controller.dart';
-
-// ─── Persistence Keys ─────────────────────────────────────────────────────────
-
-const _kHighestLevel = 'highest_unlocked_level';
-const _kTotalCoins   = 'total_coins';
-
-// ─── Popup / Dialog Type ──────────────────────────────────────────────────────
-
-enum ActiveDialog {
-  none,
-  story,
-  zeroEnergy,
-  gridFull,
-  victory,
-  timeFail,
-  gameBeaten,
-}
-
-// ─── Pending Animation ────────────────────────────────────────────────────────
-
-class PendingAnimation {
-  final int col, row;
-  final AnimType type;
-  const PendingAnimation(this.col, this.row, this.type);
-}
-
-enum AnimType { spawn, merge, error, unlock, hazardHit }
-
-// Outcome of tapping a Mystery Box (internal use only)
-enum _BoxOutcome { coins, quotaItem, trap }
-
-// ─── Game State (Immutable) ───────────────────────────────────────────────────
-
-@immutable
-class GameState {
-  // Navigation
-  final AppScreen screen;
-  final int currentLevelIndex;     // 0-based
-  final int highestUnlockedLevel;  // 1-based
-
-  // Grid
-  final List<List<GridCell>> grid; // grid[col][row]
-
-  // Economy
-  final int energy;
-  final int maxEnergy;
-  final int totalCoins;
-  final int levelBaseCoins;    // = level.number * 100
-  final int levelEarnedCoins;  // may be ×3 after ad
-  final bool coinsMultiplied;
-
-  // Quota
-  final Map<int, int> quotaRequired;   // itemId → count needed
-  final Map<int, int> quotaDelivered;  // itemId → count delivered
-
-  // Timer
-  final int timerSeconds;
-  final bool timerActive;
-  final bool timerExpiredOnce; // true once 00:00 hit (used for time-extension ad)
-
-  // Dialogs
-  final ActiveDialog activeDialog;
-
-  // Grid-rescue mode: player can tap one item to delete it
-  final bool deletionModeActive;
-
-  // Pending animations (consumed by widget layer)
-  final List<PendingAnimation> pendingAnimations;
-
-  const GameState({
-    this.screen = AppScreen.map,
-    this.currentLevelIndex = 0,
-    this.highestUnlockedLevel = 1,
-    this.grid = const [],
-    this.energy = 100,
-    this.maxEnergy = 100,
-    this.totalCoins = 0,
-    this.levelBaseCoins = 0,
-    this.levelEarnedCoins = 0,
-    this.coinsMultiplied = false,
-    this.quotaRequired = const {},
-    this.quotaDelivered = const {},
-    this.timerSeconds = 0,
-    this.timerActive = false,
-    this.timerExpiredOnce = false,
-    this.activeDialog = ActiveDialog.none,
-    this.deletionModeActive = false,
-    this.pendingAnimations = const [],
-  });
-
-  LevelDefinition get currentLevel => kLevels[currentLevelIndex];
-
-  double get quotaPercent {
-    if (quotaRequired.isEmpty) return 0;
-    int needed = 0, done = 0;
-    quotaRequired.forEach((id, cnt) {
-      needed += cnt;
-      done   += min(quotaDelivered[id] ?? 0, cnt);
+    if (to.isBlocked) {
+      // Glitch hazard: player dragged an item onto it — energy penalty.
+      // ===
+      // Hazard Trap: dragging an item onto it triggers the same penalty as tapping.
+      // BUG FIX: previously fell through silently; now fires tapHazard.
+      else if (to.obstacle == ObstacleType.hazardTrap) {
+        tapHazard(toCol, toRow);
+      }
+      // Mystery Box: dragging triggers same reward/penalty as tapping.
+      // BUG FIX: previously fell through silently; now fires tapMysteryBox.
+      else if (to.obstacle == ObstacleType.mysteryBox) {
+        tapMysteryBox(toCol, toRow);
+      }
+      // All other blocked obstacles (web, crate, blackhole) → silent reject.
+      return;
     });
     return needed == 0 ? 1.0 : done / needed;
   }
@@ -163,6 +65,10 @@ class GameState {
     ActiveDialog? activeDialog,
     bool? deletionModeActive,
     List<PendingAnimation>? pendingAnimations,
+    int? supplyDropCol,
+    int? supplyDropRow,
+    int? supplyDropCountdown,
+    int? decoyGlitchTick,
   }) {
     return GameState(
       screen:               screen               ?? this.screen,
@@ -183,33 +89,12 @@ class GameState {
       activeDialog:         activeDialog         ?? this.activeDialog,
       deletionModeActive:   deletionModeActive   ?? this.deletionModeActive,
       pendingAnimations:    pendingAnimations     ?? this.pendingAnimations,
+      supplyDropCol:        supplyDropCol        ?? this.supplyDropCol,
+      supplyDropRow:        supplyDropRow        ?? this.supplyDropRow,
+      supplyDropCountdown:  supplyDropCountdown  ?? this.supplyDropCountdown,
+      decoyGlitchTick:      decoyGlitchTick      ?? this.decoyGlitchTick,
     );
   }
-}
-
-// ─── Level Obstacle Helpers ───────────────────────────────────────────────────
-
-int _glitchCountForLevel(int n) {
-  if (n >= 5  && n <= 10) return 2;
-  if (n >= 11 && n <= 20) return 3;
-  if (n >= 41 && n <= 50) return 2;
-  return 0;
-}
-
-List<MysteryBoxVariant> _mysteryBoxesForLevel(int n) {
-  if (n >= 21 && n <= 30) return [MysteryBoxVariant.tier1];
-  if (n >= 31 && n <= 40) return [
-    MysteryBoxVariant.tier2Good,
-    MysteryBoxVariant.tier2Trap,
-    MysteryBoxVariant.tier2Trap,
-  ];
-  if (n >= 41 && n <= 50) return [
-    MysteryBoxVariant.tier3Coins,
-    MysteryBoxVariant.tier3Quota,
-    MysteryBoxVariant.tier3Trap,
-    MysteryBoxVariant.tier3Trap,
-  ];
-  return [];
 }
 
 // ─── Game Notifier ────────────────────────────────────────────────────────────
@@ -220,11 +105,11 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   Timer? _timer;
-  Timer? _glitchTeleportTimer;
-  final MalwareController _malware = MalwareController();
-
-  /// Exposed so the UI layer can wire [MalwareOverlay] without a separate Provider.
-  MalwareController get malwareController => _malware;
+  Timer? _supplyDropSpawnTimer;
+  Timer? _supplyDropCountdownTimer;
+  Timer? _glitchTimer;
+  Timer? _decoyTeleportTimer;
+  bool   _disposed = false;
   final Random _rng = Random();
 
   /// True if the player voluntarily watched the Rewarded Ad (3× coins) on the
@@ -261,10 +146,19 @@ class GameNotifier extends StateNotifier<GameState> {
 
   void goToMap() {
     _timer?.cancel();
-    _stopGlitchTimer();
-    _malware.reset();
+    _supplyDropSpawnTimer?.cancel();
+    _supplyDropCountdownTimer?.cancel();
+    _glitchTimer?.cancel();
+    _decoyTeleportTimer?.cancel();
     final level = state.currentLevel;
-    state = state.copyWith(screen: AppScreen.map, timerActive: false);
+    state = state.copyWith(
+      screen: AppScreen.map,
+      timerActive: false,
+      supplyDropCol: -1,
+      supplyDropRow: -1,
+      supplyDropCountdown: 0,
+      decoyGlitchTick: 0,
+    );
     AudioManager.instance.playBgm(themeOf(level.phase).bgmAsset);
   }
 
@@ -274,7 +168,10 @@ class GameNotifier extends StateNotifier<GameState> {
     // Guard: clamp to valid range
     final safeIndex = levelIndex.clamp(0, kLevels.length - 1);
     _timer?.cancel();
-    _stopGlitchTimer();
+    _supplyDropSpawnTimer?.cancel();
+    _supplyDropCountdownTimer?.cancel();
+    _glitchTimer?.cancel();
+    _decoyTeleportTimer?.cancel();
 
     final cfg  = kLevels[safeIndex];
     final grid = _buildInitialGrid(cfg);
@@ -303,9 +200,15 @@ class GameNotifier extends StateNotifier<GameState> {
       activeDialog:       ActiveDialog.story,
       deletionModeActive: false,
       pendingAnimations:  const [],
+      supplyDropCol:      -1,
+      supplyDropRow:      -1,
+      supplyDropCountdown: 0,
+      decoyGlitchTick:    0,
     );
-
-    // Audio is guarded by try-catch inside AudioManager
+    // FIX BUG 1: Start phase BGM immediately when level is selected (during
+    // story dialog) so there is no jarring sound change when "Let's Go" is
+    // tapped. dismissStory() still calls playBgm() but it becomes a no-op
+    // since the same asset is already playing (_currentBgmAsset guard).
     AudioManager.instance.playBgm(themeOf(cfg.phase).bgmAsset);
   }
 
@@ -317,46 +220,24 @@ class GameNotifier extends StateNotifier<GameState> {
       (c) => List.generate(cfg.gridRows, (r) => const GridCell()),
     );
 
-    // ── Glitch Hazards (L5-20, L41-50) — random empty positions ──────────────
-    final glitchCount = _glitchCountForLevel(cfg.number);
-    if (glitchCount > 0) {
-      final avail = <(int, int)>[
-        for (int c = 0; c < cfg.gridCols; c++)
-          for (int r = 0; r < cfg.gridRows; r++)
-            if (cells[c][r].isEmpty) (c, r),
-      ]..shuffle(_rng);
-      for (int i = 0; i < glitchCount && i < avail.length; i++) {
-        final (c, r) = avail[i];
-        cells[c][r] = GridCell(
-          obstacle: ObstacleType.glitchHazard,
-          disguiseItemId: cfg.spawnerItemId,
-        );
+    // ── Hazard Traps — fixed positions, placed FIRST (multiples of 5 only) ───
+    // Indexes are flat row-major: col = idx % gridCols, row = idx ~/ gridCols
+    for (final idx in hazardIndexesForLevel(cfg.number)) {
+      final col = idx % cfg.gridCols;
+      final row = idx ~/ cfg.gridCols;
+      if (col < cfg.gridCols && row < cfg.gridRows) {
+        cells[col][row] = const GridCell(obstacle: ObstacleType.hazardTrap);
       }
     }
 
-    // ── Mystery Boxes (L21-50) — random empty positions ───────────────────────
-    final boxVariants = _mysteryBoxesForLevel(cfg.number);
-    if (boxVariants.isNotEmpty) {
-      final avail = <(int, int)>[
-        for (int c = 0; c < cfg.gridCols; c++)
-          for (int r = 0; r < cfg.gridRows; r++)
-            if (cells[c][r].isEmpty) (c, r),
-      ]..shuffle(_rng);
-      for (int i = 0; i < boxVariants.length && i < avail.length; i++) {
-        final (c, r) = avail[i];
-        cells[c][r] = GridCell(
-          obstacle: ObstacleType.mysteryBox,
-          boxVariant: boxVariants[i],
-        );
+    // ── Remaining random obstacles (shuffled positions, skip hazard slots) ───
+    final positions = <(int, int)>[];
+    for (int c = 0; c < cfg.gridCols; c++) {
+      for (int r = 0; r < cfg.gridRows; r++) {
+        if (cells[c][r].isEmpty) positions.add((c, r));
       }
     }
-
-    // ── Remaining random obstacles (shuffled positions, skip occupied) ─────────
-    final positions = <(int, int)>[
-      for (int c = 0; c < cfg.gridCols; c++)
-        for (int r = 0; r < cfg.gridRows; r++)
-          if (cells[c][r].isEmpty) (c, r),
-    ]..shuffle(_rng);
+    positions.shuffle(_rng);
 
     int posIdx = 0;
 
@@ -379,15 +260,61 @@ class GameNotifier extends StateNotifier<GameState> {
     }
 
     // Seed some starting items (skip all obstacle slots)
-    final nonObstacle = <(int, int)>[
-      for (int c = 0; c < cfg.gridCols; c++)
-        for (int r = 0; r < cfg.gridRows; r++)
-          if (cells[c][r].isEmpty) (c, r),
-    ]..shuffle(_rng);
+    final seedId = cfg.spawnerItemId;
+    final nonObstacle = <(int, int)>[];
+    for (int c = 0; c < cfg.gridCols; c++) {
+      for (int r = 0; r < cfg.gridRows; r++) {
+        if (cells[c][r].isEmpty) nonObstacle.add((c, r));
+      }
+    }
+    nonObstacle.shuffle(_rng);
     final seedCount = max(2, (nonObstacle.length * 0.15).round());
     for (int i = 0; i < seedCount && i < nonObstacle.length; i++) {
       final (c, r) = nonObstacle[i];
-      cells[c][r] = GridCell(itemId: cfg.spawnerItemId);
+      cells[c][r] = GridCell(itemId: seedId);
+    }
+
+    // ── Locked / Rusted Tiles (Levels 1–50) ─────────────────────────────────
+    // Place 2–3 pre-locked base items that can only be freed by merging the
+    // same item type onto them. Applied to every level 1–50.
+    final lockedCount = 2 + _rng.nextInt(2); // 2 or 3
+    final availForLocked = <(int, int)>[];
+    for (int c = 0; c < cfg.gridCols; c++) {
+      for (int r = 0; r < cfg.gridRows; r++) {
+        if (cells[c][r].isEmpty) availForLocked.add((c, r));
+      }
+    }
+    availForLocked.shuffle(_rng);
+    for (int i = 0; i < lockedCount && i < availForLocked.length; i++) {
+      final (c, r) = availForLocked[i];
+      cells[c][r] = GridCell(
+        obstacle: ObstacleType.lockedItem,
+        lockedItemId: cfg.spawnerItemId,
+      );
+    }
+
+    // ── Glitched Decoys (Levels 5–20) ────────────────────────────────────────
+    // Place 2 decoys (L5-10, static) or 3 decoys (L11-20, teleporting).
+    // Decoys visually mimic a real merge item to fool the player.
+    // Tapping one costs -30 Energy. Grid minimum: ≥13 usable non-decoy cells.
+    final decoyCount = cfg.decoyCount;
+    if (decoyCount > 0) {
+      final availForDecoy = <(int, int)>[];
+      for (int c = 0; c < cfg.gridCols; c++) {
+        for (int r = 0; r < cfg.gridRows; r++) {
+          if (cells[c][r].isEmpty) availForDecoy.add((c, r));
+        }
+      }
+      availForDecoy.shuffle(_rng);
+      // Decoy mimics spawnerItemId + 1 to blend with the lowest board items
+      final decoyMimicId = (cfg.spawnerItemId + 1).clamp(1, 51);
+      for (int i = 0; i < decoyCount && i < availForDecoy.length; i++) {
+        final (c, r) = availForDecoy[i];
+        cells[c][r] = GridCell(
+          obstacle: ObstacleType.glitchedDecoy,
+          decoyItemId: decoyMimicId,
+        );
+      }
     }
 
     return cells;
@@ -402,6 +329,7 @@ class GameNotifier extends StateNotifier<GameState> {
     final cell = state.grid[col][row];
     if (cell.obstacle != ObstacleType.hazardTrap) return;
 
+    HapticFeedback.heavyImpact();
     AudioManager.instance.playErrorBuzz();
 
     final newEnergy = (state.energy - 20).clamp(0, state.maxEnergy);
@@ -425,161 +353,37 @@ class GameNotifier extends StateNotifier<GameState> {
     }
   }
 
-  // ── Glitch Hazard Timer & Teleportation ───────────────────────────────────
+  // ── Glitched Decoy Tap ────────────────────────────────────────────────────
+  // Penalty: tapping a Glitched Decoy costs -30 Energy + screen flash.
+  // If energy drops to 0, the zeroEnergy dialog fires.
 
-  void _startGlitchTimer() {
-    _glitchTeleportTimer?.cancel();
-    _glitchTeleportTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-      _teleportGlitchHazards();
-    });
-  }
-
-  void _stopGlitchTimer() {
-    _glitchTeleportTimer?.cancel();
-    _glitchTeleportTimer = null;
-  }
-
-  void _teleportGlitchHazards() {
-    if (state.activeDialog != ActiveDialog.none) return;
-    if (state.screen != AppScreen.game) return;
-    final cfg = state.currentLevel;
-    final newGrid = _cloneGrid();
-
-    // Collect all glitch hazard positions and clear them
-    final glitchCells = <(int, int, int?)>[];
-    for (int c = 0; c < cfg.gridCols; c++) {
-      for (int r = 0; r < cfg.gridRows; r++) {
-        if (newGrid[c][r].obstacle == ObstacleType.glitchHazard) {
-          glitchCells.add((c, r, newGrid[c][r].disguiseItemId));
-          newGrid[c][r] = const GridCell();
-        }
-      }
-    }
-    if (glitchCells.isEmpty) return;
-
-    // Collect all now-empty positions and pick random targets
-    final empties = <(int, int)>[
-      for (int c = 0; c < cfg.gridCols; c++)
-        for (int r = 0; r < cfg.gridRows; r++)
-          if (newGrid[c][r].isEmpty) (c, r),
-    ]..shuffle(_rng);
-
-    if (empties.isEmpty) return;
-
-    for (int i = 0; i < glitchCells.length && i < empties.length; i++) {
-      final (c, r) = empties[i];
-      newGrid[c][r] = GridCell(
-        obstacle:       ObstacleType.glitchHazard,
-        disguiseItemId: glitchCells[i].$3,
-      );
-    }
-    state = state.copyWith(grid: newGrid);
-  }
-
-  // ── Glitch Hazard Tap ─────────────────────────────────────────────────────
-  // Looks like a normal item — tapping shows error shake + buzz (no energy cost).
-
-  void tapGlitchHazard(int col, int row) {
-    if (state.activeDialog != ActiveDialog.none) return;
-    if (state.grid[col][row].obstacle != ObstacleType.glitchHazard) return;
-    AudioManager.instance.playErrorBuzz();
-    state = state.copyWith(
-      pendingAnimations: [
-        ...state.pendingAnimations,
-        PendingAnimation(col, row, AnimType.error),
-      ],
-    );
-  }
-
-  // ── Mystery Box Tap ───────────────────────────────────────────────────────
-  // RNG outcome depends on variant.  Box disappears after tap regardless.
-
-  void tapMysteryBox(int col, int row) {
+  void tapDecoy(int col, int row) {
     if (state.activeDialog != ActiveDialog.none) return;
     final cell = state.grid[col][row];
-    if (cell.obstacle != ObstacleType.mysteryBox || cell.boxVariant == null) return;
+    if (!cell.isDecoy) return;
 
-    final cfg     = state.currentLevel;
-    final variant = cell.boxVariant!;
-    final roll    = _rng.nextDouble();
+    HapticFeedback.heavyImpact();
+    AudioManager.instance.playErrorBuzz();
 
-    // Resolve outcome from variant + RNG
-    _BoxOutcome outcome;
-    switch (variant) {
-      case MysteryBoxVariant.tier1:
-        if (roll < 0.30)       outcome = _BoxOutcome.coins;
-        else if (roll < 0.60)  outcome = _BoxOutcome.quotaItem;
-        else                   outcome = _BoxOutcome.trap;
-      case MysteryBoxVariant.tier2Good:
-        outcome = roll < 0.50 ? _BoxOutcome.coins : _BoxOutcome.quotaItem;
-      case MysteryBoxVariant.tier2Trap:
-      case MysteryBoxVariant.tier3Trap:
-        outcome = _BoxOutcome.trap;
-      case MysteryBoxVariant.tier3Coins:
-        outcome = _BoxOutcome.coins;
-      case MysteryBoxVariant.tier3Quota:
-        outcome = _BoxOutcome.quotaItem;
-    }
+    final newEnergy = (state.energy - 30).clamp(0, state.maxEnergy);
+    final anims = [
+      ...state.pendingAnimations,
+      PendingAnimation(col, row, AnimType.decoyHit),     // floating -30⚡ text
+      const PendingAnimation(-1, -1, AnimType.hazardHit), // screen flash
+    ];
 
-    // Remove the box from the grid
-    final newGrid = _cloneGrid();
-    newGrid[col][row] = const GridCell();
-
-    int newCoins  = state.totalCoins;
-    int newEnergy = state.energy;
-    var newAnims  = [...state.pendingAnimations];
-
-    switch (outcome) {
-      case _BoxOutcome.coins:
-        newCoins += 100 + _rng.nextInt(101); // 100–200 coins
-        AudioManager.instance.playMergeSnap();
-
-      case _BoxOutcome.quotaItem:
-        // Spawn the lowest-ID quota item in a random empty cell
-        final quotaItemId = cfg.quotaMap.keys.isNotEmpty
-            ? cfg.quotaMap.keys.reduce((a, b) => a < b ? a : b)
-            : cfg.spawnerItemId;
-        final empties = <(int, int)>[
-          for (int c = 0; c < cfg.gridCols; c++)
-            for (int r = 0; r < cfg.gridRows; r++)
-              if (newGrid[c][r].isEmpty) (c, r),
-        ];
-        if (empties.isNotEmpty) {
-          empties.shuffle(_rng);
-          final (ec, er) = empties.first;
-          newGrid[ec][er] = GridCell(itemId: quotaItemId);
-          newAnims = [...newAnims, PendingAnimation(ec, er, AnimType.spawn)];
-          AudioManager.instance.playSpawnPop();
-        } else {
-          newCoins += 100; // no empty cell — coins instead
-          AudioManager.instance.playMergeSnap();
-        }
-
-      case _BoxOutcome.trap:
-        newEnergy = (state.energy - 50).clamp(0, state.maxEnergy);
-        // Full-screen red flash
-        newAnims = [...newAnims, const PendingAnimation(-1, -1, AnimType.hazardHit)];
-        AudioManager.instance.playErrorBuzz();
-    }
-
-    final hitZeroEnergy = outcome == _BoxOutcome.trap && newEnergy <= 0;
-    if (hitZeroEnergy) {
+    if (newEnergy <= 0) {
       state = state.copyWith(
-        grid:              newGrid,
-        totalCoins:        newCoins,
         energy:            0,
-        pendingAnimations: newAnims,
         activeDialog:      ActiveDialog.zeroEnergy,
+        pendingAnimations: anims,
       );
     } else {
       state = state.copyWith(
-        grid:              newGrid,
-        totalCoins:        newCoins,
         energy:            newEnergy,
-        pendingAnimations: newAnims,
+        pendingAnimations: anims,
       );
     }
-    _savePrefs();
   }
 
   // ── Story Dialog ──────────────────────────────────────────────────────────
@@ -597,42 +401,16 @@ class GameNotifier extends StateNotifier<GameState> {
       timerActive:  cfg.hasTimer,
     );
     if (cfg.hasTimer) _startTimer();
-    if (_glitchCountForLevel(cfg.number) > 0) _startGlitchTimer();
-
-    // ── Malware boss trigger ─────────────────────────────────────────────────
-    // Fires here (after story dismiss) so the player has full access to the
-    // board before the 20-second countdown starts.  Level 5 enters tutorial
-    // phase first (game paused until player merges or taps Skip).
-    final lvlNum = cfg.number;
-    if (kMalwareLevels.containsKey(lvlNum)) {
-      // Find a matching item pair to highlight in the L5 tutorial.
-      (int, int)? tutFrom;
-      (int, int)? tutTo;
-      if (lvlNum == 5) {
-        outer:
-        for (int c = 0; c < cfg.gridCols; c++) {
-          for (int r = 0; r < cfg.gridRows; r++) {
-            final id = state.grid[c][r].itemId;
-            if (id == null) continue;
-            for (int c2 = 0; c2 < cfg.gridCols; c2++) {
-              for (int r2 = 0; r2 < cfg.gridRows; r2++) {
-                if (c2 == c && r2 == r) continue;
-                if (state.grid[c2][r2].itemId == id) {
-                  tutFrom = (c, r);
-                  tutTo   = (c2, r2);
-                  break outer;
-                }
-              }
-            }
-          }
-        }
-      }
-      _malware.triggerForLevel(
-        lvlNum,
-        onClearGrid: clearAllItems,
-        tutFrom: tutFrom,
-        tutTo:   tutTo,
-      );
+    // Phase BGM — only starts when player taps Let's Go
+    AudioManager.instance.playBgm(themeOf(cfg.phase).bgmAsset);
+    // Start Mystery Drop Box timer for levels 11–50
+    if (cfg.number >= 11 && cfg.number <= 50) {
+      _scheduleNextSupplyDrop();
+    }
+    // Start Glitched Decoy timers for levels 5–20
+    if (cfg.hasDecoys) {
+      _startGlitchTimer();
+      if (cfg.decoysAreTeleporting) _startDecoyTeleportTimer();
     }
   }
 
@@ -670,7 +448,7 @@ class GameNotifier extends StateNotifier<GameState> {
     final newGrid = _cloneGrid();
     newGrid[col][row] = GridCell(itemId: cfg.spawnerItemId);
 
-    final anims = [...state.pendingAnimations, PendingAnimation(col, row, AnimType.spawn)];
+    final anims = [...state.pendingAnimations, PendingAnimation(col, row, AnimType.upwardSpawn)];
 
     state = state.copyWith(
       grid:  newGrid,
@@ -691,6 +469,12 @@ class GameNotifier extends StateNotifier<GameState> {
     final from = state.grid[fromCol][fromRow];
     if (from.itemId == null) return;
 
+    // Dragging from a Glitched Decoy: cancel + pay Energy penalty
+    if (from.isDecoy) {
+      tapDecoy(fromCol, fromRow);
+      return;
+    }
+
     if (isDelivery) {
       _deliverItem(fromCol, fromRow);
       return;
@@ -699,42 +483,21 @@ class GameNotifier extends StateNotifier<GameState> {
     if (toCol == null || toRow == null) return;
     final to = state.grid[toCol][toRow];
 
-    if (to.isBlocked) {
-      // Glitch hazard: player dragged an item onto it — energy penalty.
-      if (to.obstacle == ObstacleType.glitchHazard) {
+    // ── Locked tile: only matching item can unlock it ────────────────────────
+    if (to.obstacle == ObstacleType.lockedItem) {
+      if (from.itemId == to.lockedItemId) {
+        _unlockLockedItem(fromCol, fromRow, toCol, toRow);
+      } else {
         AudioManager.instance.playErrorBuzz();
-        final newEnergy = (state.energy - 20).clamp(0, state.maxEnergy);
-        final anims = [
-          ...state.pendingAnimations,
-          PendingAnimation(toCol, toRow, AnimType.error),
-          const PendingAnimation(-1, -1, AnimType.hazardHit),
-        ];
-        if (newEnergy <= 0) {
-          state = state.copyWith(
-            energy:            0,
-            activeDialog:      ActiveDialog.zeroEnergy,
-            pendingAnimations: anims,
-          );
-        } else {
-          state = state.copyWith(
-            energy:            newEnergy,
-            pendingAnimations: anims,
-          );
-        }
+        state = state.copyWith(
+          pendingAnimations: [...state.pendingAnimations,
+            PendingAnimation(toCol, toRow, AnimType.error)],
+        );
       }
-      // Hazard Trap: dragging an item onto it triggers the same penalty as tapping it.
-      // BUG FIX: previously this fell through silently; now it fires tapHazard.
-      else if (to.obstacle == ObstacleType.hazardTrap) {
-        tapHazard(toCol, toRow);
-      }
-      // Mystery Box: dragging an item onto it triggers the same reward/penalty as tapping.
-      // BUG FIX: previously this fell through silently; now it fires tapMysteryBox.
-      else if (to.obstacle == ObstacleType.mysteryBox) {
-        tapMysteryBox(toCol, toRow);
-      }
-      // All other blocked obstacles (web, crate, blackhole) → silent reject.
       return;
     }
+
+    if (to.isBlocked) return;
 
     if (to.itemId == null) {
       _moveCell(fromCol, fromRow, toCol, toRow);
@@ -783,15 +546,7 @@ class GameNotifier extends StateNotifier<GameState> {
     state = state.copyWith(grid: newGrid, pendingAnimations: anims);
 
     AudioManager.instance.playMergeSnap();
-
-    // ── Malware boss hook ────────────────────────────────────────────────────
-    // Level 5 tutorial: first merge by the player starts the countdown AND
-    // counts toward the required merge total.
-    // All other boss levels / subsequent merges: just increment the counter.
-    if (_malware.phase == MalwarePhase.tutorial) {
-      _malware.startAfterTutorial(); // phase → active, countdown begins
-    }
-    _malware.onItemMerged();         // increments mergesDone (only when active)
+    HapticFeedback.lightImpact();
   }
 
   void _unlockAdjacent(List<List<GridCell>> grid, int col, int row) {
@@ -806,6 +561,149 @@ class GameNotifier extends StateNotifier<GameState> {
         AudioManager.instance.playUnlock();
       }
     }
+  }
+
+  // ── Locked Item Unlock ────────────────────────────────────────────────────
+  void _unlockLockedItem(int fromCol, int fromRow, int toCol, int toRow) {
+    final id   = state.grid[fromCol][fromRow].itemId!;
+    final next = ItemDictionary.nextItem(id);
+    final newGrid = _cloneGrid();
+    newGrid[fromCol][fromRow] = newGrid[fromCol][fromRow].clearItem();
+    if (next != null) {
+      newGrid[toCol][toRow] = GridCell(itemId: next.id);
+    } else {
+      newGrid[toCol][toRow] = const GridCell();
+    }
+    final anims = [
+      ...state.pendingAnimations,
+      PendingAnimation(toCol, toRow, AnimType.merge),
+    ];
+    state = state.copyWith(grid: newGrid, pendingAnimations: anims);
+    AudioManager.instance.playMergeSnap();
+    HapticFeedback.lightImpact();
+  }
+
+  // ── Mystery Drop Box ─────────────────────────────────────────────────────
+  // RNG Loot Table:  60% Trap → instant Energy = 0
+  //                  30% Wealth → +100 coins
+  //                  10% Ultra Rare → high-tier item placed on board
+  void tapSupplyDrop(int col, int row) {
+    if (state.supplyDropCol != col || state.supplyDropRow != row) return;
+    if (state.activeDialog != ActiveDialog.none) return;
+
+    _supplyDropCountdownTimer?.cancel();
+    HapticFeedback.mediumImpact();
+
+    final roll = _rng.nextInt(100);
+
+    if (roll < 60) {
+      // 60 %: Lethal Trap — drain Energy to 0
+      AudioManager.instance.playErrorBuzz();
+      state = state.copyWith(
+        energy:              0,
+        supplyDropCol:       -1,
+        supplyDropRow:       -1,
+        supplyDropCountdown: 0,
+        activeDialog:        ActiveDialog.zeroEnergy,
+        pendingAnimations: [...state.pendingAnimations,
+          const PendingAnimation(-1, -1, AnimType.hazardHit)],
+      );
+      // Don't schedule next drop — level is effectively over (dialog showing)
+    } else if (roll < 90) {
+      // 30 %: Wealth — +100 coins
+      AudioManager.instance.playMergeSnap();
+      state = state.copyWith(
+        totalCoins:          state.totalCoins + 100,
+        supplyDropCol:       -1,
+        supplyDropRow:       -1,
+        supplyDropCountdown: 0,
+      );
+      _savePrefs();
+      _scheduleNextSupplyDrop();
+    } else {
+      // 10 %: Ultra Rare — place a high-tier item on the board
+      final cfg      = state.currentLevel;
+      final rewardId = (cfg.spawnerItemId + 5 + _rng.nextInt(6)).clamp(1, 51);
+      final newGrid  = _cloneGrid();
+
+      int rCol = -1, rRow = -1;
+      outer:
+      for (int c = 0; c < cfg.gridCols; c++) {
+        for (int r = 0; r < cfg.gridRows; r++) {
+          if (newGrid[c][r].isEmpty) { rCol = c; rRow = r; break outer; }
+        }
+      }
+
+      if (rCol != -1) newGrid[rCol][rRow] = GridCell(itemId: rewardId);
+
+      AudioManager.instance.playMergeSnap();
+      state = state.copyWith(
+        grid:               rCol != -1 ? newGrid : state.grid,
+        supplyDropCol:      -1,
+        supplyDropRow:      -1,
+        supplyDropCountdown: 0,
+        pendingAnimations: rCol != -1
+            ? [...state.pendingAnimations, PendingAnimation(rCol, rRow, AnimType.spawn)]
+            : state.pendingAnimations,
+      );
+      _scheduleNextSupplyDrop();
+    }
+  }
+
+  void _scheduleNextSupplyDrop() {
+    _supplyDropSpawnTimer?.cancel();
+    // Random delay 30–45 seconds
+    final delay = 30 + _rng.nextInt(16);
+    _supplyDropSpawnTimer = Timer(Duration(seconds: delay), _spawnSupplyDrop);
+  }
+
+  void _spawnSupplyDrop() {
+    if (_disposed) return;
+    final cfg = state.currentLevel;
+    if (cfg.number < 11 || cfg.number > 50) return;
+    if (state.activeDialog != ActiveDialog.none) {
+      _scheduleNextSupplyDrop();
+      return;
+    }
+
+    // Pick a random empty cell
+    final empties = <(int, int)>[];
+    for (int c = 0; c < cfg.gridCols; c++) {
+      for (int r = 0; r < cfg.gridRows; r++) {
+        if (state.grid[c][r].isEmpty) empties.add((c, r));
+      }
+    }
+    if (empties.isEmpty) {
+      _scheduleNextSupplyDrop();
+      return;
+    }
+    final pick = empties[_rng.nextInt(empties.length)];
+
+    state = state.copyWith(
+      supplyDropCol:      pick.$1,
+      supplyDropRow:      pick.$2,
+      supplyDropCountdown: 10,
+    );
+    _startSupplyDropCountdown();
+  }
+
+  void _startSupplyDropCountdown() {
+    _supplyDropCountdownTimer?.cancel();
+    _supplyDropCountdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (_disposed) { t.cancel(); return; }
+      final remaining = state.supplyDropCountdown - 1;
+      if (remaining <= 0) {
+        t.cancel();
+        state = state.copyWith(
+          supplyDropCol:      -1,
+          supplyDropRow:      -1,
+          supplyDropCountdown: 0,
+        );
+        _scheduleNextSupplyDrop();
+      } else {
+        state = state.copyWith(supplyDropCountdown: remaining);
+      }
+    });
   }
 
   void _deliverItem(int col, int row) {
@@ -840,25 +738,8 @@ class GameNotifier extends StateNotifier<GameState> {
 
   // ── Level Complete ────────────────────────────────────────────────────────
 
-  // ── Clear All Items (Malware loss punishment) ─────────────────────────────
-
-  void clearAllItems() {
-    final cfg     = state.currentLevel;
-    final newGrid = _cloneGrid();
-    for (int c = 0; c < cfg.gridCols; c++) {
-      for (int r = 0; r < cfg.gridRows; r++) {
-        if (newGrid[c][r].itemId != null) {
-          newGrid[c][r] = newGrid[c][r].clearItem();
-        }
-      }
-    }
-    state = state.copyWith(grid: newGrid);
-  }
-
   void _onLevelComplete() {
     _timer?.cancel();
-    _stopGlitchTimer();
-    _malware.reset();
     AudioManager.instance.pauseBgm();
     AudioManager.instance.playVictory();
 
@@ -1094,11 +975,11 @@ class GameNotifier extends StateNotifier<GameState> {
   List<List<GridCell>> _cloneGrid() {
     return state.grid
         .map((col) => col.map((cell) => GridCell(
-              itemId:         cell.itemId,
-              obstacle:       cell.obstacle,
-              isUnlocking:    false,
-              disguiseItemId: cell.disguiseItemId,
-              boxVariant:     cell.boxVariant,
+              itemId:       cell.itemId,
+              obstacle:     cell.obstacle,
+              isUnlocking:  false,
+              lockedItemId: cell.lockedItemId,
+              decoyItemId:  cell.decoyItemId,
             )).toList())
         .toList();
   }
@@ -1112,11 +993,72 @@ class GameNotifier extends StateNotifier<GameState> {
     }
   }
 
+  // ── Glitch Timer Helpers ──────────────────────────────────────────────────
+
+  void _startGlitchTimer() {
+    _glitchTimer?.cancel();
+    final cfg = state.currentLevel;
+    if (!cfg.hasDecoys) return;
+    _glitchTimer = Timer.periodic(
+      Duration(seconds: cfg.glitchIntervalSeconds), (_) {
+        if (_disposed) return;
+        state = state.copyWith(decoyGlitchTick: state.decoyGlitchTick + 1);
+      });
+  }
+
+  void _startDecoyTeleportTimer() {
+    _decoyTeleportTimer?.cancel();
+    _decoyTeleportTimer = Timer.periodic(const Duration(seconds: 6), (_) {
+      if (_disposed) return;
+      _teleportDecoys();
+    });
+  }
+
+  void _teleportDecoys() {
+    if (state.activeDialog != ActiveDialog.none) return;
+    final cfg  = state.currentLevel;
+    final grid = _cloneGrid();
+
+    // Collect decoy positions and candidate (non-blocked) swap targets
+    final decoyPositions = <(int, int)>[];
+    final candidates     = <(int, int)>[];
+    for (int c = 0; c < cfg.gridCols; c++) {
+      for (int r = 0; r < cfg.gridRows; r++) {
+        if (grid[c][r].isDecoy)                               decoyPositions.add((c, r));
+        else if (!grid[c][r].isBlocked) candidates.add((c, r));
+      }
+    }
+    if (decoyPositions.isEmpty || candidates.isEmpty) return;
+
+    candidates.shuffle(_rng);
+    final used = <(int, int)>{};
+
+    for (final decoyPos in decoyPositions) {
+      (int, int)? target;
+      for (final c in candidates) {
+        if (!used.contains(c)) { target = c; used.add(c); break; }
+      }
+      if (target == null) break;
+
+      final (dc, dr) = decoyPos;
+      final (tc, tr) = target;
+      final decoyCell  = grid[dc][dr];
+      final targetCell = grid[tc][tr];
+      grid[dc][dr] = targetCell;
+      grid[tc][tr] = decoyCell;
+    }
+
+    state = state.copyWith(grid: grid);
+  }
+
   @override
   void dispose() {
+    _disposed = true;
     _timer?.cancel();
-    _stopGlitchTimer();
-    _malware.dispose();
+    _supplyDropSpawnTimer?.cancel();
+    _supplyDropCountdownTimer?.cancel();
+    _glitchTimer?.cancel();
+    _decoyTeleportTimer?.cancel();
     super.dispose();
   }
 }
@@ -1136,4 +1078,10 @@ final timerProvider        = Provider<int>((ref) => ref.watch(gameProvider).time
 final quotaPctProvider     = Provider<double>((ref) => ref.watch(gameProvider).quotaPercent);
 final animProvider         = Provider<List<PendingAnimation>>((ref) => ref.watch(gameProvider).pendingAnimations);
 final highestLvlProvider   = Provider<int>((ref) => ref.watch(gameProvider).highestUnlockedLevel);
-final deletionModeProvider = Provider<bool>((ref) => ref.watch(gameProvider).deletionModeActive);
+final deletionModeProvider    = Provider<bool>((ref) => ref.watch(gameProvider).deletionModeActive);
+final supplyDropProvider      = Provider<(int, int)>((ref) {
+  final s = ref.watch(gameProvider);
+  return (s.supplyDropCol, s.supplyDropRow);
+});
+final supplyDropCountdownProvider = Provider<int>((ref) => ref.watch(gameProvider).supplyDropCountdown);
+final decoyGlitchTickProvider     = Provider<int>((ref) => ref.watch(gameProvider).decoyGlitchTick);
