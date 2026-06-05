@@ -605,17 +605,14 @@ class GameNotifier extends StateNotifier<GameState> {
     }
 
     if (to.isBlocked) {
-      // Dragging onto a hazard trap → same -20⚡ penalty as tapping it.
-      // BUG FIX: previously fell through with silent return.
+      // BUG FIX: dragging onto hazardTrap/glitchedDecoy now triggers same
+      // effect as tapping — previously all blocked cells were silently rejected.
       if (to.isHazard) {
-        tapHazard(toCol, toRow);
+        tapHazard(toCol, toRow);        // -20⚡ penalty
+      } else if (to.isDecoy) {
+        tapDecoy(toCol, toRow);         // -30⚡ penalty
       }
-      // Dragging onto a glitched decoy → same -30⚡ penalty as tapping it.
-      // BUG FIX: previously fell through with silent return.
-      else if (to.isDecoy) {
-        tapDecoy(toCol, toRow);
-      }
-      // All other blocked cells (dustyWeb, lockedCrate, blackHole, lockedItem) → silent reject.
+      // dustyWeb / lockedCrate / blackHole / lockedItem → silent reject
       return;
     }
 
