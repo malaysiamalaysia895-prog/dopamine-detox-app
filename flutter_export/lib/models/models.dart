@@ -9,19 +9,9 @@ import 'dart:math';
 
 enum GamePhase { garage, office, silicon, megacorp, universe }
 
-enum ObstacleType { none, dustyWeb, lockedCrate, blackHole, hazardTrap, glitchHazard, mysteryBox }
+enum ObstacleType { none, dustyWeb, lockedCrate, blackHole, hazardTrap, lockedItem, glitchedDecoy }
 
 enum AppScreen { map, game }
-
-// ─── Mystery Box Variants ─────────────────────────────────────────────────────
-enum MysteryBoxVariant {
-  tier1,       // L21-30: 30% coins | 30% quota item | 40% trap
-  tier2Good,   // L31-40 Box 1: 50% coins | 50% quota item
-  tier2Trap,   // L31-40 Box 2&3: 100% trap
-  tier3Coins,  // L41-50 Box 1: 100% coins
-  tier3Quota,  // L41-50 Box 2: 100% quota item
-  tier3Trap,   // L41-50 Box 3&4: 100% trap
-}
 
 // ─── Item Definition ──────────────────────────────────────────────────────────
 // Items are numbered 1–51. Item N + Item N = Item N+1.
@@ -158,6 +148,19 @@ class LevelDefinition {
   int get totalCells => gridCols * gridRows;
   int get baseCoins => number * 100;
   bool get hasTimer => timeLimitSeconds > 0;
+
+  // ── GlitchedDecoy config ──────────────────────────────────────────────────
+  /// 2 static decoys L5-10, 3 teleporting decoys L11-20, 0 elsewhere.
+  int get decoyCount {
+    if (number >= 5 && number <= 10) return 2;
+    if (number >= 11 && number <= 20) return 3;
+    return 0;
+  }
+  bool get hasDecoys           => decoyCount > 0;
+  /// Decoys swap positions with random cells every 6 s (L11-20 only).
+  bool get decoysAreTeleporting => number >= 11 && number <= 20;
+  /// Glitch animation fires every 5 s (L5-10) or every 4 s (L11-20).
+  int  get glitchIntervalSeconds => number <= 10 ? 5 : 4;
 
   /// The tier of item the spawner drops for this level.
   /// = max(1, lowestQuotaItemId - 3)
@@ -541,63 +544,72 @@ const List<LevelDefinition> kLevels = [
   ),
 ];
 
+// ─── Hazard Trap Progression ──────────────────────────────────────────────────
+// Returns the flat (row-major) grid indexes where Hazard Traps are placed.
+// Only levels that are multiples of 5 get hazards.
+// Flat index → col = idx % gridCols, row = idx ~/ gridCols
+//
+// Tier 1 (Easy   L5, L10):       1 hazard  — index 15 (bottom-right corner)
+// Tier 2 (Medium L15, L20):      2 hazards — indexes 0, 15 (top-left + bottom-right)
+// Tier 3 (Hard   L25, L30, L35): 3 hazards — indexes 0, 3, 15
+// Tier 4 (Expert L40, L45, L50): 4 hazards — indexes 5, 6, 9, 10 (center 2×2)
+
+List<int> hazardIndexesForLevel(int levelNumber) {
+  if (levelNumber % 5 != 0) return const [];
+  if (levelNumber == 5)   return const []; // L5 replaced by GlitchedDecoy mechanic
+  if (levelNumber <= 10)  return const [15];
+  if (levelNumber <= 20)  return const [0, 15];
+  if (levelNumber <= 35)  return const [0, 3, 15];
+  return const [5, 6, 9, 10];
+}
+
 // ─── Grid Cell Model ─────────────────────────────────────────────────────────
 
 class GridCell {
-  final int? itemId;                    // 1-based; null = empty
+  final int? itemId;          // 1-based; null = empty
   final ObstacleType obstacle;
-  final bool isUnlocking;               // animation: crate just broke open
-  final int? disguiseItemId;            // glitch hazard: item it impersonates
-  final MysteryBoxVariant? boxVariant;  // mystery box: outcome table
+  final bool isUnlocking;     // animation: crate just broke open
+  final int? lockedItemId;    // only set when obstacle == ObstacleType.lockedItem
+  final int? decoyItemId;     // only set when obstacle == ObstacleType.glitchedDecoy
 
   const GridCell({
     this.itemId,
     this.obstacle = ObstacleType.none,
     this.isUnlocking = false,
-    this.disguiseItemId,
-    this.boxVariant,
+    this.lockedItemId,
+    this.decoyItemId,
   });
 
-  bool get isEmpty   => itemId == null && obstacle == ObstacleType.none;
-  bool get hasItem   => itemId != null;
-  bool get isHazard  => obstacle == ObstacleType.hazardTrap;
-  bool get isGlitch  => obstacle == ObstacleType.glitchHazard;
-  bool get isMystery => obstacle == ObstacleType.mysteryBox;
+  bool get isEmpty  => itemId == null && obstacle == ObstacleType.none;
+  bool get hasItem  => itemId != null;
+  bool get isHazard => obstacle == ObstacleType.hazardTrap;
+  bool get isDecoy  => obstacle == ObstacleType.glitchedDecoy;
   bool get isBlocked =>
-      obstacle == ObstacleType.dustyWeb   ||
+      obstacle == ObstacleType.dustyWeb ||
       obstacle == ObstacleType.lockedCrate ||
-      obstacle == ObstacleType.blackHole  ||
+      obstacle == ObstacleType.blackHole ||
       obstacle == ObstacleType.hazardTrap ||
-      obstacle == ObstacleType.glitchHazard ||
-      obstacle == ObstacleType.mysteryBox;
+      obstacle == ObstacleType.lockedItem ||
+      obstacle == ObstacleType.glitchedDecoy;
 
   GridCell clearItem() => GridCell(
-    obstacle:       obstacle,
-    disguiseItemId: disguiseItemId,
-    boxVariant:     boxVariant,
-  );
+    obstacle: obstacle, lockedItemId: lockedItemId, decoyItemId: decoyItemId);
   GridCell withItem(int id) => GridCell(
-    itemId:         id,
-    obstacle:       obstacle,
-    disguiseItemId: disguiseItemId,
-    boxVariant:     boxVariant,
-  );
+    itemId: id, obstacle: obstacle, lockedItemId: lockedItemId, decoyItemId: decoyItemId);
 
   GridCell copyWith({
-    Object? itemId = _sentinel,
+    Object? itemId      = _sentinel,
     ObstacleType? obstacle,
     bool? isUnlocking,
-    Object? disguiseItemId = _sentinel,
-    MysteryBoxVariant? boxVariant,
+    Object? lockedItemId = _sentinel,
+    Object? decoyItemId  = _sentinel,
   }) {
     return GridCell(
-      itemId:         itemId == _sentinel ? this.itemId : itemId as int?,
-      obstacle:       obstacle        ?? this.obstacle,
-      isUnlocking:    isUnlocking     ?? this.isUnlocking,
-      disguiseItemId: disguiseItemId == _sentinel
-          ? this.disguiseItemId
-          : disguiseItemId as int?,
-      boxVariant:     boxVariant      ?? this.boxVariant,
+      itemId:       itemId      == _sentinel ? this.itemId      : itemId      as int?,
+      obstacle:     obstacle    ?? this.obstacle,
+      isUnlocking:  isUnlocking ?? this.isUnlocking,
+      lockedItemId: lockedItemId == _sentinel ? this.lockedItemId : lockedItemId as int?,
+      decoyItemId:  decoyItemId  == _sentinel ? this.decoyItemId  : decoyItemId  as int?,
     );
   }
 
