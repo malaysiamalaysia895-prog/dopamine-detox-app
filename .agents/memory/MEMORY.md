@@ -2,3 +2,6 @@
 - [Init ordering](init-ordering.md) — AdMob + Audio must NOT be awaited before runApp(); fire-and-forget after runApp() to prevent white screen
 - [Timer-story race](timer-story-race.md) — Timer must start in dismissStory(), not startLevel(); starting it during the story dialog causes bad-state crash on "Let's Go"
 - [Level map freeze](level-map-freeze.md) — Only one AnimationController on the map; use _AnimatedLevelNode (StatefulWidget) for the next level, _StaticLevelNode (StatelessWidget) for all others
+- [StateNotifier no mounted](statenotifier-mounted.md) — Riverpod StateNotifier has no `mounted`; add `_disposed = true` in dispose() and guard timer callbacks with it
+- [Stack overlay full-screen](stack-overlay-sizing.md) — Custom overlays in a Stack must use SizedBox.expand() to fill the screen; without it they're pinned top-left at natural widget size
+- [Auto-push rule](auto-push-rule.md) — Always push to Merge-app immediately after every code change; never wait for user to ask

@@ -885,9 +885,8 @@ class _GridCellState extends ConsumerState<_GridCell>
         },
       );
     }
-    // ── Hazard / Decoy obstacle cells — drag target ───────────────────────────
-    // BUG FIX: these cells had no DragTarget so drops were silently ignored.
-    // hazardTrap → tapHazard (-20⚡), glitchedDecoy → tapDecoy (-30⚡).
+    // BUG FIX (levels 5-20): hazardTrap/glitchedDecoy had no DragTarget.
+    // Dropping an item on them now fires the same penalty as tapping.
     else if (cell.isHazard || cell.isDecoy) {
       cellBody = DragTarget<_DragData>(
         onWillAcceptWithDetails: (_) => true,
