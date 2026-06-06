@@ -320,34 +320,6 @@ class GameNotifier extends StateNotifier<GameState> {
     // since the same asset is already playing (_currentBgmAsset guard).
     AudioManager.instance.playBgm(themeOf(cfg.phase).bgmAsset);
 
-    // ── Malware Boss Event ─────────────────────────────────────────────────
-    // For L5 tutorial: find first pair of identical mergeable items on the grid
-    (int, int)? _tutFrom;
-    (int, int)? _tutTo;
-    if (cfg.number == 5) {
-      outer:
-      for (int cc = 0; cc < cfg.gridCols; cc++) {
-        for (int rr = 0; rr < cfg.gridRows; rr++) {
-          final id = grid[cc][rr].itemId;
-          if (id == null || grid[cc][rr].isBlocked) continue;
-          for (int cc2 = cc; cc2 < cfg.gridCols; cc2++) {
-            for (int rr2 = (cc2 == cc ? rr + 1 : 0); rr2 < cfg.gridRows; rr2++) {
-              if (grid[cc2][rr2].itemId == id && !grid[cc2][rr2].isBlocked) {
-                _tutFrom = (cc, rr);
-                _tutTo   = (cc2, rr2);
-                break outer;
-              }
-            }
-          }
-        }
-      }
-    }
-    malwareController.triggerForLevel(
-      cfg.number,
-      onClearGrid:   _clearAllItems,
-      tutorialFrom:  _tutFrom,
-      tutorialTo:    _tutTo,
-    );
   }
 
   // ── Clear All Grid Items (malware loss callback) ────────────────────────
@@ -561,6 +533,37 @@ class GameNotifier extends StateNotifier<GameState> {
     if (cfg.hasDecoys) {
       _startGlitchTimer();
       if (cfg.decoysAreTeleporting) _startDecoyTeleportTimer();
+    }
+
+    // ── Malware Boss Event: trigger AFTER story dismissed so player sees board ──
+    {
+      final grid = state.grid;
+      (int, int)? _tutFrom;
+      (int, int)? _tutTo;
+      if (cfg.number == 5) {
+        outer:
+        for (int cc = 0; cc < cfg.gridCols; cc++) {
+          for (int rr = 0; rr < cfg.gridRows; rr++) {
+            final id = grid[cc][rr].itemId;
+            if (id == null || grid[cc][rr].isBlocked) continue;
+            for (int cc2 = cc; cc2 < cfg.gridCols; cc2++) {
+              for (int rr2 = (cc2 == cc ? rr + 1 : 0); rr2 < cfg.gridRows; rr2++) {
+                if (grid[cc2][rr2].itemId == id && !grid[cc2][rr2].isBlocked) {
+                  _tutFrom = (cc, rr);
+                  _tutTo   = (cc2, rr2);
+                  break outer;
+                }
+              }
+            }
+          }
+        }
+      }
+      malwareController.triggerForLevel(
+        cfg.number,
+        onClearGrid:  _clearAllItems,
+        tutorialFrom: _tutFrom,
+        tutorialTo:   _tutTo,
+      );
     }
   }
 
