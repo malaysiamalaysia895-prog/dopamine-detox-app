@@ -13,6 +13,7 @@ import '../models/models.dart';
 import '../services/audio_manager.dart';
 import '../services/ad_manager.dart';
 import '../themes/phase_themes.dart';
+import '../controllers/malware_controller.dart';
 
 // ─── Persistence Keys ─────────────────────────────────────────────────────────
 
@@ -218,6 +219,7 @@ class GameNotifier extends StateNotifier<GameState> {
   Timer? _decoyTeleportTimer;
   bool   _disposed = false;
   final Random _rng = Random();
+  final malwareController = MalwareController();
 
   /// True if the player voluntarily watched the Rewarded Ad (3× coins) on the
   /// current Victory screen. Reset to false at the start of every new level
@@ -317,6 +319,12 @@ class GameNotifier extends StateNotifier<GameState> {
     // tapped. dismissStory() still calls playBgm() but it becomes a no-op
     // since the same asset is already playing (_currentBgmAsset guard).
     AudioManager.instance.playBgm(themeOf(cfg.phase).bgmAsset);
+
+    // ── Malware Boss Event ─────────────────────────────────────────────────
+    malwareController.triggerForLevel(
+      cfg.number,
+      onClearGrid: _clearAllItems,
+    );
   }
 
   // ── Initial Grid Construction ─────────────────────────────────────────────
@@ -659,6 +667,7 @@ class GameNotifier extends StateNotifier<GameState> {
 
     AudioManager.instance.playMergeSnap();
     HapticFeedback.lightImpact();
+    malwareController.onItemMerged(); // ← Malware boss: count this merge
   }
 
   void _unlockAdjacent(List<List<GridCell>> grid, int col, int row) {
@@ -1171,6 +1180,7 @@ class GameNotifier extends StateNotifier<GameState> {
     _supplyDropCountdownTimer?.cancel();
     _glitchTimer?.cancel();
     _decoyTeleportTimer?.cancel();
+    malwareController.dispose();
     super.dispose();
   }
 }

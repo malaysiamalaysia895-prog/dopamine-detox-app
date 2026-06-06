@@ -19,6 +19,7 @@ import '../services/ad_manager.dart';
 import '../services/audio_manager.dart';
 import '../providers/settings_provider.dart';
 import 'settings_screen.dart';
+import '../widgets/malware_overlay.dart';
 
 // ─── GameBoardScreen (ConsumerStatefulWidget for arc overlay keys) ────────────
 
@@ -210,6 +211,12 @@ class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
                   ),
                   // Dialog overlay
                   _DialogLayer(theme: theme),
+                  // Malware Boss overlay (invisible when not on boss level)
+                  MalwareOverlay(
+                    controller: ref.read(gameProvider.notifier).malwareController,
+                    onTutorialSkip: () =>
+                        ref.read(gameProvider.notifier).malwareController.startAfterTutorial(),
+                  ),
 
                 ],
               ),
