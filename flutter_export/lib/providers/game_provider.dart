@@ -327,6 +327,18 @@ class GameNotifier extends StateNotifier<GameState> {
     );
   }
 
+  // ── Clear All Grid Items (malware loss callback) ────────────────────────
+  void _clearAllItems() {
+    final cfg     = state.currentLevel;
+    final newGrid = _cloneGrid();
+    for (int c = 0; c < cfg.gridCols; c++) {
+      for (int r = 0; r < cfg.gridRows; r++) {
+        newGrid[c][r] = newGrid[c][r].clearItem();
+      }
+    }
+    state = state.copyWith(grid: newGrid);
+  }
+
   // ── Initial Grid Construction ─────────────────────────────────────────────
 
   List<List<GridCell>> _buildInitialGrid(LevelDefinition cfg) {
