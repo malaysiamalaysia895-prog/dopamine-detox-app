@@ -101,6 +101,9 @@ class AudioManager with WidgetsBindingObserver {
   bool _muted       = false;
   bool _initialized = false;
 
+  /// Saved BGM asset path before malware takes over. Restored on malware end.
+  String? _preMalwareBgm;
+
   // Getters for SettingsProvider / UI
   double get bgmVolume => _bgmVol;
   double get sfxVolume => _sfxVol;
@@ -159,6 +162,24 @@ class AudioManager with WidgetsBindingObserver {
   }
 
   void toggleMute() => setMuted(!_muted);
+
+  // ── Malware BGM switchover ─────────────────────────────────────────────────
+
+  /// Switch to villain/scary BGM the moment malware appears.
+  /// Saves the current track so [resumePreMalwareBgm] can restore it.
+  Future<void> playMalwareBgm() async {
+    _preMalwareBgm = _currentBgmAsset;
+    await playBgm('audio/bgm_megacorp.mp3');
+  }
+
+  /// Restore the BGM that was playing before malware took over.
+  Future<void> resumePreMalwareBgm() async {
+    final prev = _preMalwareBgm;
+    _preMalwareBgm = null;
+    if (prev != null) {
+      await playBgm(prev);
+    }
+  }
 
   // ── BGM controls ──────────────────────────────────────────────────────────
 

@@ -216,6 +216,17 @@ class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
                     controller: ref.read(gameProvider.notifier).malwareController,
                     onTutorialSkip: () =>
                         ref.read(gameProvider.notifier).malwareController.startAfterTutorial(),
+                    onTutorialMerge: () {
+                      final ctrl = ref.read(gameProvider.notifier).malwareController;
+                      final from = ctrl.tutorialFromCell;
+                      final to   = ctrl.tutorialToCell;
+                      if (from != null && to != null) {
+                        ref.read(gameProvider.notifier).handleDrag(
+                          from.$1, from.$2,
+                          toCol: to.$1, toRow: to.$2,
+                        );
+                      }
+                    },
                     getCellRect: (col, row) {
                       final box = _gridKey.currentContext?.findRenderObject() as RenderBox?;
                       if (box == null || _lastCellSize == 0) return null;
