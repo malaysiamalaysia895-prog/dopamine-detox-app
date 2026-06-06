@@ -169,7 +169,7 @@ class AudioManager with WidgetsBindingObserver {
   /// Saves the current track so [resumePreMalwareBgm] can restore it.
   Future<void> playMalwareBgm() async {
     _preMalwareBgm = _currentBgmAsset;
-    await playBgm('audio/bgm_megacorp.mp3');
+    await playBgm('audio/bgm_malware.mp3');
   }
 
   /// Restore the BGM that was playing before malware took over.
