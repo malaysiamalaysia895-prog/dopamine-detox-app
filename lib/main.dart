@@ -1,0 +1,140 @@
+// ============================================================
+// main.dart — Tech Tycoon Merge — App Entry Point
+//
+// ════════════════════════════════════════════════════════════
+// SETUP (do this BEFORE flutter pub get)
+// ════════════════════════════════════════════════════════════
+//
+// 1. android/app/src/main/AndroidManifest.xml
+//    Inside <manifest>:
+//      <uses-permission android:name="android.permission.INTERNET"/>
+//      <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+//    Inside <application>:
+//      <meta-data
+//        android:name="com.google.android.gms.ads.APPLICATION_ID"
+//        android:value="ca-app-pub-8566652140087308~1114269136"/>
+//
+// 2. ios/Runner/Info.plist — inside root <dict>:
+//      <key>GADApplicationIdentifier</key>
+//      <string>ca-app-pub-8566652140087308~1114269136</string>
+//      <key>SKAdNetworkItems</key>
+//      <array>
+//        <dict>
+//          <key>SKAdNetworkIdentifier</key>
+//          <string>cstr6suwn9.skadnetwork</string>
+//        </dict>
+//      </array>
+//
+// 3. android/app/build.gradle:
+//      defaultConfig { minSdkVersion 21 }
+//
+// 4. Place .mp3 files in assets/audio/:
+//      bgm_garage.mp3, bgm_office.mp3, bgm_silicon.mp3,
+//      bgm_megacorp.mp3, bgm_universe.mp3,
+//      spawn_pop.mp3, merge_snap.mp3, error_buzz.mp3,
+//      level_victory_fanfare.mp3, time_warning.mp3
+//
+// 5. Run: flutter pub get && flutter run
+// ════════════════════════════════════════════════════════════
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'providers/game_provider.dart';
+import 'screens/level_map_screen.dart';
+import 'screens/game_board_screen.dart';
+import 'services/audio_manager.dart';
+import 'services/ad_manager.dart';
+import 'services/network_gate.dart';
+import 'models/models.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // ── Global crash shield — prevents gray "error box" widget from showing ──────
+  // Any widget that crashes in release mode normally shows a solid gray box.
+  // Replacing it with a transparent Container keeps the game visually intact
+  // (the layer behind shows through) while still reporting the error to Flutter.
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    debugPrint('[ErrorWidget] ${details.exceptionAsString()}');
+    return Container(color: Colors.black.withOpacity(0.0));
+  };
+
+  // ── Portrait-only lock ──────────────────────────────────────────────────────
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+
+  // ── Immersive full-screen ───────────────────────────────────────────────────
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor:                    Colors.transparent,
+    statusBarIconBrightness:           Brightness.light,
+    systemNavigationBarColor:          Colors.black,
+    systemNavigationBarIconBrightness: Brightness.light,
+  ));
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
+  // ── CRITICAL FIX: Call runApp() FIRST — never block it with heavy init ──────
+  // MobileAds.instance.initialize() can take 1-4 seconds on cold start.
+  // Awaiting it before runApp() produces a white/black screen. Instead we
+  // call runApp() now and initialise the SDKs in the background.
+  // Both AdManager and AudioManager guard every method with _initialized
+  // checks, so it is always safe to call them before init completes — the
+  // first ad/sound request that arrives before init will simply be skipped
+  // or will trigger a load-retry, never a crash.
+  runApp(const ProviderScope(child: TechTycoonMergeApp()));
+
+  // ── AdMob SDK — background init ─────────────────────────────────────────────
+  AdManager.instance.initialize();
+
+  // ── Audio — background init ──────────────────────────────────────────────────
+  AudioManager.instance.initialize();
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
+
+class TechTycoonMergeApp extends StatelessWidget {
+  const TechTycoonMergeApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Tech Tycoon Merge',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF00E5FF),
+          brightness: Brightness.dark,
+        ),
+        scaffoldBackgroundColor: Colors.black,
+        useMaterial3: true,
+        fontFamily: 'Roboto',
+      ),
+      // NetworkGate wraps the entire game tree.
+      // Any offline state → un-dismissible blocking screen.
+      home: const NetworkGate(child: _AppRoot()),
+    );
+  }
+}
+
+// ─── App Root — switches between Level Map and Game Board ─────────────────────
+
+class _AppRoot extends ConsumerWidget {
+  const _AppRoot();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final screen = ref.watch(screenProvider);
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 400),
+      transitionBuilder: (child, animation) =>
+          FadeTransition(opacity: animation, child: child),
+      child: switch (screen) {
+        AppScreen.map  => const LevelMapScreen(key: ValueKey('map')),
+        AppScreen.game => const GameBoardScreen(key: ValueKey('game')),
+      },
+    );
+  }
+}
