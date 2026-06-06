@@ -272,7 +272,7 @@ class _LevelNode extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final highest    = ref.watch(highestLvlProvider);
     final isNext     = levelNumber == highest;
-    final isUnlocked = levelNumber <= highest;
+    final isUnlocked = true; // TESTING: all levels unlocked
     final levelDef   = kLevels[levelNumber - 1];
 
     if (isNext) {
