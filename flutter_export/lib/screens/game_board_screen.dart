@@ -228,18 +228,20 @@ class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
                       }
                     },
                     getCellRect: (col, row) {
-                      final box = _gridKey.currentContext?.findRenderObject() as RenderBox?;
-                      if (box == null || _lastCellSize == 0) return null;
-                      const gap = 5.0;
-                      final cs  = _lastCellSize;
-                      // Mirror the exact layout math used by _SpawnArcOverlay:
-                      // the inner grid is centered inside the ClipRRect container.
-                      final totalW = levelDef.gridCols * (cs + gap) - gap;
-                      final totalH = levelDef.gridRows * (cs + gap) - gap;
-                      final gridGlobal = box.localToGlobal(Offset.zero);
-                      final dx = gridGlobal.dx + (box.size.width  - totalW) / 2 + col * (cs + gap);
-                      final dy = gridGlobal.dy + (box.size.height - totalH) / 2 + row * (cs + gap);
-                      return Rect.fromLTWH(dx, dy, cs, cs);
+                      try {
+                        final box = _gridKey.currentContext?.findRenderObject() as RenderBox?;
+                        if (box == null || !box.hasSize || _lastCellSize == 0) return null;
+                        const gap = 5.0;
+                        final cs  = _lastCellSize;
+                        final totalW = levelDef.gridCols * (cs + gap) - gap;
+                        final totalH = levelDef.gridRows * (cs + gap) - gap;
+                        final gridGlobal = box.localToGlobal(Offset.zero);
+                        final dx = gridGlobal.dx + (box.size.width  - totalW) / 2 + col * (cs + gap);
+                        final dy = gridGlobal.dy + (box.size.height - totalH) / 2 + row * (cs + gap);
+                        return Rect.fromLTWH(dx, dy, cs, cs);
+                      } catch (_) {
+                        return null;
+                      }
                     },
                   ),
 
