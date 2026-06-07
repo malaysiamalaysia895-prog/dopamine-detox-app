@@ -216,32 +216,19 @@ class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
                     controller: ref.read(gameProvider.notifier).malwareController,
                     onTutorialSkip: () =>
                         ref.read(gameProvider.notifier).malwareController.startAfterTutorial(),
-                    onTutorialMerge: () {
-                      final ctrl = ref.read(gameProvider.notifier).malwareController;
-                      final from = ctrl.tutorialFromCell;
-                      final to   = ctrl.tutorialToCell;
-                      if (from != null && to != null) {
-                        ref.read(gameProvider.notifier).handleDrag(
-                          from.$1, from.$2,
-                          toCol: to.$1, toRow: to.$2,
-                        );
-                      }
-                    },
                     getCellRect: (col, row) {
-                      try {
-                        final box = _gridKey.currentContext?.findRenderObject() as RenderBox?;
-                        if (box == null || !box.hasSize || _lastCellSize == 0) return null;
-                        const gap = 5.0;
-                        final cs  = _lastCellSize;
-                        final totalW = levelDef.gridCols * (cs + gap) - gap;
-                        final totalH = levelDef.gridRows * (cs + gap) - gap;
-                        final gridGlobal = box.localToGlobal(Offset.zero);
-                        final dx = gridGlobal.dx + (box.size.width  - totalW) / 2 + col * (cs + gap);
-                        final dy = gridGlobal.dy + (box.size.height - totalH) / 2 + row * (cs + gap);
-                        return Rect.fromLTWH(dx, dy, cs, cs);
-                      } catch (_) {
-                        return null;
-                      }
+                      final box = _gridKey.currentContext?.findRenderObject() as RenderBox?;
+                      if (box == null || _lastCellSize == 0) return null;
+                      const gap = 5.0;
+                      final cs  = _lastCellSize;
+                      // Mirror the exact layout math used by _SpawnArcOverlay:
+                      // the inner grid is centered inside the ClipRRect container.
+                      final totalW = levelDef.gridCols * (cs + gap) - gap;
+                      final totalH = levelDef.gridRows * (cs + gap) - gap;
+                      final gridGlobal = box.localToGlobal(Offset.zero);
+                      final dx = gridGlobal.dx + (box.size.width  - totalW) / 2 + col * (cs + gap);
+                      final dy = gridGlobal.dy + (box.size.height - totalH) / 2 + row * (cs + gap);
+                      return Rect.fromLTWH(dx, dy, cs, cs);
                     },
                   ),
 
