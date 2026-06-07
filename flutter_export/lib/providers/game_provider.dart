@@ -233,7 +233,7 @@ class GameNotifier extends StateNotifier<GameState> {
     try {
       final prefs = await SharedPreferences.getInstance();
       state = state.copyWith(
-        highestUnlockedLevel: prefs.getInt(_kHighestLevel) ?? 1,
+        highestUnlockedLevel: kLevels.length,
         totalCoins:           prefs.getInt(_kTotalCoins)   ?? 0,
       );
     } catch (e) {
