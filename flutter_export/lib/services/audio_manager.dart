@@ -169,17 +169,26 @@ class AudioManager with WidgetsBindingObserver {
   /// Saves the current track so [resumePreMalwareBgm] can restore it.
   Future<void> playMalwareBgm() async {
     _preMalwareBgm = _currentBgmAsset;
-    // Fade out current BGM quickly, then fade villain track in
-    try { await _bgm.setVolume(0); } catch (_) {}
-    await playBgm('audio/bgm_malware.mp3');
-    // Smooth fade-in: ramp volume 0→target over 800 ms (16 steps × 50 ms)
-    const steps = 16;
-    for (int i = 1; i <= steps; i++) {
-      await Future.delayed(const Duration(milliseconds: 50));
-      try {
-        final v = (_bgmVol * i / steps).clamp(0.0, 1.0);
-        if (!_muted) await _bgm.setVolume(v);
-      } catch (_) {}
+    // Bypass playBgm() — it resets volume to _bgmVol before playing,
+    // which kills the fade-in. We manage the AudioPlayer directly.
+    try {
+      const asset = 'audio/bgm_malware.mp3';
+      if (_currentBgmAsset == asset && !_bgmPaused) return;
+      _currentBgmAsset = asset;
+      await _bgm.stop();
+      await _bgm.setAudioContext(_kBgmContext);
+      await _bgm.setReleaseMode(ReleaseMode.loop);
+      await _bgm.setVolume(0.0);                          // start silent
+      if (!_muted) await _bgm.play(AssetSource(asset));   // plays at vol 0
+      // Dramatic fade-in: 0 → _bgmVol over 700 ms (14 × 50 ms)
+      for (int i = 1; i <= 14; i++) {
+        await Future.delayed(const Duration(milliseconds: 50));
+        if (!_muted) {
+          await _bgm.setVolume((_bgmVol * i / 14).clamp(0.0, _bgmVol));
+        }
+      }
+    } catch (e) {
+      debugPrint('[Audio] playMalwareBgm failed: $e');
     }
   }
 
@@ -187,9 +196,15 @@ class AudioManager with WidgetsBindingObserver {
   Future<void> resumePreMalwareBgm() async {
     final prev = _preMalwareBgm;
     _preMalwareBgm = null;
-    if (prev != null) {
-      await playBgm(prev);
-    }
+    if (prev == null) return;
+    // Fade out malware BGM before switching back
+    try {
+      for (int i = 10; i >= 0; i--) {
+        await Future.delayed(const Duration(milliseconds: 30));
+        if (!_muted) await _bgm.setVolume((_bgmVol * i / 10).clamp(0.0, _bgmVol));
+      }
+    } catch (_) {}
+    await playBgm(prev); // playBgm restores proper volume
   }
 
   // ── BGM controls ──────────────────────────────────────────────────────────
