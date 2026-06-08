@@ -169,7 +169,18 @@ class AudioManager with WidgetsBindingObserver {
   /// Saves the current track so [resumePreMalwareBgm] can restore it.
   Future<void> playMalwareBgm() async {
     _preMalwareBgm = _currentBgmAsset;
+    // Fade out current BGM quickly, then fade villain track in
+    try { await _bgm.setVolume(0); } catch (_) {}
     await playBgm('audio/bgm_malware.mp3');
+    // Smooth fade-in: ramp volume 0→target over 800 ms (16 steps × 50 ms)
+    const steps = 16;
+    for (int i = 1; i <= steps; i++) {
+      await Future.delayed(const Duration(milliseconds: 50));
+      try {
+        final v = (_bgmVol * i / steps).clamp(0.0, 1.0);
+        if (!_muted) await _bgm.setVolume(v);
+      } catch (_) {}
+    }
   }
 
   /// Restore the BGM that was playing before malware took over.
