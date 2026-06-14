@@ -20,6 +20,7 @@ import '../services/audio_manager.dart';
 import '../providers/settings_provider.dart';
 import 'settings_screen.dart';
 import '../widgets/malware_overlay.dart';
+import '../widgets/robot_overlay.dart';
 
 // ─── GameBoardScreen (ConsumerStatefulWidget for arc overlay keys) ────────────
 
@@ -230,6 +231,10 @@ class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
                       final dy = gridGlobal.dy + (box.size.height - totalH) / 2 + row * (cs + gap);
                       return Rect.fromLTWH(dx, dy, cs, cs);
                     },
+                  ),
+                  // Robot Boss overlay (L13, L15, L17, L20)
+                  RobotOverlay(
+                    controller: ref.read(gameProvider.notifier).robotController,
                   ),
 
                 ],

@@ -14,6 +14,7 @@ import '../services/audio_manager.dart';
 import '../services/ad_manager.dart';
 import '../themes/phase_themes.dart';
 import '../controllers/malware_controller.dart';
+import '../controllers/robot_controller.dart';
 
 // ─── Persistence Keys ─────────────────────────────────────────────────────────
 
@@ -220,6 +221,7 @@ class GameNotifier extends StateNotifier<GameState> {
   bool   _disposed = false;
   final Random _rng = Random();
   final malwareController = MalwareController();
+  final robotController  = RobotController();
 
   /// True if the player voluntarily watched the Rewarded Ad (3× coins) on the
   /// current Victory screen. Reset to false at the start of every new level
@@ -565,6 +567,13 @@ class GameNotifier extends StateNotifier<GameState> {
         tutorialTo:   _tutTo,
       );
     }
+    // ── Robot Villain trigger (L13, L15, L17, L20) ──────────────────────────
+    if (kRobotLevels.containsKey(cfg.number)) {
+      robotController.triggerForLevel(
+        cfg.number,
+        onClearGrid: _clearAllItems,
+      );
+    }
   }
 
   // ── Spawn Item ────────────────────────────────────────────────────────────
@@ -706,6 +715,7 @@ class GameNotifier extends StateNotifier<GameState> {
     AudioManager.instance.playMergeSnap();
     HapticFeedback.lightImpact();
     malwareController.onItemMerged(); // ← Malware boss: count this merge
+    robotController.onItemMerged();    // ← Robot boss: count this merge
   }
 
   void _unlockAdjacent(List<List<GridCell>> grid, int col, int row) {
@@ -1219,6 +1229,7 @@ class GameNotifier extends StateNotifier<GameState> {
     _glitchTimer?.cancel();
     _decoyTeleportTimer?.cancel();
     malwareController.dispose();
+    robotController.dispose();
     super.dispose();
   }
 }

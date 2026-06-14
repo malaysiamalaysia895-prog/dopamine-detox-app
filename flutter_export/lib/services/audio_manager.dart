@@ -104,6 +104,9 @@ class AudioManager with WidgetsBindingObserver {
   /// Saved BGM asset path before malware takes over. Restored on malware end.
   String? _preMalwareBgm;
 
+  /// Saved BGM asset path before robot takes over. Restored on robot end.
+  String? _preRobotBgm;
+
   // Getters for SettingsProvider / UI
   double get bgmVolume => _bgmVol;
   double get sfxVolume => _sfxVol;
@@ -176,6 +179,21 @@ class AudioManager with WidgetsBindingObserver {
   Future<void> resumePreMalwareBgm() async {
     final prev = _preMalwareBgm;
     _preMalwareBgm = null;
+    if (prev != null) await playBgm(prev);
+  }
+
+  // ── Robot BGM switchover ──────────────────────────────────────────────────
+
+  /// Switch to robot villain BGM when robot appears.
+  Future<void> playRobotBgm() async {
+    _preRobotBgm = _currentBgmAsset;
+    await playBgm('audio/bgm_robot.mp3');
+  }
+
+  /// Restore the BGM that was playing before robot took over.
+  Future<void> resumePreRobotBgm() async {
+    final prev = _preRobotBgm;
+    _preRobotBgm = null;
     if (prev != null) await playBgm(prev);
   }
 
