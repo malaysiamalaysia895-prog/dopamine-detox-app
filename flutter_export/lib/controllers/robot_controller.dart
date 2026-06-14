@@ -48,6 +48,9 @@ class RobotController extends ChangeNotifier with WidgetsBindingObserver {
       _vibrationTimer?.cancel();
       _vibrationTimer = null;
       try { Vibration.cancel(); } catch (_) {}
+    } else {
+      // App came back to foreground — mark foreground immediately
+      _appInForeground = true;
     }
   }
 
