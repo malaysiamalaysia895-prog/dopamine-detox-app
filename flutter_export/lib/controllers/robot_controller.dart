@@ -18,14 +18,14 @@ enum RobotPhase {
   loss,
 }
 
-const Map<int, int> kRobotLevels = {13: 7, 15: 8, 17: 10, 20: 12};
+const Map<int, int> kRobotLevels = {13: 7, 15: 10, 17: 12, 20: 15};
 const int kRobotAssemblyMs  = 1800; // ms for parts to fly in
 
 class RobotController extends ChangeNotifier with WidgetsBindingObserver {
 
   // ── State ────────────────────────────────────────────────────────────────
   RobotPhase phase          = RobotPhase.idle;
-  int        secondsLeft    = kRobotTimerSeconds;
+  int        secondsLeft    = 99; // no timer — defeated by merges only
   int        mergesDone     = 0;
   int        mergesRequired = 0;
   int        currentLevel   = 0;

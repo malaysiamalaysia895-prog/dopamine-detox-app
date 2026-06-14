@@ -611,7 +611,8 @@ class _WinDissolvePhaseState extends State<_WinDissolvePhase>
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// WIN EXPLOSION — L20 only: parts scatter dramatically
+// WIN EXPLOSION — L20 only: AAA-style parts scatter in fixed dramatic directions
+// Head flies UP-LEFT, Torso DOWN, Arms LEFT/RIGHT, Legs diagonal outward
 // ════════════════════════════════════════════════════════════════════════════
 class _WinExplosionPhase extends StatefulWidget {
   @override State<_WinExplosionPhase> createState() => _WinExplosionPhaseState();
@@ -619,38 +620,50 @@ class _WinExplosionPhase extends StatefulWidget {
 class _WinExplosionPhaseState extends State<_WinExplosionPhase>
     with SingleTickerProviderStateMixin {
   late AnimationController _c;
-  final _rng = math.Random();
 
-  // Each part gets a random exit velocity
-  late final List<Offset> _velocities;
-  late final List<double>  _rotations;
+  // Fixed dramatic exit directions for each part (dx, dy) — normalized
+  static const _dirs = [
+    Offset(-0.55, -1.0),  // head    → shoots UP-LEFT
+    Offset( 0.10, -0.30), // torso   → arcs slightly UP then DOWN
+    Offset(-1.00,  0.20), // l-arm   → FAR LEFT
+    Offset( 1.00,  0.20), // r-arm   → FAR RIGHT
+    Offset(-0.55,  1.00), // l-leg   → DOWN-LEFT
+    Offset( 0.55,  1.00), // r-leg   → DOWN-RIGHT
+  ];
+  // Spin multipliers for each part
+  static const _spins = [-3.2, 1.8, -2.5, 2.5, 1.4, -1.4];
 
-  late Animation<double> _flashOpacity;
-  late Animation<double> _shockwave;
-  late Animation<double> _textOpacity;
+  late Animation<double> _flash1, _flash2, _shockwave1, _shockwave2, _textOpacity, _textSlide;
 
   @override
   void initState() {
     super.initState();
-    _velocities = List.generate(6, (_) => Offset(
-      (_rng.nextDouble() - 0.5) * 14,
-      (_rng.nextDouble() - 0.5) * 14 - 2,
-    ));
-    _rotations = List.generate(6, (_) => (_rng.nextDouble() - 0.5) * 8);
+    _c = AnimationController(duration: const Duration(milliseconds: 3000), vsync: this)..forward();
 
-    _c = AnimationController(duration: const Duration(milliseconds: 2400), vsync: this)..forward();
-
-    _flashOpacity = TweenSequence<double>([
-      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0), weight: 5),
-      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 20),
-      TweenSequenceItem(tween: ConstantTween(0.0), weight: 75),
+    _flash1 = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0), weight: 4),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 12),
+      TweenSequenceItem(tween: ConstantTween(0.0), weight: 84),
     ]).animate(_c);
 
-    _shockwave = Tween<double>(begin: 0.0, end: 1.0)
-        .animate(CurvedAnimation(parent: _c, curve: const Interval(0.0, 0.35, curve: Curves.easeOut)));
+    _flash2 = TweenSequence<double>([
+      TweenSequenceItem(tween: ConstantTween(0.0), weight: 10),
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: 0.60), weight: 3),
+      TweenSequenceItem(tween: Tween(begin: 0.60, end: 0.0), weight: 10),
+      TweenSequenceItem(tween: ConstantTween(0.0), weight: 77),
+    ]).animate(_c);
+
+    _shockwave1 = Tween<double>(begin: 0.0, end: 1.0)
+        .animate(CurvedAnimation(parent: _c, curve: const Interval(0.0, 0.30, curve: Curves.easeOut)));
+
+    _shockwave2 = Tween<double>(begin: 0.0, end: 1.0)
+        .animate(CurvedAnimation(parent: _c, curve: const Interval(0.08, 0.45, curve: Curves.easeOut)));
 
     _textOpacity = Tween<double>(begin: 0.0, end: 1.0)
-        .animate(CurvedAnimation(parent: _c, curve: const Interval(0.35, 0.6)));
+        .animate(CurvedAnimation(parent: _c, curve: const Interval(0.35, 0.55)));
+
+    _textSlide = Tween<double>(begin: 30.0, end: 0.0)
+        .animate(CurvedAnimation(parent: _c, curve: const Interval(0.35, 0.55, curve: Curves.easeOut)));
   }
 
   @override void dispose() { _c.dispose(); super.dispose(); }
@@ -658,92 +671,135 @@ class _WinExplosionPhaseState extends State<_WinExplosionPhase>
   @override
   Widget build(BuildContext context) {
     final sz = MediaQuery.of(context).size;
-    const cx = 0.0; // center
-    final partData = [
-      // (name, startLeft, startTop, width, height)
-      ('head',   55.0,  0.0,  62.0, 52.0),
-      ('torso',  30.0, 52.0, 110.0, 85.0),
-      ('larm',    0.0, 52.0,  30.0, 82.0),
-      ('rarm',  140.0, 52.0,  30.0, 82.0),
-      ('lleg',   34.0,137.0,  34.0, 78.0),
-      ('rleg',  102.0,137.0,  34.0, 78.0),
+    // part: (startLeft, startTop, width, height, color)
+    final parts = [
+      (_kSteel,  55.0,   0.0, 62.0, 52.0),  // head
+      (_kSteel,  30.0,  52.0, 110.0, 85.0), // torso
+      (_kDark,    0.0,  52.0,  30.0, 82.0), // l-arm
+      (_kDark,  140.0,  52.0,  30.0, 82.0), // r-arm
+      (_kSteel,  34.0, 137.0,  34.0, 78.0), // l-leg
+      (_kSteel, 102.0, 137.0,  34.0, 78.0), // r-leg
     ];
+
     return AnimatedBuilder(
       animation: _c,
       builder: (_, __) {
-        final t = _c.value;
-        final partOpacity = (1.0 - ((t - 0.1) / 0.7)).clamp(0.0, 1.0);
-        return Stack(children: [
-          // Dark overlay
-          Container(color: Colors.black.withOpacity((t * 0.7).clamp(0.0, 0.7))),
+        final t     = _c.value;
+        // Parts fade out between 30%-90% of animation
+        final pOp   = (1.0 - ((t - 0.30) / 0.60)).clamp(0.0, 1.0);
+        // Fly progress: easeOut so parts shoot fast then decelerate
+        final fly   = Curves.easeOut.transform(math.min(t * 2.2, 1.0));
 
-          // Shockwave ring
+        return Stack(children: [
+          // ── Background darkens as explosion fades ──
+          Container(color: Colors.black.withOpacity((t * 0.65).clamp(0.0, 0.65))),
+
+          // ── Shockwave ring 1 (orange) ──
           Center(child: Opacity(
-            opacity: (1.0 - _shockwave.value).clamp(0.0, 1.0),
+            opacity: (1.0 - _shockwave1.value).clamp(0.0, 1.0),
             child: Container(
-              width: 50 + _shockwave.value * sz.width,
-              height: 50 + _shockwave.value * sz.width,
+              width:  40 + _shockwave1.value * sz.width * 1.4,
+              height: 40 + _shockwave1.value * sz.width * 1.4,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                border: Border.all(color: _kOrange.withOpacity(0.8), width: 4),
-                boxShadow: [BoxShadow(color: _kOrange.withOpacity(0.4), blurRadius: 30)],
+                border: Border.all(color: _kOrange.withOpacity(0.85), width: 5),
+                boxShadow: [
+                  BoxShadow(color: _kOrange.withOpacity(0.50), blurRadius: 40, spreadRadius: 10),
+                ],
               ),
             ),
           )),
 
-          // Flying parts
-          Center(child: Transform.translate(
-            offset: Offset(0, 0),
-            child: SizedBox(
-              width: _kRW, height: _kRH,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: List.generate(partData.length, (i) {
-                  final p = partData[i];
-                  final v = _velocities[i];
-                  final fly = Curves.easeOut.transform(math.min(t * 2.5, 1.0));
-                  return Positioned(
-                    left: p.$2 + v.dx * fly * sz.width * 0.25,
-                    top:  p.$3 + v.dy * fly * sz.height * 0.25,
-                    child: Opacity(
-                      opacity: partOpacity,
-                      child: Transform.rotate(
-                        angle: _rotations[i] * fly,
-                        child: Container(
-                          width: p.$4, height: p.$5,
-                          decoration: BoxDecoration(
-                            color: _kSteel,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: _kLight.withOpacity(0.4), width: 1),
-                            boxShadow: [BoxShadow(color: _kOrange.withOpacity(0.6), blurRadius: 12)],
-                          ),
+          // ── Shockwave ring 2 (red, slightly delayed, larger) ──
+          Center(child: Opacity(
+            opacity: (1.0 - _shockwave2.value).clamp(0.0, 1.0),
+            child: Container(
+              width:  20 + _shockwave2.value * sz.width * 1.8,
+              height: 20 + _shockwave2.value * sz.width * 1.8,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: _kRed.withOpacity(0.65), width: 3),
+                boxShadow: [
+                  BoxShadow(color: _kRed.withOpacity(0.30), blurRadius: 50, spreadRadius: 8),
+                ],
+              ),
+            ),
+          )),
+
+          // ── Flying parts (each with fixed direction + spin) ──
+          Center(child: SizedBox(
+            width: _kRW, height: _kRH,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: List.generate(parts.length, (i) {
+                final p  = parts[i];
+                final d  = _dirs[i];
+                final dx = d.dx * fly * sz.width  * 0.70;
+                final dy = d.dy * fly * sz.height * 0.55;
+                final angle = _spins[i] * fly;
+                return Positioned(
+                  left: p.$2 + dx,
+                  top:  p.$3 + dy,
+                  child: Opacity(
+                    opacity: pOp,
+                    child: Transform.rotate(
+                      angle: angle,
+                      child: Container(
+                        width: p.$4, height: p.$5,
+                        decoration: BoxDecoration(
+                          color: p.$1,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: _kLight.withOpacity(0.35), width: 1),
+                          boxShadow: [
+                            BoxShadow(color: _kOrange.withOpacity(0.70), blurRadius: 18, spreadRadius: 2),
+                            BoxShadow(color: _kRed.withOpacity(0.40),    blurRadius: 30),
+                          ],
                         ),
                       ),
                     ),
-                  );
-                }),
-              ),
+                  ),
+                );
+              }),
             ),
           )),
 
-          // Flash
-          IgnorePointer(child: Container(color: Colors.white.withOpacity(_flashOpacity.value))),
+          // ── White blast flash ──
+          IgnorePointer(child: Container(
+            color: Colors.white.withOpacity(_flash1.value),
+          )),
 
-          // DESTROYED text
-          Opacity(opacity: _textOpacity.value, child: Center(child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('ROBOT DESTROYED!', style: TextStyle(
-                color: _kOrange, fontSize: 28, fontWeight: FontWeight.w900,
-                letterSpacing: 2,
-                shadows: [Shadow(color: _kOrange, blurRadius: 30), Shadow(color: Colors.red, blurRadius: 60)],
+          // ── Red secondary flash ──
+          IgnorePointer(child: Container(
+            color: _kRed.withOpacity(_flash2.value),
+          )),
+
+          // ── ROBOT DESTROYED text (slides up) ──
+          Opacity(
+            opacity: _textOpacity.value,
+            child: Transform.translate(
+              offset: Offset(0, _textSlide.value),
+              child: Center(child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('💥 ROBOT OBLITERATED! 💥', style: TextStyle(
+                    color: _kOrange,
+                    fontSize: 26,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.8,
+                    shadows: [
+                      Shadow(color: _kOrange, blurRadius: 30),
+                      Shadow(color: Colors.red, blurRadius: 60),
+                      Shadow(color: Colors.yellow, blurRadius: 10),
+                    ],
+                  )),
+                  const SizedBox(height: 10),
+                  Text('SYSTEM PERMANENTLY DESTROYED', style: const TextStyle(
+                    color: Colors.white70, fontSize: 11, letterSpacing: 3,
+                  )),
+                ],
               )),
-              const SizedBox(height: 8),
-              Text('SYSTEM PERMANENTLY SECURED', style: const TextStyle(
-                color: Colors.white54, fontSize: 11, letterSpacing: 3,
-              )),
-            ],
-          ))),
+            ),
+          ),
         ]);
       },
     );
