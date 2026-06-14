@@ -49,7 +49,10 @@ class _RobotBody extends StatelessWidget {
   final double opacity;
   final double scale;
   final Widget? glowOverlay;
-  const _RobotBody({this.opacity = 1.0, this.scale = 1.0, this.glowOverlay});
+  final double armSwing;   // radians — arms pivot by this angle
+  final double eyeOpen;    // 1.0 = fully open, 0.0 = blinked shut
+  const _RobotBody({this.opacity = 1.0, this.scale = 1.0, this.glowOverlay,
+      this.armSwing = 0.0, this.eyeOpen = 1.0});
 
   @override
   Widget build(BuildContext context) => Opacity(
@@ -74,7 +77,7 @@ class _RobotBody extends StatelessWidget {
                 ),
                 child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    _eyeLed(), _eyeLed(),
+                    _eyeLed(eyeOpen), _eyeLed(eyeOpen),
                   ],
                 ),
               )),
@@ -142,9 +145,9 @@ class _RobotBody extends StatelessWidget {
           )),
 
           // ── LEFT ARM ────────────────────────────────────────────────────
-          Positioned(left: 0, top: 52, child: _arm(isLeft: true)),
+          Positioned(left: 0, top: 52, child: _arm(isLeft: true,  swing:  armSwing)),
           // ── RIGHT ARM ───────────────────────────────────────────────────
-          Positioned(right: 0, top: 52, child: _arm(isLeft: false)),
+          Positioned(right: 0, top: 52, child: _arm(isLeft: false, swing: -armSwing)),
 
           // ── LEFT LEG ────────────────────────────────────────────────────
           Positioned(left: 34, top: 137, child: _leg(isLeft: true)),
@@ -157,11 +160,14 @@ class _RobotBody extends StatelessWidget {
     ),
   );
 
-  static Widget _eyeLed() => Container(
-    width: 14, height: 14,
-    decoration: BoxDecoration(
-      shape: BoxShape.circle, color: _kRed,
-      boxShadow: [BoxShadow(color: _kRed.withOpacity(0.9), blurRadius: 8)],
+  static Widget _eyeLed([double eyeOpen = 1.0]) => Transform.scale(
+    scaleY: eyeOpen.clamp(0.08, 1.0),
+    child: Container(
+      width: 14, height: 14,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle, color: _kRed,
+        boxShadow: [BoxShadow(color: _kRed.withOpacity(0.9 * eyeOpen), blurRadius: 8)],
+      ),
     ),
   );
 
@@ -170,23 +176,28 @@ class _RobotBody extends StatelessWidget {
     decoration: BoxDecoration(shape: BoxShape.circle, color: _kLight),
   );
 
-  static Widget _arm({required bool isLeft}) => _metalBox(
-    w: 30, h: 82, r: 7,
-    color: _kDark,
-    child: Column(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-      Container(width: 18, height: 18, decoration: BoxDecoration(
-        shape: BoxShape.circle, color: _kSteel,
-        border: Border.all(color: _kLight, width: 1),
-      )),
-      Container(width: 22, height: 34, decoration: BoxDecoration(
-        color: _kSteel, borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: _kLight.withOpacity(0.4), width: 1),
-      )),
-      Container(width: 26, height: 18, decoration: BoxDecoration(
-        color: _kLight, borderRadius: BorderRadius.circular(5),
-      )),
-    ]),
-  );
+  static Widget _arm({required bool isLeft, double swing = 0.0}) =>
+    Transform.rotate(
+      angle: swing,
+      alignment: Alignment.topCenter,
+      child: _metalBox(
+        w: 30, h: 82, r: 7,
+        color: _kDark,
+        child: Column(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+          Container(width: 18, height: 18, decoration: BoxDecoration(
+            shape: BoxShape.circle, color: _kSteel,
+            border: Border.all(color: _kLight, width: 1),
+          )),
+          Container(width: 22, height: 34, decoration: BoxDecoration(
+            color: _kSteel, borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: _kLight.withOpacity(0.4), width: 1),
+          )),
+          Container(width: 26, height: 18, decoration: BoxDecoration(
+            color: _kLight, borderRadius: BorderRadius.circular(5),
+          )),
+        ]),
+      ),
+    );
 
   static Widget _leg({required bool isLeft}) => _metalBox(
     w: 34, h: 78, r: 6,
@@ -450,38 +461,79 @@ class _ActivePhase extends StatefulWidget {
   @override State<_ActivePhase> createState() => _ActivePhaseState();
 }
 class _ActivePhaseState extends State<_ActivePhase>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late AnimationController _idle;
+  late AnimationController _armAnim;
+  late AnimationController _blinkAnim;
+
   @override
   void initState() {
     super.initState();
-    _idle = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800))
+    // Gentle bob up/down
+    _idle    = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800))
       ..repeat(reverse: true);
+    // Arms swing back and forth
+    _armAnim = AnimationController(vsync: this, duration: const Duration(milliseconds: 1300))
+      ..repeat(reverse: true);
+    // Eye blink — very short, repeated every ~3.5 s
+    _blinkAnim = AnimationController(vsync: this, duration: const Duration(milliseconds: 110));
+    _scheduleBlink();
   }
-  @override void dispose() { _idle.dispose(); super.dispose(); }
+
+  void _scheduleBlink() {
+    Future.delayed(const Duration(milliseconds: 3500), () {
+      if (!mounted) return;
+      _blinkAnim.forward().then((_) {
+        if (!mounted) return;
+        _blinkAnim.reverse().then((_) { if (mounted) _scheduleBlink(); });
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _idle.dispose();
+    _armAnim.dispose();
+    _blinkAnim.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final ctrl = widget.ctrl;
     return AnimatedBuilder(
-      animation: Listenable.merge([ctrl, _idle]),
+      animation: Listenable.merge([ctrl, _idle, _armAnim, _blinkAnim]),
       builder: (_, __) {
-        final bobOffset = math.sin(_idle.value * math.pi) * 4.0;
+        final bobOffset = math.sin(_idle.value * math.pi) * 3.5;
+        final armSwing  = math.sin(_armAnim.value * math.pi) * 0.18;
+        final eyeOpen   = 1.0 - _blinkAnim.value;
         return Stack(children: [
-          // ── Thin danger screen border only (no dark overlay — keep board visible) ──
-          Positioned.fill(child: Container(
+          // ── Subtle red border — danger signal, board still fully visible ──
+          Positioned.fill(child: IgnorePointer(child: Container(
             decoration: BoxDecoration(
-              border: Border.all(color: const Color(0xFFFF1744).withOpacity(0.50), width: 2.5),
+              border: Border.all(
+                color: const Color(0xFFFF1744).withOpacity(0.40), width: 2),
             ),
-          )),
+          ))),
 
-          // ── Robot body (bobbing, lower in board) ──
-          Center(child: Transform.translate(
-            offset: Offset(0, bobOffset + 55),
-            child: _RobotBody(glowOverlay: _UrgentGlow()),
-          )),
+          // ── Robot: top-right corner, scaled down, animated ──
+          Positioned(
+            top: 138, right: 4,
+            child: Transform.translate(
+              offset: Offset(0, bobOffset),
+              child: Transform.scale(
+                scale: 0.62,
+                alignment: Alignment.topRight,
+                child: _RobotBody(
+                  glowOverlay: _UrgentGlow(),
+                  armSwing: armSwing,
+                  eyeOpen: eyeOpen,
+                ),
+              ),
+            ),
+          ),
 
-          // ── Warning banner at TOP (professional, compact) ──
+          // ── Warning banner at TOP ──
           Positioned(top: 8, left: 12, right: 12,
             child: _RobotWarningBanner(ctrl: ctrl)),
         ]);
@@ -496,8 +548,8 @@ class _UrgentGlow extends StatelessWidget {
     decoration: BoxDecoration(
       borderRadius: BorderRadius.circular(8),
       boxShadow: [
-        BoxShadow(color: _kRed.withOpacity(0.55), blurRadius: 16, spreadRadius: 3),
-        BoxShadow(color: _kOrange.withOpacity(0.30), blurRadius: 28, spreadRadius: 1),
+        BoxShadow(color: _kRed.withOpacity(0.28), blurRadius: 5, spreadRadius: 1),
+        BoxShadow(color: _kOrange.withOpacity(0.12), blurRadius: 9),
       ],
     ),
   ));
