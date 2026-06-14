@@ -21,6 +21,7 @@ import '../providers/settings_provider.dart';
 import 'settings_screen.dart';
 import '../widgets/malware_overlay.dart';
 import '../widgets/robot_overlay.dart';
+import '../controllers/robot_controller.dart';
 
 // ─── GameBoardScreen (ConsumerStatefulWidget for arc overlay keys) ────────────
 
@@ -532,22 +533,36 @@ class _DeliveryZone extends ConsumerWidget {
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(
-                  children: levelDef.quota.map((q) {
-                    final delivered = state.quotaDelivered[q.itemId] ?? 0;
-                    final done      = delivered >= q.count;
-                    final item      = ItemDictionary.getById(q.itemId);
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 10),
-                      child: _QuotaChip(
-                        itemId: q.itemId,
-                        name:  item?.name  ?? '',
-                        needed: q.count,
-                        delivered: delivered,
-                        done: done,
-                        theme: theme,
-                      ),
-                    );
-                  }).toList(),
+                  children: [
+                    ...levelDef.quota.map((q) {
+                      final delivered = state.quotaDelivered[q.itemId] ?? 0;
+                      final done      = delivered >= q.count;
+                      final item      = ItemDictionary.getById(q.itemId);
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 10),
+                        child: _QuotaChip(
+                          itemId: q.itemId,
+                          name:  item?.name  ?? '',
+                          needed: q.count,
+                          delivered: delivered,
+                          done: done,
+                          theme: theme,
+                        ),
+                      );
+                    }),
+                    // ── Robot defeat chip (visible only during robot boss levels) ──
+                    ListenableBuilder(
+                      listenable: ref.read(gameProvider.notifier).robotController,
+                      builder: (_, __) {
+                        final rc = ref.read(gameProvider.notifier).robotController;
+                        if (rc.isIdle) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: _RobotQuotaChip(ctrl: rc),
+                        );
+                      },
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -621,6 +636,50 @@ class _QuotaChip extends StatelessWidget {
             letterSpacing: 0.3,
           ),
         ),
+      ]),
+    );
+  }
+}
+
+// ── Robot Defeat Quota Chip ───────────────────────────────────────────────────
+class _RobotQuotaChip extends StatelessWidget {
+  final RobotController ctrl;
+  const _RobotQuotaChip({required this.ctrl});
+  @override
+  Widget build(BuildContext context) {
+    final done  = ctrl.mergesDone >= ctrl.mergesRequired && ctrl.mergesRequired > 0;
+    final color = done ? const Color(0xFF00E676) : const Color(0xFFFF1744);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft, end: Alignment.bottomRight,
+          colors: done
+              ? [const Color(0xFF0D2A1A), const Color(0xFF071510)]
+              : [const Color(0xFF2A0808), const Color(0xFF180505)],
+        ),
+        border: Border.all(color: color.withOpacity(0.75), width: done ? 2 : 1.5),
+        boxShadow: [BoxShadow(color: color.withOpacity(0.35), blurRadius: 10)],
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        SizedBox(
+          width: 36, height: 32,
+          child: done
+              ? const Icon(Icons.check_circle, color: Color(0xFF00E676), size: 26)
+              : const Text('🤖', style: TextStyle(fontSize: 24)),
+        ),
+        const SizedBox(height: 3),
+        Text('${ctrl.mergesDone}/${ctrl.mergesRequired}',
+          style: TextStyle(
+            color: done ? const Color(0xFF00E676) : Colors.white,
+            fontWeight: FontWeight.w900, fontSize: 13,
+          )),
+        const SizedBox(height: 1),
+        Text('Defeat', style: TextStyle(
+          color: Colors.white.withOpacity(0.80), fontSize: 8, letterSpacing: 0.3,
+        )),
       ]),
     );
   }

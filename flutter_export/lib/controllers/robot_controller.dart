@@ -19,7 +19,6 @@ enum RobotPhase {
 }
 
 const Map<int, int> kRobotLevels = {13: 7, 15: 8, 17: 10, 20: 12};
-const int kRobotTimerSeconds = 20;
 const int kRobotAssemblyMs  = 1800; // ms for parts to fly in
 
 class RobotController extends ChangeNotifier with WidgetsBindingObserver {
@@ -34,7 +33,6 @@ class RobotController extends ChangeNotifier with WidgetsBindingObserver {
   bool       _appInForeground = true;
 
   // ── Timers ───────────────────────────────────────────────────────────────
-  Timer?        _countdown;
   Timer?        _postAnim;
   Timer?        _vibrationTimer;
   VoidCallback? _clearGridCallback;
@@ -84,10 +82,10 @@ class RobotController extends ChangeNotifier with WidgetsBindingObserver {
     phase = RobotPhase.assemblyEntry;
     notifyListeners();
 
-    // Parts assemble → then start countdown
+    // Parts assemble → activate (no time limit — defeated by merges only)
     _postAnim = Timer(const Duration(milliseconds: kRobotAssemblyMs + 400), () {
       phase = RobotPhase.active;
-      _startCountdown();
+      _startVibrationPulse();
       notifyListeners();
     });
   }
@@ -105,14 +103,8 @@ class RobotController extends ChangeNotifier with WidgetsBindingObserver {
   // Private
   // ─────────────────────────────────────────────────────────────────────────
 
-  void _startCountdown() {
-    _countdown = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (phase != RobotPhase.active) { _countdown?.cancel(); return; }
-      secondsLeft--;
-      notifyListeners();
-      if (secondsLeft <= 0) { _countdown?.cancel(); _handleLoss(); }
-    });
-    // Mechanical pulse every 2s during active phase
+  void _startVibrationPulse() {
+    // Mechanical pulse every 2s — no time limit, robot beaten only by merges
     _vibrationTimer = Timer.periodic(const Duration(milliseconds: 2000), (_) {
       if (phase != RobotPhase.active) { _vibrationTimer?.cancel(); return; }
       _safeVibrate(pattern: [0, 50, 30, 50]);
@@ -149,17 +141,15 @@ class RobotController extends ChangeNotifier with WidgetsBindingObserver {
     phase             = RobotPhase.idle;
     mergesDone        = 0;
     mergesRequired    = 0;
-    secondsLeft       = kRobotTimerSeconds;
     currentLevel      = 0;
     _clearGridCallback = null;
     notifyListeners();
   }
 
   void _cancelTimers() {
-    _countdown?.cancel();
     _postAnim?.cancel();
     _vibrationTimer?.cancel();
-    _countdown = _postAnim = _vibrationTimer = null;
+    _postAnim = _vibrationTimer = null;
   }
 
   void _safeVibrate({List<int>? pattern, int duration = 400}) {

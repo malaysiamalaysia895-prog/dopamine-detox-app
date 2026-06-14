@@ -461,7 +461,6 @@ class _ActivePhaseState extends State<_ActivePhase>
   @override
   Widget build(BuildContext context) {
     final ctrl = widget.ctrl;
-    final urgent = ctrl.secondsLeft <= 7;
     return AnimatedBuilder(
       animation: Listenable.merge([ctrl, _idle]),
       builder: (_, __) {
@@ -470,16 +469,22 @@ class _ActivePhaseState extends State<_ActivePhase>
           // Semi-dark overlay
           Container(color: Colors.black.withOpacity(0.38)),
 
-          // ── Robot body (bobbing idle) ──
-          Center(child: Transform.translate(
-            offset: Offset(0, bobOffset - 20),
-            child: _RobotBody(
-              glowOverlay: urgent ? _UrgentGlow() : null,
+          // ── Danger warning border ──
+          Positioned.fill(child: IgnorePointer(child: Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFFF1744).withOpacity(0.55), width: 3),
+              gradient: LinearGradient(
+                begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                colors: [Colors.red.withOpacity(0.08), Colors.transparent, Colors.red.withOpacity(0.04)],
+              ),
             ),
-          )),
+          ))),
 
-          // ── Countdown badge ──
-          Positioned(top: 54, right: 16, child: _CountdownBadge(ctrl: ctrl, urgent: urgent)),
+          // ── Robot body (bobbing, moved lower into board) ──
+          Center(child: Transform.translate(
+            offset: Offset(0, bobOffset + 55),
+            child: _RobotBody(glowOverlay: _UrgentGlow()),
+          )),
 
           // ── Challenge bar ──
           Positioned(bottom: 90, left: 24, right: 24, child: _ChallengeMeter(ctrl: ctrl)),
@@ -488,9 +493,9 @@ class _ActivePhaseState extends State<_ActivePhase>
           Positioned(bottom: 60, left: 0, right: 0, child: Center(child: Text(
             'MERGE ${ctrl.mergesRequired - ctrl.mergesDone} MORE TO DEFEAT',
             style: TextStyle(
-              color: urgent ? _kOrange : Colors.white70,
+              color: _kOrange,
               fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.8,
-              shadows: urgent ? [Shadow(color: _kOrange, blurRadius: 8)] : null,
+              shadows: [Shadow(color: _kOrange, blurRadius: 8)],
             ),
           ))),
         ]);
@@ -504,7 +509,10 @@ class _UrgentGlow extends StatelessWidget {
   Widget build(BuildContext context) => Positioned.fill(child: Container(
     decoration: BoxDecoration(
       borderRadius: BorderRadius.circular(8),
-      boxShadow: [BoxShadow(color: _kRed.withOpacity(0.6), blurRadius: 30, spreadRadius: 8)],
+      boxShadow: [
+        BoxShadow(color: _kRed.withOpacity(0.90), blurRadius: 48, spreadRadius: 14),
+        BoxShadow(color: _kOrange.withOpacity(0.55), blurRadius: 70, spreadRadius: 6),
+      ],
     ),
   ));
 }
