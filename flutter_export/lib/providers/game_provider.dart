@@ -288,6 +288,9 @@ class GameNotifier extends StateNotifier<GameState> {
     final grid = _buildInitialGrid(cfg);
     final base = cfg.baseCoins;
 
+    // Reset robot state immediately so stale robot never bleeds into a new level
+    robotController.reset();
+
     // CRITICAL FIX: Do NOT start the timer here. The story dialog is about to
     // be shown, and the player cannot interact with the board while it is open.
     // Starting the timer now would mean precious seconds tick away while the
@@ -568,12 +571,8 @@ class GameNotifier extends StateNotifier<GameState> {
       );
     }
     // ── Robot Villain trigger (L13, L15, L17, L20) ──────────────────────────
-    if (kRobotLevels.containsKey(cfg.number)) {
-      robotController.triggerForLevel(
-        cfg.number,
-        onClearGrid: _clearAllItems,
-      );
-    }
+    // Always call — triggerForLevel(_goIdle) for non-robot levels, trigger for robot levels
+    robotController.triggerForLevel(cfg.number, onClearGrid: _clearAllItems);
   }
 
   // ── Spawn Item ────────────────────────────────────────────────────────────
