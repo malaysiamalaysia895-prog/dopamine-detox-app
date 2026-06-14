@@ -71,7 +71,6 @@ class RobotController extends ChangeNotifier with WidgetsBindingObserver {
     currentLevel       = level;
     mergesRequired     = required;
     mergesDone         = 0;
-    secondsLeft        = kRobotTimerSeconds;
     _clearGridCallback = onClearGrid;
 
     // Mechanical entry impact
