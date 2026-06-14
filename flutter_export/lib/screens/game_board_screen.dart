@@ -558,7 +558,7 @@ class _DeliveryZone extends ConsumerWidget {
                         if (rc.isIdle) return const SizedBox.shrink();
                         return Padding(
                           padding: const EdgeInsets.only(right: 4),
-                          child: _RobotQuotaChip(ctrl: rc),
+                          child: _RobotQuotaChip(ctrl: rc, spawnerItemId: levelDef.spawnerItemId),
                         );
                       },
                     ),
@@ -644,7 +644,8 @@ class _QuotaChip extends StatelessWidget {
 // ── Robot Defeat Quota Chip ───────────────────────────────────────────────────
 class _RobotQuotaChip extends StatelessWidget {
   final RobotController ctrl;
-  const _RobotQuotaChip({required this.ctrl});
+  final int spawnerItemId;
+  const _RobotQuotaChip({required this.ctrl, required this.spawnerItemId});
   @override
   Widget build(BuildContext context) {
     final done  = ctrl.mergesDone >= ctrl.mergesRequired && ctrl.mergesRequired > 0;
@@ -668,7 +669,17 @@ class _RobotQuotaChip extends StatelessWidget {
           width: 36, height: 32,
           child: done
               ? const Icon(Icons.check_circle, color: Color(0xFF00E676), size: 26)
-              : const Text('🤖', style: TextStyle(fontSize: 24)),
+              : Stack(children: [
+                  _ItemIconWidget(itemId: spawnerItemId, size: 28),
+                  Positioned(right: 0, bottom: 0, child: Container(
+                    width: 14, height: 14,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFF1744), shape: BoxShape.circle,
+                      border: Border.all(color: Colors.black, width: 1),
+                    ),
+                    child: const Center(child: Text('⚡', style: TextStyle(fontSize: 7))),
+                  )),
+                ]),
         ),
         const SizedBox(height: 3),
         Text('${ctrl.mergesDone}/${ctrl.mergesRequired}',
@@ -684,6 +695,7 @@ class _RobotQuotaChip extends StatelessWidget {
     );
   }
 }
+
 
 // ─── Drag Data ────────────────────────────────────────────────────────────────
 

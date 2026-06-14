@@ -22,18 +22,20 @@ class RobotOverlay extends StatelessWidget {
   const RobotOverlay({super.key, required this.controller});
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: controller,
-    builder: (ctx, _) {
-      switch (controller.phase) {
-        case RobotPhase.idle:         return const SizedBox.shrink();
-        case RobotPhase.assemblyEntry:return _AssemblyEntryPhase(ctrl: controller);
-        case RobotPhase.active:       return _ActivePhase(ctrl: controller);
-        case RobotPhase.winDissolve:  return _WinDissolvePhase(ctrl: controller);
-        case RobotPhase.winExplosion: return _WinExplosionPhase();
-        case RobotPhase.loss:         return const _LossPhase();
-      }
-    },
+  Widget build(BuildContext context) => IgnorePointer(
+    child: AnimatedBuilder(
+      animation: controller,
+      builder: (ctx, _) {
+        switch (controller.phase) {
+          case RobotPhase.idle:         return const SizedBox.shrink();
+          case RobotPhase.assemblyEntry:return _AssemblyEntryPhase(ctrl: controller);
+          case RobotPhase.active:       return _ActivePhase(ctrl: controller);
+          case RobotPhase.winDissolve:  return _WinDissolvePhase(ctrl: controller);
+          case RobotPhase.winExplosion: return _WinExplosionPhase();
+          case RobotPhase.loss:         return const _LossPhase();
+        }
+      },
+    ),
   );
 }
 
@@ -466,38 +468,22 @@ class _ActivePhaseState extends State<_ActivePhase>
       builder: (_, __) {
         final bobOffset = math.sin(_idle.value * math.pi) * 4.0;
         return Stack(children: [
-          // Semi-dark overlay
-          Container(color: Colors.black.withOpacity(0.38)),
-
-          // ── Danger warning border ──
-          Positioned.fill(child: IgnorePointer(child: Container(
+          // ── Thin danger screen border only (no dark overlay — keep board visible) ──
+          Positioned.fill(child: Container(
             decoration: BoxDecoration(
-              border: Border.all(color: const Color(0xFFFF1744).withOpacity(0.55), width: 3),
-              gradient: LinearGradient(
-                begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                colors: [Colors.red.withOpacity(0.08), Colors.transparent, Colors.red.withOpacity(0.04)],
-              ),
+              border: Border.all(color: const Color(0xFFFF1744).withOpacity(0.50), width: 2.5),
             ),
-          ))),
+          )),
 
-          // ── Robot body (bobbing, moved lower into board) ──
+          // ── Robot body (bobbing, lower in board) ──
           Center(child: Transform.translate(
             offset: Offset(0, bobOffset + 55),
             child: _RobotBody(glowOverlay: _UrgentGlow()),
           )),
 
-          // ── Challenge bar ──
-          Positioned(bottom: 90, left: 24, right: 24, child: _ChallengeMeter(ctrl: ctrl)),
-
-          // ── Threat label ──
-          Positioned(bottom: 60, left: 0, right: 0, child: Center(child: Text(
-            'MERGE ${ctrl.mergesRequired - ctrl.mergesDone} MORE TO DEFEAT',
-            style: TextStyle(
-              color: _kOrange,
-              fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.8,
-              shadows: [Shadow(color: _kOrange, blurRadius: 8)],
-            ),
-          ))),
+          // ── Warning banner at TOP (professional, compact) ──
+          Positioned(top: 8, left: 12, right: 12,
+            child: _RobotWarningBanner(ctrl: ctrl)),
         ]);
       },
     );
@@ -510,12 +496,73 @@ class _UrgentGlow extends StatelessWidget {
     decoration: BoxDecoration(
       borderRadius: BorderRadius.circular(8),
       boxShadow: [
-        BoxShadow(color: _kRed.withOpacity(0.90), blurRadius: 48, spreadRadius: 14),
-        BoxShadow(color: _kOrange.withOpacity(0.55), blurRadius: 70, spreadRadius: 6),
+        BoxShadow(color: _kRed.withOpacity(0.55), blurRadius: 16, spreadRadius: 3),
+        BoxShadow(color: _kOrange.withOpacity(0.30), blurRadius: 28, spreadRadius: 1),
       ],
     ),
   ));
 }
+class _RobotWarningBanner extends StatelessWidget {
+  final RobotController ctrl;
+  const _RobotWarningBanner({required this.ctrl});
+  @override
+  Widget build(BuildContext context) {
+    final remaining = ctrl.mergesRequired - ctrl.mergesDone;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        color: Colors.black.withOpacity(0.88),
+        border: Border.all(color: _kRed.withOpacity(0.85), width: 1.5),
+        boxShadow: [
+          BoxShadow(color: _kRed.withOpacity(0.45), blurRadius: 14, spreadRadius: 1),
+        ],
+      ),
+      child: Row(children: [
+        Container(
+          width: 28, height: 28,
+          decoration: BoxDecoration(
+            color: _kRed.withOpacity(0.18), shape: BoxShape.circle,
+            border: Border.all(color: _kRed, width: 1.2),
+          ),
+          child: const Center(child: Text('⚡', style: TextStyle(fontSize: 14))),
+        ),
+        const SizedBox(width: 8),
+        Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              remaining > 0 ? 'ROBOT THREAT — MERGE $remaining MORE TO DEFEAT' : 'ROBOT DEFEATED!',
+              style: TextStyle(
+                color: remaining > 0 ? Colors.white : Colors.greenAccent,
+                fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1.1,
+              ),
+            ),
+            const SizedBox(height: 4),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: LinearProgressIndicator(
+                value: ctrl.mergeProgress,
+                minHeight: 4,
+                backgroundColor: Colors.white12,
+                valueColor: AlwaysStoppedAnimation(
+                  ctrl.mergeProgress >= 1.0 ? Colors.greenAccent : _kRed,
+                ),
+              ),
+            ),
+          ],
+        )),
+        const SizedBox(width: 8),
+        Text('${ctrl.mergesDone}/${ctrl.mergesRequired}',
+          style: const TextStyle(
+            color: Colors.white, fontSize: 13, fontWeight: FontWeight.w900,
+          )),
+      ]),
+    );
+  }
+}
+
 
 class _CountdownBadge extends StatelessWidget {
   final RobotController ctrl;
