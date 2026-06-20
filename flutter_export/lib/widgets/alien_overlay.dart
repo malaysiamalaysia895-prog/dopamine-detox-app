@@ -7,7 +7,6 @@
 // ============================================================
 
 import 'dart:async';
-import 'dart:math';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -402,14 +401,14 @@ class _ShipEntryAnimationState extends State<_ShipEntryAnimation>
   //  3800ms → Rejoin:    rapid re-assembly buzz
   //  4400ms → Settle:    final heavy boss thud
   void _scheduleVillainHaptics() {
-    final delays = const [
-      (400,  [0, 200, 60, 300, 60, 200]),    // Rise — heavy 3-beat rumble
-      (1200, [0, 50, 25, 50, 25, 50]),        // Eye flash — rapid triple buzz
-      (1900, [0, 180, 50, 250]),              // Arm punch — double hard hit
-      (2600, [0, 120, 30, 120]),              // Leg stomp — stomp-stomp
-      (3200, [0, 400, 80, 300, 80, 150]),     // Body explodes — long shattering
-      (3800, [0, 40, 15, 40, 15, 40, 15, 40]), // Reassemble — rapid light buzz
-      (4400, [0, 350]),                        // Boss settle — final thud
+    final delays = [
+      (400,  <int>[0, 200, 60, 300, 60, 200]),    // Rise — heavy 3-beat rumble
+      (1200, <int>[0, 50, 25, 50, 25, 50]),        // Eye flash — rapid triple buzz
+      (1900, <int>[0, 180, 50, 250]),              // Arm punch — double hard hit
+      (2600, <int>[0, 120, 30, 120]),              // Leg stomp — stomp-stomp
+      (3200, <int>[0, 400, 80, 300, 80, 150]),     // Body explodes — long shattering
+      (3800, <int>[0, 40, 15, 40, 15, 40, 15, 40]), // Reassemble — rapid light buzz
+      (4400, <int>[0, 350]),                        // Boss settle — final thud
     ];
 
     for (final (ms, pattern) in delays) {
