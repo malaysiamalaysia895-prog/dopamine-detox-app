@@ -241,9 +241,10 @@ class AlienController extends ChangeNotifier with WidgetsBindingObserver {
     phase = AlienPhase.shipEntry;
     notifyListeners();
 
-    // AAA Timeline: ships(3800) + hover+blast(2300) + vanish(400) + gap(1500) + villain(5000) = ~13000ms
-    // L33:          ships(3800) + explode(1200) + vanish(400) + gap(1500) + villain(5000) = ~11900ms
-    final entryMs = currentLevel == 33 ? 11900 : 13000;
+    // Total animation: 3.8s fly-in + 0.8s hover + 1.2s merge + 0.8s alien materialise
+    // Total animation: ships(3800) + hover(500) + shock+blast(2300) + reveal(2000) = ~8600ms
+    // L33: ships(3800) + explode(1200) + reveal(2000) = ~7100ms
+    final entryMs = currentLevel == 33 ? 7100 : 8600;
     _postAnim = Timer(Duration(milliseconds: entryMs), () {
       if (_disposed) return;
       shipsEntryComplete = true;
