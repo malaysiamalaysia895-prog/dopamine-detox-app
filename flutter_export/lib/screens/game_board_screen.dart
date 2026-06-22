@@ -88,7 +88,11 @@ class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
                     children: [
                       _TopBar(levelDef: levelDef, theme: theme),
                       if (levelDef.hasTimer) _TimerBar(theme: theme),
-                      _DeliveryZone(levelDef: levelDef, theme: theme),
+                      _DeliveryZone(
+                        levelDef: levelDef,
+                        theme: theme,
+                        alienController: ref.read(gameProvider.notifier).alienController,
+                      ),
                       Expanded(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -460,7 +464,12 @@ class _TimerBar extends ConsumerWidget {
 class _DeliveryZone extends ConsumerWidget {
   final LevelDefinition levelDef;
   final PhaseTheme theme;
-  const _DeliveryZone({required this.levelDef, required this.theme});
+  final AlienController alienController;
+  const _DeliveryZone({
+    required this.levelDef,
+    required this.theme,
+    required this.alienController,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -562,8 +571,9 @@ class _DeliveryZone extends ConsumerWidget {
               ),
               const SizedBox(height: 8),
               Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // ── Quota chips (scrollable) ──────────────────────────
                   Expanded(
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
@@ -585,7 +595,7 @@ class _DeliveryZone extends ConsumerWidget {
                               ),
                             );
                           }),
-                          // ── Robot defeat chip ──
+                          // ── Robot defeat chip ──────────────────────────
                           ListenableBuilder(
                             listenable: ref.read(gameProvider.notifier).robotController,
                             builder: (_, __) {
@@ -614,20 +624,16 @@ class _DeliveryZone extends ConsumerWidget {
                       ),
                     ),
                   ),
-                  // ── Alien mini portrait (Levels 31/32/33) ─────────────
+                  // ── Alien HP Chip — shows when alien is active (L31-33) ──
                   ListenableBuilder(
-                    listenable: ref.read(gameProvider.notifier).alienController,
+                    listenable: alienController,
                     builder: (_, __) {
-                      final ac = ref.read(gameProvider.notifier).alienController;
-                      if (ac.phase == AlienPhase.idle ||
-                          ac.phase == AlienPhase.warningEntry ||
-                          ac.phase == AlienPhase.shipEntry ||
-                          ac.phase == AlienPhase.winBlast) {
+                      if (alienController.phase == AlienPhase.idle) {
                         return const SizedBox.shrink();
                       }
                       return Padding(
-                        padding: const EdgeInsets.only(left: 6),
-                        child: AlienDeliveryWidget(controller: ac),
+                        padding: const EdgeInsets.only(left: 8),
+                        child: _AlienHpChip(controller: alienController),
                       );
                     },
                   ),
@@ -772,6 +778,150 @@ class _RobotQuotaChip extends StatelessWidget {
         )),
       ]),
     )); // close AnimatedScale
+  }
+}
+
+
+// ── Alien HP Chip (Delivery Zone, L31-33) ────────────────────────────────────
+
+class _AlienHpChip extends StatefulWidget {
+  final AlienController controller;
+  const _AlienHpChip({required this.controller});
+
+  @override
+  State<_AlienHpChip> createState() => _AlienHpChipState();
+}
+
+class _AlienHpChipState extends State<_AlienHpChip>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _pulseCtrl;
+  late Animation<double> _pulseAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 800))
+      ..repeat(reverse: true);
+    _pulseAnim = Tween<double>(begin: 0.5, end: 1.0)
+        .animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
+  }
+
+  @override
+  void dispose() {
+    _pulseCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hp = widget.controller.alienHealth;
+    final hpFrac = (hp / 100.0).clamp(0.0, 1.0);
+    final merges = widget.controller.mergesDone;
+    final isLow = hpFrac < 0.3;
+
+    final Color barColor = isLow
+        ? const Color(0xFFFF3344)
+        : hpFrac < 0.6
+            ? const Color(0xFFFFD700)
+            : const Color(0xFF00FF88);
+    const Color purple = Color(0xFFCC00FF);
+
+    return AnimatedBuilder(
+      animation: _pulseAnim,
+      builder: (_, __) {
+        return Container(
+          width: 76,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: Colors.black.withOpacity(0.75),
+            border: Border.all(
+              color: isLow
+                  ? barColor.withOpacity(_pulseAnim.value)
+                  : purple.withOpacity(0.65),
+              width: 1.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: (isLow ? barColor : purple)
+                    .withOpacity(_pulseAnim.value * 0.5),
+                blurRadius: 12,
+                spreadRadius: 1,
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Icon + HP number
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text('👾',
+                      style: TextStyle(
+                          fontSize: 11,
+                          shadows: [
+                            Shadow(color: purple, blurRadius: 8),
+                          ])),
+                  const SizedBox(width: 3),
+                  Text(
+                    '$hp',
+                    style: TextStyle(
+                      color: barColor,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      shadows: [Shadow(color: barColor, blurRadius: 6)],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              // Segmented HP bar (5 segments)
+              Row(
+                children: List.generate(5, (i) {
+                  final filled = i < (hpFrac * 5).ceil();
+                  return Expanded(
+                    child: Container(
+                      height: 5,
+                      margin: EdgeInsets.only(right: i < 4 ? 1.5 : 0),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(2),
+                        color: filled
+                            ? barColor
+                            : Colors.white.withOpacity(0.12),
+                        boxShadow: filled
+                            ? [BoxShadow(color: barColor.withOpacity(0.8), blurRadius: 4)]
+                            : null,
+                      ),
+                    ),
+                  );
+                }),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                '$merges/22 ⚡',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.45),
+                  fontSize: 7,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              if (isLow)
+                Text(
+                  '⚠ CRIT',
+                  style: TextStyle(
+                    color: barColor.withOpacity(_pulseAnim.value),
+                    fontSize: 7,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }
 
