@@ -7,11 +7,10 @@
 // ============================================================
 
 import 'dart:async';
+import 'dart:math';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:vibration/vibration.dart';
 import '../controllers/alien_controller.dart';
 
 // ─── Public Entry Point ───────────────────────────────────────────────────────
@@ -303,29 +302,27 @@ class _ShipEntryAnimation extends StatefulWidget {
 
 class _ShipEntryAnimationState extends State<_ShipEntryAnimation>
     with TickerProviderStateMixin {
-  // ── Controllers ──────────────────────────────────────────────────────────────
-  late AnimationController _shipCtrl;     // ships flying in (3800ms)
-  late AnimationController _selfRotCtrl;  // each ship spins around itself (500ms repeat)
-  late AnimationController _mergeCtrl;    // mega blast flash (1400ms)
-  late AnimationController _vanishCtrl;   // ships fade out after blast (400ms)
-  late AnimationController _revealCtrl;   // villain dramatic entrance (5000ms)
-  late AnimationController _explodeCtrl;  // L33 ship explosion debris (1200ms)
-  late AnimationController _shockCtrl;    // shockwave rings at convergence (1100ms)
+  // ── Controllers ────────────────────────────────────────────────────────────
+  late AnimationController _shipCtrl;    // ships flying in
+  late AnimationController _blastCtrl;   // mega blast
+  late AnimationController _darkCtrl;    // dark pause after blast
+  late AnimationController _villainCtrl; // villain full-screen reveal
+  late AnimationController _spinCtrl;    // UFO fast spin
+  late AnimationController _orbitCtrl;   // orbital wobble
+  late AnimationController _dimCtrl;     // cinematic dimmer
 
-  // ── Animations ───────────────────────────────────────────────────────────────
   late Animation<double> _shipProgress;
-  late Animation<double> _mergeFlash;
-  late Animation<double> _vanishAnim;  // 1.0→0.0: ships fade out after blast
-  late Animation<double> _dimmer;
+  late Animation<double> _blastFlash;
+  late Animation<double> _darkFade;
 
-  bool _shipsArrived  = false;
-  bool _shipsVanished = false;  // true after vanish completes
+  bool _shipsArrived = false;
+  bool _blastDone    = false;
 
-  static const List<Color> _shipColors = [
-    Color(0xFF9B30FF), // purple
-    Color(0xFFFF3030), // red
-    Color(0xFF30AAFF), // blue
-    Color(0xFFFF8800), // orange
+  final List<Color> _shipColors = [
+    const Color(0xFF9B30FF), // purple
+    const Color(0xFFFF3030), // red
+    const Color(0xFF30AAFF), // blue
+    const Color(0xFFFF8800), // orange
   ];
 
   @override
@@ -333,110 +330,58 @@ class _ShipEntryAnimationState extends State<_ShipEntryAnimation>
     super.initState();
     final isL33 = widget.controller.currentLevel == 33;
 
-    _shipCtrl    = AnimationController(vsync: this, duration: const Duration(milliseconds: 3800));
-    _selfRotCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500))..repeat();
-    _mergeCtrl   = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400));
-    _vanishCtrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 400));
-    _revealCtrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 5000));
-    _explodeCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200));
-    _shockCtrl   = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100));
+    final shipMs    = isL33 ? 2600 : 3200;
+    final blastMs   = isL33 ? 700  : 800;
+    final pauseMs   = isL33 ? 1300 : 1500;
+    final villainMs = isL33 ? 2500 : 2900;
+
+    _shipCtrl    = AnimationController(vsync: this, duration: Duration(milliseconds: shipMs));
+    _blastCtrl   = AnimationController(vsync: this, duration: Duration(milliseconds: blastMs));
+    _darkCtrl    = AnimationController(vsync: this, duration: Duration(milliseconds: pauseMs));
+    _villainCtrl = AnimationController(vsync: this, duration: Duration(milliseconds: villainMs));
+    _spinCtrl    = AnimationController(vsync: this, duration: const Duration(milliseconds: 550))..repeat();
+    _orbitCtrl   = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..repeat();
+    _dimCtrl     = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000));
 
     _shipProgress = CurvedAnimation(parent: _shipCtrl, curve: Curves.easeOut);
-    _mergeFlash   = TweenSequence<double>([
-      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0), weight: 15),
-      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 85),
-    ]).animate(_mergeCtrl);
-    _vanishAnim  = Tween<double>(begin: 1.0, end: 0.0).animate(
-        CurvedAnimation(parent: _vanishCtrl, curve: Curves.easeIn));
-    _dimmer = Tween<double>(begin: 0.0, end: 0.85)
-        .animate(CurvedAnimation(parent: _shipCtrl, curve: Curves.easeIn));
+    _blastFlash   = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0), weight: 12),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 88),
+    ]).animate(_blastCtrl);
+    _darkFade = CurvedAnimation(parent: _darkCtrl, curve: Curves.easeInOut);
 
     _shipCtrl.addStatusListener((status) {
-      if (status != AnimationStatus.completed || !mounted) return;
-      setState(() => _shipsArrived = true);
-
-      if (isL33) {
-        // L33: ships explode → vanish → 1.5s gap → villain entrance
-        _explodeCtrl.forward().then((_) {
+      if (status == AnimationStatus.completed && mounted) {
+        setState(() => _shipsArrived = true);
+        _spinCtrl.stop();
+        Future.delayed(Duration(milliseconds: isL33 ? 0 : 280), () {
           if (!mounted) return;
-          _vanishCtrl.forward().then((_) {
+          _blastCtrl.forward().then((_) {
             if (!mounted) return;
-            setState(() => _shipsVanished = true);
-            Future.delayed(const Duration(milliseconds: 1500), () {
-              if (mounted) { _revealCtrl.forward(); _scheduleVillainHaptics(); }
-            });
-          });
-        });
-      } else {
-        // L31/L32: 500ms hover → shockwave → blast → ships VANISH → 1.5s gap → villain
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (mounted) _shockCtrl.forward();
-        });
-        Future.delayed(const Duration(milliseconds: 900), () {
-          if (!mounted) return;
-          _mergeCtrl.forward().then((_) {
-            if (!mounted) return;
-            _vanishCtrl.forward().then((_) {
+            setState(() => _blastDone = true);
+            _darkCtrl.forward().then((_) {
               if (!mounted) return;
-              setState(() => _shipsVanished = true);
-              Future.delayed(const Duration(milliseconds: 1500), () {
-                if (mounted) { _revealCtrl.forward(); _scheduleVillainHaptics(); }
-              });
+              _darkCtrl.reverse();
+              _villainCtrl.forward();
             });
           });
         });
       }
     });
 
+    _dimCtrl.forward();
     _shipCtrl.forward();
-  }
-
-  // ── Villain haptic sync: each phase gets its own vibration pattern ──────────
-  // Phases (relative to _revealCtrl.forward() start):
-  //  400ms  → Rise:      heavy rumble (alien erupts)
-  //  1200ms → Eye Flash: rapid triple buzz (eyes open)
-  //  1900ms → Arm Punch: two hard punches
-  //  2600ms → Leg Stomp: stomp pattern
-  //  3200ms → Explode:   long strong rumble (body shatters)
-  //  3800ms → Rejoin:    rapid re-assembly buzz
-  //  4400ms → Settle:    final heavy boss thud
-  void _scheduleVillainHaptics() {
-    final delays = [
-      (400,  <int>[0, 200, 60, 300, 60, 200]),    // Rise — heavy 3-beat rumble
-      (1200, <int>[0, 50, 25, 50, 25, 50]),        // Eye flash — rapid triple buzz
-      (1900, <int>[0, 180, 50, 250]),              // Arm punch — double hard hit
-      (2600, <int>[0, 120, 30, 120]),              // Leg stomp — stomp-stomp
-      (3200, <int>[0, 400, 80, 300, 80, 150]),     // Body explodes — long shattering
-      (3800, <int>[0, 40, 15, 40, 15, 40, 15, 40]), // Reassemble — rapid light buzz
-      (4400, <int>[0, 350]),                        // Boss settle — final thud
-    ];
-
-    for (final (ms, pattern) in delays) {
-      Future.delayed(Duration(milliseconds: ms), () async {
-        if (!mounted) return;
-        try {
-          final has = await Vibration.hasVibrator() ?? false;
-          if (!has) {
-            HapticFeedback.heavyImpact();
-            return;
-          }
-          await Vibration.vibrate(pattern: pattern);
-        } catch (_) {
-          try { HapticFeedback.heavyImpact(); } catch (_) {}
-        }
-      });
-    }
   }
 
   @override
   void dispose() {
     _shipCtrl.dispose();
-    _selfRotCtrl.dispose();
-    _mergeCtrl.dispose();
-    _vanishCtrl.dispose();
-    _revealCtrl.dispose();
-    _explodeCtrl.dispose();
-    _shockCtrl.dispose();
+    _blastCtrl.dispose();
+    _darkCtrl.dispose();
+    _villainCtrl.dispose();
+    _spinCtrl.dispose();
+    _orbitCtrl.dispose();
+    _dimCtrl.dispose();
     super.dispose();
   }
 
@@ -448,6 +393,12 @@ class _ShipEntryAnimationState extends State<_ShipEntryAnimation>
     return Offset(dx / len, dy / len);
   }
 
+  double _pv(double t, double s, double e) {
+    if (t <= s) return 0.0;
+    if (t >= e) return 1.0;
+    return (t - s) / (e - s);
+  }
+
   @override
   Widget build(BuildContext context) {
     final size    = MediaQuery.of(context).size;
@@ -455,8 +406,6 @@ class _ShipEntryAnimationState extends State<_ShipEntryAnimation>
     final firstCell = widget.getCellRect(0, 0);
     final gridTop = firstCell?.top ?? size.height * 0.45;
     final cy      = gridTop - 10.0;
-    final isL33   = widget.controller.currentLevel == 33;
-    final target  = Offset(cx, cy);
 
     final starts = [
       Offset(-80, -80),
@@ -466,139 +415,149 @@ class _ShipEntryAnimationState extends State<_ShipEntryAnimation>
     ];
 
     return AnimatedBuilder(
-      animation: Listenable.merge([
-        _shipCtrl, _selfRotCtrl, _mergeCtrl, _vanishCtrl,
-        _revealCtrl, _explodeCtrl, _shockCtrl,
-      ]),
+      animation: Listenable.merge(
+          [_shipCtrl, _blastCtrl, _darkCtrl, _villainCtrl, _spinCtrl, _orbitCtrl, _dimCtrl]),
       builder: (_, __) {
-        final t       = _shipProgress.value;
-        final selfRot = _selfRotCtrl.value * math.pi * 2; // full spin per 500ms
+        final t      = _shipProgress.value;
+        final rv     = _villainCtrl.value;
+        final spin   = _spinCtrl.value * math.pi * 2;
+        final orbit  = _orbitCtrl.value * math.pi * 2;
+        final target = Offset(cx, cy);
 
         return Stack(
           clipBehavior: Clip.none,
           children: [
 
-            // ── 1. Cinematic black dimmer ─────────────────────────────────
-            Positioned.fill(
-              child: IgnorePointer(
-                child: Container(
-                  color: Colors.black.withOpacity(
-                    _shipsVanished
-                        ? (_revealCtrl.value < 0.08 ? 0.97 : 0.0)
-                        : (_dimmer.value * 0.80),
+            // ── 1. Cinematic dimmer (ramps during ship phase) ────────────
+            if (_dimCtrl.value > 0 && !_blastDone)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Container(
+                    color: Colors.black.withOpacity(_dimCtrl.value * 0.82),
                   ),
                 ),
               ),
-            ),
 
-            // ── 2. SHIPS — SPINNING + real smoke + particle cloud ─────────
-            if (!_shipsVanished)
+            // ── 2. SHIPS — orbital spinning approach ─────────────────────
+            if (!_shipsArrived)
               ...List.generate(4, (i) {
                 final start   = starts[i];
-                final prog    = _shipsArrived ? 1.0 : Curves.easeOut.transform(t);
-                final shipX   = cx + (start.dx - cx) * (1 - prog);
-                final shipY   = cy + (start.dy - cy) * (1 - prog);
                 final booster = _boosterDir(i, start, target);
-                final shipOp  = _shipsArrived ? _vanishAnim.value : 1.0;
+                final perpX   = -booster.dy;
+                final perpY   =  booster.dx;
+
+                // Base path: corner → center with easeOut
+                final baseX = cx + (start.dx - cx) * (1 - Curves.easeOut.transform(t));
+                final baseY = cy + (start.dy - cy) * (1 - Curves.easeOut.transform(t));
+                // Orbital wobble: perpendicular oscillation (decreases as ship arrives)
+                final wobble = math.sin(orbit + i * math.pi / 2) * 30 * (1 - t) * (1 - t);
+                final dx = baseX + perpX * wobble;
+                final dy = baseY + perpY * wobble;
+                // Ship self-spin: speeds up as it approaches
+                final selfSpin = spin * (1.2 + t * 1.8);
 
                 return Stack(clipBehavior: Clip.none, children: [
 
-                  // ── Real smoke trail (dark gray, grows with age) ────────
-                  if (!_shipsArrived)
-                    ...List.generate(28, (lag) {
-                      final lagT   = (t - lag * 0.022).clamp(0.0, 1.0);
-                      if (lagT <= 0.01) return const SizedBox.shrink();
-                      final lagP   = Curves.easeOut.transform(lagT);
-                      final tx     = cx + (start.dx - cx) * (1 - lagP);
-                      final ty     = cy + (start.dy - cy) * (1 - lagP);
-                      final age    = lag / 28.0;
-                      final puffSz = (10.0 + lag * 2.2).clamp(4.0, 65.0);
-                      final op     = ((1 - age) * 0.65 * t).clamp(0.0, 1.0);
-                      final drift  = (lag % 5 - 2.0) * 5.5;
-                      final perpX  = -booster.dy * drift;
-                      final perpY  =  booster.dx * drift;
-                      // hot core → white steam → dark gray smoke
-                      final Color puffColor = lag < 3
-                          ? const Color(0xFFFF8800).withOpacity(op * 0.9)
-                          : lag < 9
-                              ? Colors.white.withOpacity(op * 0.7)
-                              : Color.lerp(Colors.grey.shade600,
-                                    Colors.grey.shade400, age)!.withOpacity(op * 0.55);
-                      return Positioned(
-                        left: tx + perpX - puffSz / 2,
-                        top:  ty + perpY - puffSz / 2,
-                        child: IgnorePointer(
-                          child: Container(
-                            width: puffSz, height: puffSz,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: puffColor,
-                              boxShadow: lag < 5 ? [
-                                BoxShadow(
-                                  color: const Color(0xFFFF6600).withOpacity(op * 0.55),
-                                  blurRadius: puffSz * 0.55,
-                                ),
-                              ] : null,
-                            ),
-                          ),
-                        ),
-                      );
-                    }),
+                  // ── REAL SMOKE TRAIL (gray, expands, dissipates) ────────
+                  ...List.generate(26, (lag) {
+                    final lagT = (t - lag * 0.024).clamp(0.0, 1.0);
+                    if (lagT <= 0.01) return const SizedBox.shrink();
+                    final lagProg = Curves.easeOut.transform(lagT);
+                    final lagWobble = math.sin(orbit + i * math.pi / 2 - lag * 0.07)
+                        * 30 * (1 - lagT) * (1 - lagT);
+                    final lx = cx + (start.dx - cx) * (1 - lagProg) + perpX * lagWobble;
+                    final ly = cy + (start.dy - cy) * (1 - lagProg) + perpY * lagWobble;
 
-                  // ── Realistic smoke thruster (fire core → steam → dark smoke) ──
-                  if (!_shipsArrived)
-                    Positioned(
-                      left: shipX + booster.dx * 26 - 22,
-                      top:  shipY + booster.dy * 18 - 22,
+                    // Puff ages: fresh (lag=0) → old (lag=25)
+                    final age = lag / 26.0;
+                    // Real smoke: starts dark/dense, expands and lightens
+                    final puffSize = (8.0 + age * 36.0).clamp(8.0, 44.0);
+                    final opacity  = ((1 - age * 0.85) * 0.65 * math.min(t * 3, 1.0))
+                        .clamp(0.0, 1.0);
+                    // Color: near-black fresh → mid-gray → light gray old
+                    final smokeColor = Color.lerp(
+                      const Color(0xFF1A1A1A),
+                      const Color(0xFFAAAAAA),
+                      age.clamp(0.0, 1.0),
+                    )!;
+                    // Drift perpendicular (natural turbulence)
+                    final drift = (lag % 5 - 2) * 5.0;
+                    return Positioned(
+                      left: lx + perpX * drift - puffSize / 2,
+                      top:  ly + perpY * drift - puffSize / 2,
                       child: IgnorePointer(
-                        child: CustomPaint(
-                          size: const Size(44, 44),
-                          painter: _SmokeThrusterPainter(
-                            direction: booster,
-                            intensity: t,
+                        child: Container(
+                          width: puffSize, height: puffSize,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: smokeColor.withOpacity(opacity),
                           ),
                         ),
                       ),
-                    ),
+                    );
+                  }),
 
-                  // ── Orbiting particle cloud around ship ─────────────────
-                  if (!_shipsArrived && t > 0.25)
-                    ...List.generate(8, (pi) {
-                      final pAngle = selfRot * 1.5 + (pi / 8.0) * math.pi * 2 + i * math.pi / 3;
-                      final pr     = 34.0 + math.sin(selfRot * 4 + pi) * 10;
-                      final px     = shipX + math.cos(pAngle) * pr;
-                      final py     = shipY + math.sin(pAngle) * pr * 0.5;
-                      final pfade  = ((t - 0.25) / 0.75 * 0.75).clamp(0.0, 0.75);
-                      final pc     = _shipColors[i].withOpacity(pfade);
-                      return Positioned(
-                        left: px - 4, top: py - 4,
-                        child: IgnorePointer(
-                          child: Container(
-                            width: 8, height: 8,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle, color: pc,
-                              boxShadow: [BoxShadow(color: pc, blurRadius: 8)],
-                            ),
+                  // ── Colored exhaust sparks (engine heat) ────────────────
+                  ...List.generate(6, (p) {
+                    final sT = (t - p * 0.02).clamp(0.0, 1.0);
+                    if (sT <= 0.02) return const SizedBox.shrink();
+                    final sP = Curves.easeOut.transform(sT);
+                    final sx = cx + (start.dx - cx) * (1 - sP) + booster.dx * 14;
+                    final sy = cy + (start.dy - cy) * (1 - sP) + booster.dy * 14;
+                    final sOff = (p % 3 - 1) * 5.0;
+                    final sFade = (1 - p / 6.0) * 0.9 * t;
+                    return Positioned(
+                      left: sx + perpX * sOff - 3,
+                      top:  sy + perpY * sOff - 3,
+                      child: IgnorePointer(
+                        child: Container(
+                          width: 5, height: 5,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Color.lerp(_shipColors[i],
+                                const Color(0xFFFF8800), 0.5)!
+                                .withOpacity(sFade.clamp(0.0, 1.0)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _shipColors[i].withOpacity(0.8),
+                                blurRadius: 8,
+                              ),
+                            ],
                           ),
                         ),
-                      );
-                    }),
+                      ),
+                    );
+                  }),
 
-                  // ── UFO — SELF-ROTATING as it flies (gol gol ghumna!) ───
+                  // ── Booster flame (orange-hot exhaust) ──────────────────
                   Positioned(
-                    left: shipX - 45,
-                    top:  shipY - 28,
-                    child: Opacity(
-                      opacity: shipOp.clamp(0.0, 1.0),
-                      child: Transform.rotate(
-                        angle: selfRot + i * (math.pi / 2),
-                        child: CustomPaint(
-                          size: const Size(90, 56),
-                          painter: _UfoPainter(
-                            color: _shipColors[i],
-                            glowIntensity: t,
-                            rotation: selfRot,
-                          ),
+                    left: dx + booster.dx * 22 - 18,
+                    top:  dy + booster.dy * 14 - 18,
+                    child: IgnorePointer(
+                      child: CustomPaint(
+                        size: const Size(36, 36),
+                        painter: _BoosterFlamePainter(
+                          color: Color.lerp(
+                              _shipColors[i], const Color(0xFFFF6600), 0.65)!,
+                          direction: booster,
+                          intensity: t,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // ── UFO with orbital tilt ────────────────────────────────
+                  Positioned(
+                    left: dx - 45,
+                    top:  dy - 28,
+                    child: Transform.rotate(
+                      angle: math.sin(orbit + i * math.pi / 2) * 0.25 * (1 - t),
+                      child: CustomPaint(
+                        size: const Size(90, 56),
+                        painter: _UfoPainter(
+                          color: _shipColors[i],
+                          glowIntensity: t,
+                          rotation: selfSpin,
                         ),
                       ),
                     ),
@@ -606,85 +565,52 @@ class _ShipEntryAnimationState extends State<_ShipEntryAnimation>
                 ]);
               }),
 
-            // ── 3. Merged UFO hovering (before blast) ────────────────────
-            if (_shipsArrived && !isL33 && _mergeFlash.value < 0.02 && !_shipsVanished)
+            // ── 3. Ships converged glow at center (pre-blast hover) ──────
+            if (_shipsArrived && !_blastDone && _blastCtrl.value < 0.04)
               Positioned(
-                left: cx - 45, top: cy - 28,
-                child: Opacity(
-                  opacity: _vanishAnim.value.clamp(0.0, 1.0),
-                  child: Transform.rotate(
-                    angle: selfRot,
-                    child: CustomPaint(
-                      size: const Size(90, 56),
-                      painter: _UfoPainter(
-                        color: const Color(0xFFCC00FF),
-                        glowIntensity: 1.0,
-                        rotation: selfRot,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-
-            // ── 4. Shockwave rings at convergence ────────────────────────
-            if (_shockCtrl.value > 0)
-              Positioned.fill(
+                left: cx - 70, top: cy - 70,
                 child: IgnorePointer(
-                  child: CustomPaint(
-                    painter: _ShockwavePainter(
-                      center: target,
-                      progress: _shockCtrl.value,
+                  child: Container(
+                    width: 140, height: 140,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(colors: [
+                        Colors.white.withOpacity(0.95),
+                        const Color(0xFFCC00FF).withOpacity(0.7),
+                        Colors.transparent,
+                      ]),
                     ),
                   ),
                 ),
               ),
 
-            // ── 5. L33 explosion debris ──────────────────────────────────
-            if (isL33 && _shipsArrived && _explodeCtrl.value > 0)
-              ...List.generate(24, (i) {
-                final angle = (i / 24.0) * math.pi * 2;
-                final dist  = _explodeCtrl.value * 200;
-                final ex    = cx + math.cos(angle) * dist;
-                final ey    = cy + math.sin(angle) * dist;
-                final fade  = (1.0 - _explodeCtrl.value).clamp(0.0, 1.0) * _vanishAnim.value;
-                final sz    = (12.0 + (i % 4) * 6).toDouble();
-                return Positioned(
-                  left: ex - sz / 2, top: ey - sz / 2,
-                  child: Opacity(
-                    opacity: fade,
-                    child: Container(
-                      width: sz, height: sz,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: _shipColors[i % 4],
-                        boxShadow: [BoxShadow(color: _shipColors[i % 4], blurRadius: 14)],
-                      ),
-                    ),
-                  ),
-                );
-              }),
-
-            // ── 6. MEGA BLAST — ships disappear IN the flash ─────────────
-            if (!isL33 && _mergeFlash.value > 0) ...[
+            // ── 4. MEGA BLAST ─────────────────────────────────────────────
+            if (_blastCtrl.value > 0 && !_blastDone) ...[
               IgnorePointer(
                 child: Container(
                   color: Color.lerp(
-                    Colors.white, const Color(0xFFCC00FF),
-                    (1 - _mergeFlash.value).clamp(0.0, 1.0),
-                  )!.withOpacity(_mergeFlash.value * 0.97),
+                    Colors.white,
+                    const Color(0xFFCC00FF),
+                    (1 - _blastFlash.value).clamp(0.0, 1.0),
+                  )!.withOpacity(_blastFlash.value * 0.98),
                 ),
               ),
-              ...List.generate(44, (i) {
-                final angle  = (i / 44.0) * math.pi * 2;
-                final maxDst = (i % 3 == 0) ? size.height * 1.1
-                    : (i % 3 == 1) ? size.height * 0.7 : size.height * 0.45;
-                final prog   = (1 - _mergeFlash.value).clamp(0.0, 1.0);
+              ...List.generate(48, (i) {
+                final angle  = (i / 48.0) * math.pi * 2;
+                final prog   = (1 - _blastFlash.value).clamp(0.0, 1.0);
+                final maxDst = (i % 5 == 0) ? size.height * 1.2
+                    : (i % 5 == 1) ? size.height * 0.8
+                    : (i % 5 == 2) ? size.height * 0.55
+                    : (i % 5 == 3) ? size.height * 0.35
+                    : size.height * 0.22;
                 final dist   = prog * maxDst;
                 final px     = cx + math.cos(angle) * dist;
                 final py     = cy + math.sin(angle) * dist;
-                final fade   = (1 - prog * 0.88).clamp(0.0, 1.0) * _mergeFlash.value;
-                final sz     = (8.0 + (i % 8) * 4.0);
-                final c      = _shipColors[i % 4];
+                final fade   = (1 - prog * 0.88).clamp(0.0, 1.0) * _blastFlash.value;
+                final sz     = 5.0 + (i % 9) * 3.5;
+                final c      = i % 6 == 0 ? Colors.white
+                    : i % 6 == 1 ? const Color(0xFFCC00FF)
+                    : _shipColors[i % 4];
                 return Positioned(
                   left: px - sz / 2, top: py - sz / 2,
                   child: Opacity(
@@ -693,8 +619,8 @@ class _ShipEntryAnimationState extends State<_ShipEntryAnimation>
                       width: sz, height: sz,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: i % 7 == 0 ? Colors.white : c,
-                        boxShadow: [BoxShadow(color: c, blurRadius: sz)],
+                        color: c,
+                        boxShadow: [BoxShadow(color: c, blurRadius: sz * 1.3)],
                       ),
                     ),
                   ),
@@ -702,15 +628,164 @@ class _ShipEntryAnimationState extends State<_ShipEntryAnimation>
               }),
             ],
 
-            // ── 7. VILLAIN DRAMATIC ENTRANCE ─────────────────────────────
-            if (_revealCtrl.value > 0)
-              _VillainEntranceWidget(
-                progress: _revealCtrl.value,
-                alienType: widget.controller.alienType,
-                screenSize: size,
-                finalY: cy - 68.0,
-                isL33: isL33,
+            // ── 5. DARK PAUSE — energy building beneath surface ───────────
+            if (_darkCtrl.value > 0.02 && _villainCtrl.value < 0.05)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Container(
+                    color: Colors.black.withOpacity(
+                        (_darkFade.value).clamp(0.0, 1.0)),
+                  ),
+                ),
               ),
+
+            // Energy orb at center during pause
+            if (_darkCtrl.value > 0.35 && _villainCtrl.value < 0.05)
+              Positioned(
+                left: cx - 90, top: cy - 90,
+                child: IgnorePointer(
+                  child: Container(
+                    width: 180, height: 180,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(colors: [
+                        const Color(0xFFCC00FF).withOpacity(
+                            0.5 * _darkCtrl.value),
+                        const Color(0xFFFF2266).withOpacity(
+                            0.25 * _darkCtrl.value),
+                        Colors.transparent,
+                      ]),
+                    ),
+                  ),
+                ),
+              ),
+
+            // ── 6. VILLAIN FULL-SCREEN REVEAL ─────────────────────────────
+            if (rv > 0.01) ...[
+              // Villain background aura (massive glow)
+              if (rv < 0.82)
+                Builder(builder: (_) {
+                  final auraRadius = 180 + 60 * math.sin(rv * math.pi);
+                  return Positioned(
+                    left: cx - auraRadius,
+                    top: size.height / 2 - auraRadius - 50,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: auraRadius * 2,
+                        height: auraRadius * 2,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: RadialGradient(colors: [
+                            const Color(0xFFCC00FF)
+                                .withOpacity(0.40 * math.min(rv * 8, 1.0)),
+                            const Color(0xFFFF2266)
+                                .withOpacity(0.20 * math.min(rv * 8, 1.0)),
+                            Colors.transparent,
+                          ]),
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+
+              // ── Alien body with villain action sequence ──────────────
+              Builder(builder: (_) {
+                final finalY  = cy - 68.0;
+                final centerY = size.height / 2 - 70.0;
+
+                // Scale: 0→3.8 (0.00-0.13), hold (0.13-0.76), 3.8→1.0 (0.76-1.00)
+                final growFrac   = _pv(rv, 0.00, 0.13);
+                final shrinkFrac = _pv(rv, 0.76, 1.00);
+                final overallScale = shrinkFrac > 0
+                    ? 3.8 - 2.8 * Curves.easeIn.transform(shrinkFrac)
+                    : 3.8 * Curves.easeOut.transform(growFrac);
+
+                // Position: screen center → game position during shrink
+                final posY = shrinkFrac > 0
+                    ? centerY + (finalY - centerY)
+                        * Curves.easeIn.transform(shrinkFrac)
+                    : centerY;
+
+                // Villain action params from timeline
+                final eyePhase  = math.sin(math.pi * _pv(rv, 0.11, 0.42));
+                final armPhase  = math.sin(math.pi * _pv(rv, 0.30, 0.56));
+                final legPhase  = math.sin(math.pi * _pv(rv, 0.46, 0.64));
+                final expl      = math.sin(math.pi * _pv(rv, 0.60, 0.80));
+                final fadeIn    = _pv(rv, 0.00, 0.16).clamp(0.0, 1.0);
+
+                return Positioned(
+                  left: 0, right: 0,
+                  top: posY,
+                  child: Opacity(
+                    opacity: fadeIn,
+                    child: Transform.scale(
+                      scale: overallScale.clamp(0.05, 4.2),
+                      child: Center(
+                        child: CustomPaint(
+                          size: const Size(150, 140),
+                          painter: _AlienBodyPainter(
+                            alienType: widget.controller.alienType,
+                            isThrowing: false,
+                            throwDirection: Offset.zero,
+                            isHurt: false,
+                            eyeBlinkValue: 0,
+                            armSwingValue: 0,
+                            villainEyeScale:  eyePhase,
+                            villainArmSpread: armPhase,
+                            villainLegSpread: legPhase,
+                            villainExplode:   expl,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+
+              // ── Boss title (appears at end of villain sequence) ──────
+              if (rv > 0.80)
+                Builder(builder: (_) {
+                  final finalY = cy - 68.0;
+                  final titleAlpha = _pv(rv, 0.80, 1.0);
+                  return Positioned(
+                    top: finalY - 105,
+                    left: 0, right: 0,
+                    child: Opacity(
+                      opacity: titleAlpha.clamp(0.0, 1.0),
+                      child: Column(children: [
+                        Text(
+                          widget.controller.currentLevel == 33
+                              ? '☠ BOSS ALIEN UNLEASHED ☠'
+                              : widget.controller.alienType == AlienType.standing
+                                  ? '👾 ALIEN BOSS ACTIVATED 👾'
+                                  : '👾 ALIEN BOSS ONLINE 👾',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Color(0xFFFF2266),
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 2.5,
+                            shadows: [
+                              Shadow(color: Color(0xFFFF2266), blurRadius: 24),
+                              Shadow(color: Colors.white, blurRadius: 8),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'MERGE TILES TO FIRE LASER  •  DESTROY THE ALIEN',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.75),
+                            fontSize: 10,
+                            letterSpacing: 1.5,
+                          ),
+                        ),
+                      ]),
+                    ),
+                  );
+                }),
+            ],
           ],
         );
       },
@@ -718,67 +793,49 @@ class _ShipEntryAnimationState extends State<_ShipEntryAnimation>
   }
 }
 
-// ─── Smoke Thruster Painter ───────────────────────────────────────────────────
-// Realistic engine exhaust: hot core (white/orange) → steam → dark smoke cloud
-class _SmokeThrusterPainter extends CustomPainter {
-  final Offset direction; // normalized, pointing AWAY from target
+// ─── Booster Flame Painter ───────────────────────────────────────────────────
+// Paints an engine exhaust cone behind a ship in direction [direction]
+class _BoosterFlamePainter extends CustomPainter {
+  final Color color;
+  final Offset direction; // normalized unit vector pointing AWAY from target
   final double intensity; // 0..1
 
-  const _SmokeThrusterPainter({required this.direction, required this.intensity});
+  const _BoosterFlamePainter(
+      {required this.color, required this.direction, required this.intensity});
 
   @override
   void paint(Canvas canvas, Size size) {
     if (intensity < 0.05) return;
     final cx = size.width / 2;
     final cy = size.height / 2;
+    // Perpendicular to direction
     final perpX = -direction.dy;
-    final perpY =  direction.dx;
-    final len = 32.0 * intensity;
-    final wid = 18.0 * intensity;
+    final perpY = direction.dx;
+    final len = 22.0 * intensity;
+    final wid = 10.0 * intensity;
     final tip = Offset(cx + direction.dx * len, cy + direction.dy * len);
     final l   = Offset(cx + perpX * wid, cy + perpY * wid);
     final r   = Offset(cx - perpX * wid, cy - perpY * wid);
-
-    // ── Outer smoke (dark gray, wide cone) ──────────────────────────────────
-    final smokePath = Path()..moveTo(l.dx, l.dy)..lineTo(tip.dx, tip.dy)..lineTo(r.dx, r.dy)..close();
-    canvas.drawPath(smokePath,
-        Paint()..shader = ui.Gradient.linear(Offset(cx, cy), tip, [
-          Colors.grey.shade800.withOpacity(0.85 * intensity),
-          Colors.grey.shade600.withOpacity(0.45 * intensity),
-          Colors.grey.shade400.withOpacity(0.12 * intensity),
-          Colors.transparent,
-        ], [0.0, 0.30, 0.60, 1.0]));
-
-    // ── Middle steam layer (white-hot, narrower) ─────────────────────────────
-    final iLen = len * 0.55; final iWid = wid * 0.42;
-    final iTip = Offset(cx + direction.dx * iLen, cy + direction.dy * iLen);
-    final il = Offset(cx + perpX * iWid, cy + perpY * iWid);
-    final ir = Offset(cx - perpX * iWid, cy - perpY * iWid);
-    final steamPath = Path()..moveTo(il.dx, il.dy)..lineTo(iTip.dx, iTip.dy)..lineTo(ir.dx, ir.dy)..close();
-    canvas.drawPath(steamPath,
-        Paint()..shader = ui.Gradient.linear(Offset(cx, cy), iTip, [
-          Colors.white.withOpacity(0.90 * intensity),
-          Colors.white.withOpacity(0.40 * intensity),
-          Colors.transparent,
-        ], [0.0, 0.55, 1.0]));
-
-    // ── Hot core (white → yellow → orange, narrowest) ─────────────────────────
-    final cLen = len * 0.28; final cWid = wid * 0.20;
-    final cTip = Offset(cx + direction.dx * cLen, cy + direction.dy * cLen);
-    final cl = Offset(cx + perpX * cWid, cy + perpY * cWid);
-    final cr = Offset(cx - perpX * cWid, cy - perpY * cWid);
-    final corePath = Path()..moveTo(cl.dx, cl.dy)..lineTo(cTip.dx, cTip.dy)..lineTo(cr.dx, cr.dy)..close();
-    canvas.drawPath(corePath,
-        Paint()..shader = ui.Gradient.linear(Offset(cx, cy), cTip, [
-          Colors.white.withOpacity(intensity),
-          const Color(0xFFFFDD44).withOpacity(0.90 * intensity),
-          const Color(0xFFFF6600).withOpacity(0.60 * intensity),
-          Colors.transparent,
-        ], [0.0, 0.18, 0.55, 1.0]));
+    final path = Path()..moveTo(l.dx, l.dy)..lineTo(tip.dx, tip.dy)..lineTo(r.dx, r.dy)..close();
+    // Outer flame: color-tinted
+    canvas.drawPath(path,
+        Paint()..shader = ui.Gradient.linear(
+            Offset(cx, cy), tip,
+            [color.withOpacity(0.9 * intensity), Colors.transparent]));
+    // Inner core: white-hot
+    final innerPath = Path()
+      ..moveTo(cx + perpX * wid * 0.4, cy + perpY * wid * 0.4)
+      ..lineTo(tip.dx, tip.dy)
+      ..lineTo(cx - perpX * wid * 0.4, cy - perpY * wid * 0.4)
+      ..close();
+    canvas.drawPath(innerPath,
+        Paint()..shader = ui.Gradient.linear(
+            Offset(cx, cy), tip,
+            [Colors.white.withOpacity(0.85 * intensity), Colors.transparent]));
   }
 
   @override
-  bool shouldRepaint(_SmokeThrusterPainter old) =>
+  bool shouldRepaint(_BoosterFlamePainter old) =>
       old.intensity != intensity || old.direction != direction;
 }
 
@@ -815,311 +872,6 @@ class _ShockwavePainter extends CustomPainter {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// VILLAIN DRAMATIC ENTRANCE
-// 5-second cinematic villain intro after ships vanish:
-// gap → rise → eye flash → arm punch → leg stomp → body explode → rejoin → settle
-// ═══════════════════════════════════════════════════════════════════════════════
-
-class _VillainEntranceWidget extends StatelessWidget {
-  final double    progress;   // 0..1 over 5000ms
-  final AlienType alienType;
-  final Size      screenSize;
-  final double    finalY;     // alien final resting Y
-  final bool      isL33;
-
-  const _VillainEntranceWidget({
-    required this.progress,
-    required this.alienType,
-    required this.screenSize,
-    required this.finalY,
-    required this.isL33,
-  });
-
-  double _phase(double from, double to) =>
-      ((progress - from) / (to - from)).clamp(0.0, 1.0);
-
-  @override
-  Widget build(BuildContext context) {
-    final p  = progress;
-    final cx = screenSize.width / 2;
-    final sh = screenSize.height;
-
-    // ── Phase map ─────────────────────────────────────────────────────────────
-    // 0.00-0.08 : afterglow gap (ember sparks)
-    // 0.08-0.24 : alien ERUPTS huge from center (scale 4.5→3.0)
-    // 0.24-0.38 : eyes FLASH open wide (angry purple glow pulses)
-    // 0.38-0.52 : both arms PUNCH dramatically outward
-    // 0.52-0.64 : legs STOMP / body bounces
-    // 0.64-0.76 : body EXPLODES into 8 chunks flying out
-    // 0.76-0.88 : chunks REASSEMBLE; alien fades back in
-    // 0.88-1.00 : scale 3.0→1.0, slide to final position + boss title
-
-    final inRise    = p >= 0.08 && p < 0.24;
-    final inEyes    = p >= 0.24 && p < 0.38;
-    final inArms    = p >= 0.38 && p < 0.52;
-    final inLegs    = p >= 0.52 && p < 0.64;
-    final inExplode = p >= 0.64 && p < 0.76;
-    final inRejoin  = p >= 0.76 && p < 0.88;
-    final inSettle  = p >= 0.88;
-
-    double bodyScale   = 4.5;
-    double bodyY       = sh;
-    double bodyOpacity = 0.0;
-    double eyeGlow     = 0.0;
-    double armExtend   = 0.0;
-    double legBounce   = 0.0;
-    double explodeT    = 0.0;
-    bool   bodyHidden  = false;
-
-    if (p < 0.08) {
-      bodyOpacity = 0.0;
-      bodyY = sh;
-    } else if (inRise) {
-      final t = Curves.easeOut.transform(_phase(0.08, 0.24));
-      bodyOpacity = t;
-      bodyScale   = 4.5 - t * 1.5;
-      bodyY       = sh * 0.5 + (1 - t) * sh * 0.35;
-    } else if (inEyes) {
-      bodyOpacity = 1.0; bodyScale = 3.0; bodyY = sh * 0.5;
-      eyeGlow     = 0.45 + 0.55 * math.sin(_phase(0.24, 0.38) * math.pi * 5);
-    } else if (inArms) {
-      bodyOpacity = 1.0; bodyScale = 3.0; bodyY = sh * 0.5; eyeGlow = 0.3;
-      armExtend   = math.sin(_phase(0.38, 0.52) * math.pi);
-    } else if (inLegs) {
-      bodyOpacity = 1.0; bodyScale = 3.0; bodyY = sh * 0.5;
-      legBounce   = math.sin(_phase(0.52, 0.64) * math.pi * 3) * 0.5;
-    } else if (inExplode) {
-      bodyHidden  = true;
-      explodeT    = _phase(0.64, 0.76);
-      bodyScale   = 3.0; bodyY = sh * 0.5;
-    } else if (inRejoin) {
-      final t    = _phase(0.76, 0.88);
-      bodyHidden  = t < 0.5;
-      explodeT    = 1.0 - t;
-      bodyOpacity = t < 0.5 ? 0.0 : (t - 0.5) * 2;
-      bodyScale   = 3.0; bodyY = sh * 0.5;
-    } else {
-      // inSettle
-      bodyOpacity = 1.0;
-      final t   = Curves.easeInOut.transform(_phase(0.88, 1.0));
-      bodyScale  = 3.0 - t * 2.0;
-      bodyY      = sh * 0.5 + t * (finalY + 60 - sh * 0.5);
-    }
-
-    final auraOp = ((bodyScale - 1.0) / 3.0 * 0.40).clamp(0.0, 0.40);
-
-    return Stack(
-      children: [
-        // ── Ember afterglow sparks (gap phase) ──────────────────────────────
-        if (p < 0.22)
-          Positioned.fill(
-            child: IgnorePointer(
-              child: CustomPaint(
-                painter: _EmberAfterglowPainter(
-                  center: Offset(cx, sh * 0.42),
-                  intensity: (1 - p / 0.22).clamp(0.0, 1.0),
-                ),
-              ),
-            ),
-          ),
-
-        // ── Purple atmospheric aura when alien is giant ──────────────────────
-        if (auraOp > 0 && bodyOpacity > 0.05)
-          Positioned(
-            left: cx - 200, top: bodyY - 180,
-            child: IgnorePointer(
-              child: Container(
-                width: 400, height: 400,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(colors: [
-                    const Color(0xFFCC00FF).withOpacity(auraOp),
-                    const Color(0xFFFF2266).withOpacity(auraOp * 0.35),
-                    Colors.transparent,
-                  ], stops: const [0.0, 0.5, 1.0]),
-                ),
-              ),
-            ),
-          ),
-
-        // ── Explosion chunks flying out / reassembling ──────────────────────
-        if (inExplode || inRejoin)
-          ...List.generate(8, (i) {
-            const chunkColors = [
-              Color(0xFF7BC800), Color(0xFFFF6B00),
-              Color(0xFF2255CC), Color(0xFF111133),
-              Color(0xFF7BC800), Color(0xFFFF6B00),
-              Color(0xFF2255CC), Color(0xFF111133),
-            ];
-            final angle   = (i / 8.0) * math.pi * 2;
-            final dist    = (inExplode ? explodeT : (1 - explodeT)) * 150 * bodyScale / 3.0;
-            final chunkX  = cx + math.cos(angle) * dist;
-            final chunkY  = bodyY + 55 + math.sin(angle) * dist;
-            final chunkOp = inExplode
-                ? (1 - explodeT * 0.35).clamp(0.0, 1.0)
-                : explodeT.clamp(0.0, 1.0);
-            final chunkSz = (30.0 + (i % 3) * 12.0) * bodyScale / 3.0;
-            return Positioned(
-              left: chunkX - chunkSz / 2,
-              top:  chunkY - chunkSz / 2,
-              child: Opacity(
-                opacity: chunkOp,
-                child: Transform.rotate(
-                  angle: angle * explodeT * 2.5,
-                  child: Container(
-                    width: chunkSz, height: chunkSz,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(chunkSz * 0.28),
-                      color: chunkColors[i],
-                      boxShadow: [BoxShadow(color: chunkColors[i].withOpacity(0.65), blurRadius: 14)],
-                    ),
-                  ),
-                ),
-              ),
-            );
-          }),
-
-        // ── Giant alien body ─────────────────────────────────────────────────
-        if (!bodyHidden && bodyOpacity > 0.01)
-          Positioned(
-            top:  bodyY - 70.0 * bodyScale / 3.0 + legBounce * 22,
-            left: 0, right: 0,
-            child: Center(
-              child: Opacity(
-                opacity: bodyOpacity.clamp(0.0, 1.0),
-                child: Transform.scale(
-                  scale: bodyScale.clamp(1.0, 4.5),
-                  child: SizedBox(
-                    width: 150, height: 140,
-                    child: Stack(children: [
-                      // Eye glow overlay
-                      if (eyeGlow > 0)
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: CustomPaint(painter: _EyeGlowPainter(intensity: eyeGlow)),
-                          ),
-                        ),
-                      // Alien body
-                      CustomPaint(
-                        size: const Size(150, 140),
-                        painter: _AlienBodyPainter(
-                          alienType: alienType,
-                          isThrowing: armExtend > 0.1,
-                          throwDirection: const Offset(1, 0.15),
-                          isHurt: false,
-                          eyeBlinkValue: 0.0,
-                          armSwingValue: armExtend + legBounce,
-                        ),
-                      ),
-                    ]),
-                  ),
-                ),
-              ),
-            ),
-          ),
-
-        // ── Boss title (settle phase) ─────────────────────────────────────────
-        if (inSettle)
-          Positioned(
-            top:  bodyY - 115.0 * bodyScale / 3.0,
-            left: 0, right: 0,
-            child: Opacity(
-              opacity: _phase(0.88, 0.97).clamp(0.0, 1.0),
-              child: Column(children: [
-                Text(
-                  isL33 ? '☠  BOSS ALIEN UNLEASHED  ☠'
-                      : alienType == AlienType.standing
-                          ? '👾  ALIEN BOSS ACTIVATED  👾'
-                          : '👾  ALIEN BOSS ONLINE  👾',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Color(0xFFFF2266), fontSize: 22,
-                    fontWeight: FontWeight.w900, letterSpacing: 2.5,
-                    shadows: [
-                      Shadow(color: Color(0xFFFF2266), blurRadius: 28),
-                      Shadow(color: Colors.white, blurRadius: 10),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'MERGE TILES TO FIRE LASER  •  DESTROY THE ALIEN',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.75),
-                    fontSize: 10.5, letterSpacing: 1.5,
-                  ),
-                ),
-              ]),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-// ─── Ember Afterglow Painter ──────────────────────────────────────────────────
-// Random colored ember sparks that appear after ships vanish (gap phase)
-class _EmberAfterglowPainter extends CustomPainter {
-  final Offset center;
-  final double intensity;
-  const _EmberAfterglowPainter({required this.center, required this.intensity});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (intensity <= 0) return;
-    final rng = math.Random(42);
-    const colors = [
-      Color(0xFFCC00FF), Color(0xFFFF8800), Color(0xFF00FFCC), Colors.white,
-    ];
-    for (int i = 0; i < 32; i++) {
-      final angle = rng.nextDouble() * math.pi * 2;
-      final dist  = rng.nextDouble() * 130 * intensity;
-      final x     = center.dx + math.cos(angle) * dist;
-      final y     = center.dy + math.sin(angle) * dist;
-      final sz    = rng.nextDouble() * 7 + 2;
-      final op    = rng.nextDouble() * intensity * 0.75;
-      canvas.drawCircle(
-        Offset(x, y), sz,
-        Paint()
-          ..color = colors[i % colors.length].withOpacity(op)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(_EmberAfterglowPainter old) => old.intensity != intensity;
-}
-
-// ─── Eye Glow Painter ─────────────────────────────────────────────────────────
-// Overlaid on alien body during villain eye-flash phase
-class _EyeGlowPainter extends CustomPainter {
-  final double intensity;
-  const _EyeGlowPainter({required this.intensity});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (intensity <= 0) return;
-    final cx   = size.width / 2;
-    final eyeY = size.height * 0.34;
-    for (final ex in [cx - 19.0, cx + 19.0]) {
-      canvas.drawCircle(Offset(ex, eyeY), 24 * intensity,
-          Paint()
-            ..color = const Color(0xFFCC00FF).withOpacity(intensity * 0.65)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18));
-      canvas.drawCircle(Offset(ex, eyeY), 9 * intensity,
-          Paint()
-            ..color = Colors.white.withOpacity(intensity * 0.88)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
-    }
-  }
-
-  @override
-  bool shouldRepaint(_EyeGlowPainter old) => old.intensity != intensity;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // ALIEN ACTIVE WIDGET
 // Alien body + health bar + meteor throws + laser missile
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1147,10 +899,12 @@ class _AlienActiveWidgetState extends State<_AlienActiveWidget>
   late Animation<double> _bobAnim;
   late Animation<double> _hurtAnim;
 
+  // Particle system controller
+  late AnimationController _particleCtrl;
+
   // Continuous idle animations
   late AnimationController _armSwing;
   late Animation<double> _armSwingAnim;
-  late AnimationController _orbitCtrl;
 
   // Active meteor animations
   final Map<double, AnimationController> _meteorControllers = {};
@@ -1178,8 +932,6 @@ class _AlienActiveWidgetState extends State<_AlienActiveWidget>
       ..repeat(reverse: true);
     _armSwingAnim = Tween<double>(begin: -1.0, end: 1.0)
         .animate(CurvedAnimation(parent: _armSwing, curve: Curves.easeInOut));
-    _orbitCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 3200))
-      ..repeat();
     _eyeBlink = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 100));
     _hurtFlash = AnimationController(
@@ -1187,6 +939,9 @@ class _AlienActiveWidgetState extends State<_AlienActiveWidget>
     _bobAnim = Tween<double>(begin: -4.0, end: 4.0)
         .animate(CurvedAnimation(parent: _bodyBob, curve: Curves.easeInOut));
     _hurtAnim = Tween<double>(begin: 0.0, end: 1.0).animate(_hurtFlash);
+    _particleCtrl = AnimationController(
+        vsync: this, duration: const Duration(seconds: 3))
+      ..repeat();
     _scheduleEyeBlink();
     widget.controller.addListener(_onControllerChanged);
   }
@@ -1290,9 +1045,9 @@ class _AlienActiveWidgetState extends State<_AlienActiveWidget>
     widget.controller.removeListener(_onControllerChanged);
     _bodyBob.dispose();
     _armSwing.dispose();
-    _orbitCtrl.dispose();
     _eyeBlink.dispose();
     _hurtFlash.dispose();
+    _particleCtrl.dispose();
     _throwResetTimer?.cancel();
     _laserCtrl?.dispose();
     for (final ctrl in _meteorControllers.values) ctrl.dispose();
@@ -1310,12 +1065,11 @@ class _AlienActiveWidgetState extends State<_AlienActiveWidget>
     final isHurt = widget.controller.phase == AlienPhase.laserHit;
 
     return AnimatedBuilder(
-      animation: Listenable.merge([_bodyBob, _hurtFlash, _armSwing, _orbitCtrl]),
+      animation: Listenable.merge([_bodyBob, _hurtFlash, _armSwing]),
       builder: (_, __) {
         final bobY = _bobAnim.value;
         final hurtT = _hurtAnim.value;
         final swing = _armSwingAnim.value;
-        final orbitAngle = _orbitCtrl.value * math.pi * 2;
 
         return Stack(
           children: [
@@ -1330,38 +1084,35 @@ class _AlienActiveWidgetState extends State<_AlienActiveWidget>
                 ),
               ),
 
-            // ── Elliptical orbit particle ring around alien ───────────
-            ...List.generate(10, (i) {
-              final angle = orbitAngle + (i / 10.0) * math.pi * 2;
-              const orbitRX = 92.0;
-              const orbitRY = 48.0;
-              final alienCenterX = size.width / 2;
-              final alienCenterY = cy + 2 + bobY;
-              final px = alienCenterX + math.cos(angle) * orbitRX;
-              final py = alienCenterY + math.sin(angle) * orbitRY;
-              const particleColors = [
-                Color(0xFFCC00FF), Color(0xFF00FFCC), Color(0xFFFF4444),
-                Color(0xFFFFAA00), Color(0xFF4488FF), Color(0xFF00FF88),
-                Color(0xFFFF00AA), Color(0xFFFFFF44), Color(0xFF44FFFF),
-                Color(0xFFFF6600),
-              ];
-              final c = particleColors[i % particleColors.length];
-              final pSz = (i % 3 == 0) ? 9.0 : (i % 3 == 1) ? 6.0 : 7.0;
-              return Positioned(
-                left: px - pSz / 2,
-                top: py - pSz / 2,
-                child: IgnorePointer(
-                  child: Container(
-                    width: pSz, height: pSz,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: c,
-                      boxShadow: [BoxShadow(color: c, blurRadius: 9, spreadRadius: 1)],
+            // ── HP bar — ABOVE alien head (so it's not covered by body) ───
+            Positioned(
+              // cy - 68 is alien body top; minus 26 for bar above head
+              top: cy - 94 + bobY,
+              left: 8, right: 8,
+              child: _AlienHealthBar(
+                health: widget.controller.alienHealth,
+                mergesDone: widget.controller.mergesDone,
+              ),
+            ),
+
+            // ── Alien ambient particle field (energy orbs + sparks) ────
+            Positioned(
+              top: cy - 130 + bobY,
+              left: 0, right: 0,
+              child: SizedBox(
+                height: 220,
+                child: AnimatedBuilder(
+                  animation: _particleCtrl,
+                  builder: (_, __) => CustomPaint(
+                    painter: _AlienParticlePainter(
+                      progress: _particleCtrl.value,
+                      alienHealth: widget.controller.alienHealth,
+                      isHurt: isHurt,
                     ),
                   ),
                 ),
-              );
-            }),
+              ),
+            ),
 
             // ── Alien body — head above border, body in top of row 0 ───
             Positioned(
@@ -1379,16 +1130,6 @@ class _AlienActiveWidgetState extends State<_AlienActiveWidget>
                     armSwingValue: swing,
                   ),
                 ),
-              ),
-            ),
-
-            // ── HP bar — BELOW alien feet (professional design) ───────
-            Positioned(
-              top: cy + 78 + bobY,
-              left: 16, right: 16,
-              child: _AlienHealthBar(
-                health: widget.controller.alienHealth,
-                mergesDone: widget.controller.mergesDone,
               ),
             ),
 
@@ -1473,7 +1214,11 @@ class _AlienBodyPainter extends CustomPainter {
   final Offset throwDirection;
   final bool isHurt;
   final double eyeBlinkValue;
-  final double armSwingValue; // -1..1 continuous swing
+  final double armSwingValue;    // -1..1 continuous swing
+  final double villainEyeScale;  // 0..1 → eyes bulge up to 3×
+  final double villainArmSpread; // 0..1 → arms sweep dramatically wide
+  final double villainLegSpread; // 0..1 → legs kick out wide
+  final double villainExplode;   // 0..1 → body parts fly apart then rejoin
 
   const _AlienBodyPainter({
     required this.alienType,
@@ -1481,7 +1226,11 @@ class _AlienBodyPainter extends CustomPainter {
     required this.throwDirection,
     required this.isHurt,
     required this.eyeBlinkValue,
-    this.armSwingValue = 0.0,
+    this.armSwingValue    = 0.0,
+    this.villainEyeScale  = 0.0,
+    this.villainArmSpread = 0.0,
+    this.villainLegSpread = 0.0,
+    this.villainExplode   = 0.0,
   });
 
   // Canvas: 150 × 140
@@ -1501,42 +1250,52 @@ class _AlienBodyPainter extends CustomPainter {
     final bootColor  = Color.lerp(const Color(0xFF111133), const Color(0xFF004466), ht)!;
 
     // ── Purple glow behind alien ─────────────────────────────────────────
-    canvas.drawCircle(Offset(cx, h * 0.52), 62,
+    final glowR = villainEyeScale > 0.1
+        ? const Color(0xFFFF1111) : const Color(0xFFCC00FF);
+    canvas.drawCircle(Offset(cx, h * 0.52), 62 + villainExplode * 20,
         Paint()
-          ..color = const Color(0xFFCC00FF).withOpacity(0.12)
+          ..color = glowR.withOpacity(0.12 + villainEyeScale * 0.25)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 28));
 
-    // ── LEGS (animated swing — opposite phases like walking) ─────────────
-    final legSwingL = armSwingValue * 0.28; // left leg forward when arm back
-    final legSwingR = -armSwingValue * 0.28;
+    // ── VILLAIN EXPLODE offsets for body sections ─────────────────────────
+    // Each part flies away from the torso pivot when villainExplode > 0
+    final exL = villainExplode;     // shorthand
 
-    // Left leg
+    // ── LEGS ─────────────────────────────────────────────────────────────
+    final legSwingL = armSwingValue * 0.28;
+    final legSwingR = -armSwingValue * 0.28;
+    // Villain kick: legs spread outward
+    final villainKickL = -villainLegSpread * 0.75;
+    final villainKickR =  villainLegSpread * 0.75;
+    // Explode: legs fly down-outward
+    final legExOffLX = exL * -38;
+    final legExOffLY = exL * 48;
+    final legExOffRX = exL *  38;
+    final legExOffRY = exL * 48;
+
     canvas.save();
-    canvas.translate(cx - 18, h * 0.78);
-    canvas.rotate(legSwingL);
+    canvas.translate(cx - 18 + legExOffLX, h * 0.78 + legExOffLY);
+    canvas.rotate(legSwingL + villainKickL);
     canvas.drawRRect(RRect.fromRectAndRadius(
         const Rect.fromLTWH(-10, 0, 20, 22),
         const Radius.circular(10)), Paint()..color = legColor);
-    // Left boot
     canvas.drawRRect(RRect.fromRectAndRadius(
         const Rect.fromLTWH(-15, 18, 28, 14),
         const Radius.circular(7)), Paint()..color = bootColor);
     canvas.restore();
 
-    // Right leg
     canvas.save();
-    canvas.translate(cx + 18, h * 0.78);
-    canvas.rotate(legSwingR);
+    canvas.translate(cx + 18 + legExOffRX, h * 0.78 + legExOffRY);
+    canvas.rotate(legSwingR + villainKickR);
     canvas.drawRRect(RRect.fromRectAndRadius(
         const Rect.fromLTWH(-10, 0, 20, 22),
         const Radius.circular(10)), Paint()..color = legColor);
-    // Right boot
     canvas.drawRRect(RRect.fromRectAndRadius(
         const Rect.fromLTWH(-13, 18, 28, 14),
         const Radius.circular(7)), Paint()..color = bootColor);
     canvas.restore();
 
-    // ── TORSO (orange, wide, rounded) ───────────────────────────────────
+    // ── TORSO (stays as explode pivot) ───────────────────────────────────
     canvas.drawRRect(RRect.fromRectAndRadius(
         Rect.fromLTWH(cx - 32, h * 0.60, 64, h * 0.20),
         const Radius.circular(14)),
@@ -1544,41 +1303,39 @@ class _AlienBodyPainter extends CustomPainter {
           Offset(cx - 32, h * 0.60), Offset(cx + 32, h * 0.80),
           [suitColor, darkSuit]));
 
-    // Suit collar ring (white band at neck)
     canvas.drawRRect(RRect.fromRectAndRadius(
         Rect.fromLTWH(cx - 26, h * 0.595, 52, 9),
         const Radius.circular(5)),
         Paint()..color = Colors.white.withOpacity(0.55));
 
-    // Chest panel light
     canvas.drawCircle(Offset(cx, h * 0.69),
         8, Paint()..color = const Color(0xFF00FFCC).withOpacity(0.7)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
     canvas.drawCircle(Offset(cx, h * 0.69), 4, Paint()..color = Colors.white);
 
-    // ── ARMS ─────────────────────────────────────────────────────────────
-    _drawArms(canvas, cx, h, suitColor, skinColor, ht);
+    // ── ARMS (with explode offsets) ───────────────────────────────────────
+    _drawArms(canvas, cx, h, suitColor, skinColor, ht, exL);
 
-    // ── HEAD (big round green face) ──────────────────────────────────────
+    // ── HEAD (with explode offset: flies upward) ──────────────────────────
+    final headExOff = exL * -45;
+    canvas.save();
+    canvas.translate(0, headExOff);
+
     canvas.drawCircle(Offset(cx, h * 0.37),
         38,
         Paint()..shader = ui.Gradient.radial(
           Offset(cx - 10, h * 0.28), 24,
           [skinColor, skinColor.withOpacity(0.75)]));
 
-    // ── HELMET DOME (subtle glass — NO harsh white ring) ────────────────
-    // Barely-there fill
     canvas.drawOval(
         Rect.fromCenter(center: Offset(cx, h * 0.36), width: 94, height: 96),
         Paint()..color = Colors.white.withOpacity(0.04));
-    // Thin, very faint rim — just enough for shape definition
     canvas.drawOval(
         Rect.fromCenter(center: Offset(cx, h * 0.36), width: 94, height: 96),
         Paint()
           ..color = Colors.white.withOpacity(0.13)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.5);
-    // Subtle shine arc (top-left only)
     final shinePath = Path()
       ..addArc(
           Rect.fromCenter(center: Offset(cx, h * 0.33), width: 70, height: 64),
@@ -1590,7 +1347,6 @@ class _AlienBodyPainter extends CustomPainter {
           ..strokeWidth = 3.5
           ..strokeCap = StrokeCap.round);
 
-    // ── BIG CARTOON EYES ─────────────────────────────────────────────────
     _drawEyes(canvas, cx, h, ht);
 
     // ── ANTENNA ──────────────────────────────────────────────────────────
@@ -1603,32 +1359,38 @@ class _AlienBodyPainter extends CustomPainter {
         Paint()..color = const Color(0xFFCC00FF)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
     canvas.drawCircle(Offset(cx, h * 0.01), 3, Paint()..color = Colors.white);
+
+    canvas.restore(); // end head explode group
   }
 
   void _drawArms(Canvas canvas, double cx, double h,
-      Color suitColor, Color skinColor, double ht) {
+      Color suitColor, Color skinColor, double ht, [double exL = 0.0]) {
     final handColor = Color.lerp(skinColor, const Color(0xFF00FFCC), ht)!;
     final armPaint = Paint()..color = suitColor;
 
+    // Villain arm spread: arms fly wide horizontally + explode offset
+    final villainSpreadL = villainArmSpread * (-math.pi * 0.55);
+    final villainSpreadR = villainArmSpread * (math.pi * 0.55);
+    final armExOffLX = exL * -60;
+    final armExOffRX = exL * 60;
+    final armExOffY  = exL * -18;
+
     if (isThrowing) {
-      // Left arm: idle swing while right arm throws
       canvas.save();
-      canvas.translate(cx - 32, h * 0.62);
-      canvas.rotate(-0.18 + armSwingValue * 0.22);
+      canvas.translate(cx - 32 + armExOffLX, h * 0.62 + armExOffY);
+      canvas.rotate(-0.18 + armSwingValue * 0.22 + villainSpreadL);
       canvas.drawRRect(RRect.fromRectAndRadius(
           const Rect.fromLTWH(-18, 0, 18, 30), const Radius.circular(9)),
           armPaint);
       canvas.restore();
 
-      // Right arm: throws toward target
       final throwAngle = math.atan2(throwDirection.dy, throwDirection.dx);
       canvas.save();
-      canvas.translate(cx + 32, h * 0.635);
-      canvas.rotate(throwAngle - math.pi / 6);
+      canvas.translate(cx + 32 + armExOffRX, h * 0.635 + armExOffY);
+      canvas.rotate(throwAngle - math.pi / 6 + villainSpreadR);
       canvas.drawRRect(RRect.fromRectAndRadius(
           const Rect.fromLTWH(-9, 0, 18, 40), const Radius.circular(9)),
           armPaint);
-      // Glowing purple energy orb at arm tip
       canvas.drawCircle(const Offset(0, 42), 11,
           Paint()..color = const Color(0xFFCC00FF).withOpacity(0.7)
             ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7));
@@ -1637,18 +1399,15 @@ class _AlienBodyPainter extends CustomPainter {
       canvas.restore();
 
     } else if (alienType == AlienType.waving) {
-      // Left arm: raised and waving, with armSwing for wave motion
       canvas.save();
-      canvas.translate(cx - 32, h * 0.60);
-      canvas.rotate(-math.pi * 0.55 + armSwingValue * 0.18);
+      canvas.translate(cx - 32 + armExOffLX, h * 0.60 + armExOffY);
+      canvas.rotate(-math.pi * 0.55 + armSwingValue * 0.18 + villainSpreadL);
       canvas.drawRRect(RRect.fromRectAndRadius(
           const Rect.fromLTWH(-9, -38, 18, 40), const Radius.circular(9)),
           armPaint);
-      // Hand
       canvas.drawOval(
           Rect.fromCenter(center: const Offset(0, -40), width: 22, height: 16),
           Paint()..color = handColor);
-      // Finger hints
       for (int fi = 0; fi < 3; fi++) {
         canvas.drawLine(Offset(-5.0 + fi * 5, -38), Offset(-5.0 + fi * 5, -48),
             Paint()..color = skinColor.withOpacity(0.65)
@@ -1656,33 +1415,28 @@ class _AlienBodyPainter extends CustomPainter {
               ..strokeCap = StrokeCap.round);
       }
       canvas.restore();
-      // Right arm: gentle swing
       canvas.save();
-      canvas.translate(cx + 32, h * 0.62);
-      canvas.rotate(0.18 - armSwingValue * 0.22);
+      canvas.translate(cx + 32 + armExOffRX, h * 0.62 + armExOffY);
+      canvas.rotate(0.18 - armSwingValue * 0.22 + villainSpreadR);
       canvas.drawRRect(RRect.fromRectAndRadius(
           const Rect.fromLTWH(0, 0, 18, 30), const Radius.circular(9)),
           armPaint);
       canvas.restore();
 
     } else {
-      // Idle: both arms swing naturally in opposite phases (walking cycle look)
       canvas.save();
-      canvas.translate(cx - 32, h * 0.62);
-      // Left arm swings forward when armSwingValue > 0
-      canvas.rotate(-0.18 + armSwingValue * 0.32);
+      canvas.translate(cx - 32 + armExOffLX, h * 0.62 + armExOffY);
+      canvas.rotate(-0.18 + armSwingValue * 0.32 + villainSpreadL);
       canvas.drawRRect(RRect.fromRectAndRadius(
           const Rect.fromLTWH(-18, 0, 18, 30), const Radius.circular(9)),
           armPaint);
-      // Left hand
       canvas.drawCircle(const Offset(-9, 31), 7,
           Paint()..color = handColor);
       canvas.restore();
 
       canvas.save();
-      canvas.translate(cx + 32, h * 0.62);
-      // Right arm swings backward (opposite phase)
-      canvas.rotate(0.18 - armSwingValue * 0.32);
+      canvas.translate(cx + 32 + armExOffRX, h * 0.62 + armExOffY);
+      canvas.rotate(0.18 - armSwingValue * 0.32 + villainSpreadR);
       canvas.drawRRect(RRect.fromRectAndRadius(
           const Rect.fromLTWH(0, 0, 18, 30), const Radius.circular(9)),
           armPaint);
@@ -1694,17 +1448,48 @@ class _AlienBodyPainter extends CustomPainter {
   }
 
   void _drawEyes(Canvas canvas, double cx, double h, double ht) {
-    // BIG cartoon eyes — the dominant feature matching reference aliens
-    final eyeR  = 13.5; // large eye radius
+    // Villain eye scale: normal (0) → 3× bulging red (1)
+    final eyeBonus = 1.0 + villainEyeScale * 2.0;
+    final eyeR  = 13.5 * eyeBonus;
     final eyeY  = h * 0.34;
-    final eyeLX = cx - 19.0;
-    final eyeRX = cx + 19.0;
+    final eyeLX = cx - 19.0 * eyeBonus;
+    final eyeRX = cx + 19.0 * eyeBonus;
 
-    // Blink: scale eye height down to near 0
     final blinkScale = (1.0 - eyeBlinkValue * 0.92).clamp(0.05, 1.0);
     final eyeH = eyeR * 2 * blinkScale;
 
-    // White sclera
+    // Villain red glow behind each eye
+    if (villainEyeScale > 0.05) {
+      final glowRadius = eyeR * 2.2;
+      for (final ex in [eyeLX, eyeRX]) {
+        canvas.drawCircle(Offset(ex, eyeY), glowRadius,
+            Paint()
+              ..color = const Color(0xFFFF0000).withOpacity(0.45 * villainEyeScale)
+              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18));
+      }
+    }
+
+    // Angry villain eyebrows (thick, angled inward)
+    if (villainEyeScale > 0.15) {
+      final browAngle = villainEyeScale * 0.4;
+      final browPaint = Paint()
+        ..color = const Color(0xFF2A1000).withOpacity(0.85 + villainEyeScale * 0.15)
+        ..strokeWidth = 3.5 + villainEyeScale * 2
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke;
+      // Left brow: descends toward center (angry)
+      canvas.drawLine(
+          Offset(eyeLX - eyeR * 0.8, eyeY - eyeR - 4),
+          Offset(eyeLX + eyeR * 0.5, eyeY - eyeR + 3 + browAngle * 8),
+          browPaint);
+      // Right brow: mirror
+      canvas.drawLine(
+          Offset(eyeRX + eyeR * 0.8, eyeY - eyeR - 4),
+          Offset(eyeRX - eyeR * 0.5, eyeY - eyeR + 3 + browAngle * 8),
+          browPaint);
+    }
+
+    // White sclera (enlarged during villain)
     final scleraColor = isHurt ? const Color(0xFFAAFFEE) : Colors.white;
     canvas.drawOval(
         Rect.fromCenter(center: Offset(eyeLX, eyeY), width: eyeR * 2, height: eyeH),
@@ -1714,8 +1499,10 @@ class _AlienBodyPainter extends CustomPainter {
         Paint()..color = scleraColor);
 
     if (blinkScale > 0.15) {
-      // Iris (large, colourful)
-      final irisColor = isHurt ? const Color(0xFFCC00FF) : const Color(0xFF4A2800);
+      // Iris: villain red when eyeScale > 0, otherwise normal
+      final irisColor = villainEyeScale > 0.1
+          ? Color.lerp(const Color(0xFF4A2800), const Color(0xFFDD0000), villainEyeScale)!
+          : isHurt ? const Color(0xFFCC00FF) : const Color(0xFF4A2800);
       final irisH = eyeH * 0.68;
       canvas.drawOval(
           Rect.fromCenter(center: Offset(eyeLX + (isHurt ? 2 : 0), eyeY),
@@ -1726,7 +1513,6 @@ class _AlienBodyPainter extends CustomPainter {
               width: eyeR * 1.3, height: irisH),
           Paint()..color = irisColor);
 
-      // Pupil
       final pupilH = irisH * 0.55;
       canvas.drawOval(
           Rect.fromCenter(center: Offset(eyeLX, eyeY),
@@ -1737,29 +1523,43 @@ class _AlienBodyPainter extends CustomPainter {
               width: eyeR * 0.7, height: pupilH),
           Paint()..color = Colors.black87);
 
-      // Cute highlight dot (top-right of each eye)
       if (blinkScale > 0.3) {
         canvas.drawCircle(
-            Offset(eyeLX + eyeR * 0.35, eyeY - eyeH * 0.28), 2.5,
+            Offset(eyeLX + eyeR * 0.35, eyeY - eyeH * 0.28), 2.5 * eyeBonus,
             Paint()..color = Colors.white.withOpacity(0.9));
         canvas.drawCircle(
-            Offset(eyeRX + eyeR * 0.35, eyeY - eyeH * 0.28), 2.5,
+            Offset(eyeRX + eyeR * 0.35, eyeY - eyeH * 0.28), 2.5 * eyeBonus,
             Paint()..color = Colors.white.withOpacity(0.9));
       }
     }
 
-    // Eye glow when hurt
-    if (isHurt) {
+    // Eye glow when hurt or villain
+    if (isHurt || villainEyeScale > 0.05) {
+      final gc = villainEyeScale > 0.05
+          ? Color.lerp(const Color(0xFFCC00FF), const Color(0xFFFF0000), villainEyeScale)!
+          : const Color(0xFFCC00FF);
       for (final ex in [eyeLX, eyeRX]) {
-        canvas.drawCircle(Offset(ex, eyeY), 16,
-            Paint()..color = const Color(0xFFCC00FF).withOpacity(0.35)
-              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
+        canvas.drawCircle(Offset(ex, eyeY), eyeR * 1.2,
+            Paint()..color = gc.withOpacity(
+                (isHurt ? 0.35 : 0) + villainEyeScale * 0.50)
+              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10));
       }
     }
 
-    // Mouth
+    // Mouth: villain scowl when eyeScale > 0, else normal
     final mouthY = h * 0.475;
-    if (alienType == AlienType.smiling || isHurt) {
+    if (villainEyeScale > 0.2) {
+      // Villain grimace (inverted smile — frown)
+      final mp = Path()
+        ..moveTo(cx - 14, mouthY + 6)
+        ..quadraticBezierTo(cx, mouthY - 8, cx + 14, mouthY + 6);
+      canvas.drawPath(mp,
+          Paint()
+            ..color = const Color(0xFF2A1000)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 3.0
+            ..strokeCap = StrokeCap.round);
+    } else if (alienType == AlienType.smiling || isHurt) {
       final mp = Path()
         ..moveTo(cx - 14, mouthY - 2)
         ..quadraticBezierTo(cx, mouthY + 10, cx + 14, mouthY - 2);
@@ -1780,410 +1580,262 @@ class _AlienBodyPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_AlienBodyPainter old) =>
-      old.isThrowing != isThrowing ||
-      old.isHurt != isHurt ||
-      old.eyeBlinkValue != eyeBlinkValue ||
-      old.throwDirection != throwDirection ||
-      old.armSwingValue != armSwingValue;
+      old.isThrowing       != isThrowing       ||
+      old.isHurt           != isHurt            ||
+      old.eyeBlinkValue    != eyeBlinkValue     ||
+      old.throwDirection   != throwDirection    ||
+      old.armSwingValue    != armSwingValue     ||
+      old.villainEyeScale  != villainEyeScale   ||
+      old.villainArmSpread != villainArmSpread  ||
+      old.villainLegSpread != villainLegSpread  ||
+      old.villainExplode   != villainExplode;
 }
 
-// ─── Alien Health Bar — Professional Segmented Design ─────────────────────────
+// ─── Alien Health Bar (Professional Boss-Style) ───────────────────────────────
 
-class _AlienHealthBar extends StatelessWidget {
+class _AlienHealthBar extends StatefulWidget {
   final int health;
   final int mergesDone;
-  final bool compact;
-  const _AlienHealthBar({
-    required this.health,
-    required this.mergesDone,
-    this.compact = false,
-  });
+  const _AlienHealthBar({required this.health, required this.mergesDone});
 
   @override
-  Widget build(BuildContext context) {
-    final hpFrac = (health / 100.0).clamp(0.0, 1.0);
-    final isLow  = hpFrac < 0.33;
-    final isMid  = hpFrac < 0.66;
-    final barColor = isLow
-        ? const Color(0xFFFF2244)
-        : isMid ? const Color(0xFFFFAA00) : const Color(0xFF00E676);
-    final glowColor = isLow
-        ? const Color(0xFFFF2244)
-        : isMid ? const Color(0xFFFF8800) : const Color(0xFF00CC66);
-
-    return Container(
-      padding: compact
-          ? const EdgeInsets.fromLTRB(6, 4, 6, 4)
-          : const EdgeInsets.fromLTRB(10, 6, 10, 6),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        color: const Color(0xFF08000E).withOpacity(0.94),
-        border: Border.all(
-          color: const Color(0xFFCC00FF).withOpacity(0.55),
-          width: 1.5,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: glowColor.withOpacity(isLow ? 0.60 : 0.22),
-            blurRadius: isLow ? 16 : 8,
-            spreadRadius: isLow ? 2 : 0,
-          ),
-          BoxShadow(
-            color: const Color(0xFFCC00FF).withOpacity(0.20),
-            blurRadius: 14,
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // ── Header row ────────────────────────────────────────────────
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                // Status dot
-                Container(
-                  width: compact ? 5 : 7,
-                  height: compact ? 5 : 7,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: glowColor,
-                    boxShadow: [BoxShadow(color: glowColor, blurRadius: 8)],
-                  ),
-                ),
-                SizedBox(width: compact ? 4 : 5),
-                Text(
-                  'ALIEN HP',
-                  style: TextStyle(
-                    color: const Color(0xFFCC00FF).withOpacity(0.95),
-                    fontSize: compact ? 7 : 9,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.8,
-                  ),
-                ),
-              ]),
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                if (isLow && !compact)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: Text(
-                      '⚠ CRITICAL',
-                      style: TextStyle(
-                        color: const Color(0xFFFF2244),
-                        fontSize: 7,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 1.2,
-                        shadows: [Shadow(color: const Color(0xFFFF2244), blurRadius: 8)],
-                      ),
-                    ),
-                  ),
-                Text(
-                  '$health%',
-                  style: TextStyle(
-                    color: barColor,
-                    fontSize: compact ? 8 : 11,
-                    fontWeight: FontWeight.w900,
-                    shadows: [Shadow(color: barColor, blurRadius: 10)],
-                  ),
-                ),
-              ]),
-            ],
-          ),
-          SizedBox(height: compact ? 4 : 5),
-
-          // ── Segmented HP bar ──────────────────────────────────────────
-          SizedBox(
-            height: compact ? 7 : 11,
-            child: LayoutBuilder(builder: (ctx, constraints) {
-              const segments = 10;
-              final totalW = constraints.maxWidth;
-              final gap = compact ? 1.5 : 2.0;
-              final segW = (totalW - (segments - 1) * gap) / segments;
-              final filled = (hpFrac * segments);
-              return Row(
-                children: List.generate(segments, (i) {
-                  final isFilled = i < filled;
-                  final isPartialSeg = i == filled.floor() && filled % 1 > 0;
-                  final partialFrac = isPartialSeg ? (filled % 1) : 0.0;
-                  // Color progression: left=green → mid=orange → right=red
-                  final segPct = i / (segments - 1);
-                  final segColor = segPct < 0.34
-                      ? const Color(0xFF00E676)
-                      : segPct < 0.67
-                          ? const Color(0xFFFFAA00)
-                          : const Color(0xFFFF3344);
-                  return Padding(
-                    padding: EdgeInsets.only(right: i < segments - 1 ? gap : 0),
-                    child: Container(
-                      width: segW,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(3),
-                        color: Colors.white.withOpacity(0.05),
-                        border: Border.all(
-                          color: isFilled || isPartialSeg
-                              ? segColor.withOpacity(0.45)
-                              : Colors.white.withOpacity(0.07),
-                          width: 0.5,
-                        ),
-                      ),
-                      clipBehavior: Clip.hardEdge,
-                      child: (isFilled || isPartialSeg)
-                          ? FractionallySizedBox(
-                              widthFactor: isFilled ? 1.0 : partialFrac,
-                              alignment: Alignment.centerLeft,
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topCenter,
-                                    end: Alignment.bottomCenter,
-                                    colors: [
-                                      segColor,
-                                      segColor.withOpacity(0.65),
-                                    ],
-                                  ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: segColor.withOpacity(0.75),
-                                      blurRadius: 5,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            )
-                          : null,
-                    ),
-                  );
-                }),
-              );
-            }),
-          ),
-
-          if (!compact) ...[
-            const SizedBox(height: 5),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  '⚡ $mergesDone / 22 merges to destroy',
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.50),
-                    fontSize: 7.5,
-                    letterSpacing: 0.8,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                // Mini merge progress dots
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: List.generate(5, (i) {
-                    final done = mergesDone >= ((i + 1) * 22 / 5).ceil();
-                    return Container(
-                      margin: const EdgeInsets.only(left: 3),
-                      width: 5, height: 5,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: done
-                            ? const Color(0xFF00E676)
-                            : Colors.white.withOpacity(0.15),
-                        boxShadow: done
-                            ? [const BoxShadow(color: Color(0xFF00E676), blurRadius: 6)]
-                            : null,
-                      ),
-                    );
-                  }),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
+  State<_AlienHealthBar> createState() => _AlienHealthBarState();
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ALIEN DELIVERY WIDGET
-// Compact animated alien portrait shown in the Delivery Zone right panel
-// Levels 31 / 32 / 33 — shows alien + orbiting particles + mini HP bar
-// ═══════════════════════════════════════════════════════════════════════════════
-
-class AlienDeliveryWidget extends StatefulWidget {
-  final AlienController controller;
-  const AlienDeliveryWidget({super.key, required this.controller});
-  @override
-  State<AlienDeliveryWidget> createState() => _AlienDeliveryWidgetState();
-}
-
-class _AlienDeliveryWidgetState extends State<AlienDeliveryWidget>
-    with TickerProviderStateMixin {
-  late AnimationController _bob;
-  late AnimationController _orbit;
-  late AnimationController _armSwing;
-  late AnimationController _hurtFlash;
-  late AnimationController _eyeBlinkCtrl;
-  late Animation<double> _bobAnim;
-  late Animation<double> _armSwingAnim;
-  late Animation<double> _hurtAnim;
+class _AlienHealthBarState extends State<_AlienHealthBar>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _pulseCtrl;
+  late Animation<double> _pulseAnim;
 
   @override
   void initState() {
     super.initState();
-    _bob = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600))
+    _pulseCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 700))
       ..repeat(reverse: true);
-    _orbit = AnimationController(vsync: this, duration: const Duration(milliseconds: 2600))
-      ..repeat();
-    _armSwing = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))
-      ..repeat(reverse: true);
-    _hurtFlash = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
-    _eyeBlinkCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 100));
-    _bobAnim = Tween<double>(begin: -3.0, end: 3.0)
-        .animate(CurvedAnimation(parent: _bob, curve: Curves.easeInOut));
-    _armSwingAnim = Tween<double>(begin: -1.0, end: 1.0)
-        .animate(CurvedAnimation(parent: _armSwing, curve: Curves.easeInOut));
-    _hurtAnim = Tween<double>(begin: 0.0, end: 1.0).animate(_hurtFlash);
-    _scheduleEyeBlink();
-    widget.controller.addListener(_onUpdate);
-  }
-
-  void _scheduleEyeBlink() {
-    Future.delayed(Duration(milliseconds: 1200 + math.Random().nextInt(1500)), () {
-      if (!mounted) return;
-      _eyeBlinkCtrl.forward().then((_) {
-        if (!mounted) return;
-        Future.delayed(const Duration(milliseconds: 60), () {
-          if (!mounted) return;
-          _eyeBlinkCtrl.reverse().then((_) { if (mounted) _scheduleEyeBlink(); });
-        });
-      });
-    });
-  }
-
-  void _onUpdate() {
-    if (!mounted) return;
-    if (widget.controller.phase == AlienPhase.laserHit) _hurtFlash.forward(from: 0.0);
-    setState(() {});
+    _pulseAnim = Tween<double>(begin: 0.6, end: 1.0)
+        .animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
   }
 
   @override
   void dispose() {
-    widget.controller.removeListener(_onUpdate);
-    _bob.dispose();
-    _orbit.dispose();
-    _armSwing.dispose();
-    _hurtFlash.dispose();
-    _eyeBlinkCtrl.dispose();
+    _pulseCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final isHurt = widget.controller.phase == AlienPhase.laserHit;
+    final hpFrac = (widget.health / 100.0).clamp(0.0, 1.0);
+    final isLowHp = hpFrac < 0.3;
+    final isMidHp = hpFrac < 0.6;
+
+    final Color barColorHigh = const Color(0xFF00FF88);
+    final Color barColorMid  = const Color(0xFFFFD700);
+    final Color barColorLow  = const Color(0xFFFF3344);
+    final Color barColor = isLowHp
+        ? barColorLow
+        : isMidHp
+            ? Color.lerp(barColorLow, barColorMid, (hpFrac - 0.3) / 0.3)!
+            : Color.lerp(barColorMid, barColorHigh, (hpFrac - 0.6) / 0.4)!;
+
+    const Color accentPurple = Color(0xFFCC00FF);
+    const int segments = 10;
 
     return AnimatedBuilder(
-      animation: Listenable.merge([_bob, _orbit, _armSwing, _hurtFlash, _eyeBlinkCtrl]),
+      animation: _pulseAnim,
       builder: (_, __) {
-        final bob = _bobAnim.value;
-        final orbitAngle = _orbit.value * math.pi * 2;
-        final swing = _armSwingAnim.value;
-
-        const w = 88.0;
-        const alienW = 76.0;
-        const alienH = 72.0;
-        const centerX = w / 2;
-        const centerY = 44.0;
-        const orbitRX = 38.0;
-        const orbitRY = 22.0;
-
-        const particleColors = [
-          Color(0xFFCC00FF), Color(0xFF00FFCC), Color(0xFFFF4444),
-          Color(0xFFFFAA00), Color(0xFF4488FF), Color(0xFF00FF88),
-        ];
-
-        return SizedBox(
-          width: w,
+        final glowOpacity = isLowHp ? _pulseAnim.value : 0.55;
+        return Container(
+          margin: const EdgeInsets.symmetric(horizontal: 20),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            color: Colors.black.withOpacity(0.72),
+            border: Border.all(
+              color: isLowHp
+                  ? barColorLow.withOpacity(_pulseAnim.value)
+                  : accentPurple.withOpacity(0.55),
+              width: 1.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: (isLowHp ? barColorLow : accentPurple)
+                    .withOpacity(glowOpacity * 0.6),
+                blurRadius: 18,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── Alien body + orbit particles ─────────────────────────
-              SizedBox(
-                width: w,
-                height: 88,
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    // Purple aura glow behind alien
-                    Positioned(
-                      left: centerX - 36,
-                      top: centerY - 32 + bob,
-                      child: IgnorePointer(
-                        child: Container(
-                          width: 72,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: const Color(0xFFCC00FF).withOpacity(
-                              isHurt ? 0.28 : 0.10),
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFFCC00FF).withOpacity(
-                                  isHurt ? 0.50 : 0.22),
-                                blurRadius: isHurt ? 24 : 14,
-                              ),
-                            ],
-                          ),
+              // ── Header row ────────────────────────────────────────────
+              Row(
+                children: [
+                  // Boss icon with pulse glow
+                  Container(
+                    width: 26,
+                    height: 26,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: accentPurple.withOpacity(0.18),
+                      border: Border.all(
+                        color: accentPurple.withOpacity(0.7),
+                        width: 1.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: accentPurple.withOpacity(0.5),
+                          blurRadius: 10,
+                        ),
+                      ],
+                    ),
+                    child: const Center(
+                      child: Text('👾', style: TextStyle(fontSize: 12)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'ALIEN BOSS',
+                        style: TextStyle(
+                          color: accentPurple,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 2.5,
                         ),
                       ),
+                      Text(
+                        'SPACE INVADER',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.4),
+                          fontSize: 6,
+                          letterSpacing: 1.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  // HP numeric display
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      color: barColor.withOpacity(0.15),
+                      border: Border.all(
+                        color: barColor.withOpacity(0.7),
+                        width: 1,
+                      ),
                     ),
+                    child: Text(
+                      '${widget.health} / 100',
+                      style: TextStyle(
+                        color: barColor,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        fontFamily: 'Orbitron',
+                        shadows: [Shadow(color: barColor, blurRadius: 8)],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 7),
 
-                    // Orbit particles
-                    ...List.generate(6, (i) {
-                      final angle = orbitAngle + (i / 6.0) * math.pi * 2;
-                      final px = centerX + math.cos(angle) * orbitRX;
-                      final py = centerY + math.sin(angle) * orbitRY + bob;
-                      final c = particleColors[i % particleColors.length];
-                      final sz = i % 2 == 0 ? 7.0 : 5.0;
-                      return Positioned(
-                        left: px - sz / 2, top: py - sz / 2,
-                        child: IgnorePointer(
-                          child: Container(
-                            width: sz, height: sz,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: c,
-                              boxShadow: [BoxShadow(color: c, blurRadius: 8, spreadRadius: 1)],
+              // ── Segmented HP bar ──────────────────────────────────────
+              LayoutBuilder(builder: (_, constraints) {
+                final totalW = constraints.maxWidth;
+                final gap = 2.0;
+                final segW = (totalW - gap * (segments - 1)) / segments;
+                final filledSegs = (hpFrac * segments).ceil();
+
+                return Row(
+                  children: List.generate(segments, (i) {
+                    final filled = i < filledSegs;
+                    final isLastFilled = i == filledSegs - 1;
+                    final partialFill = isLastFilled
+                        ? (hpFrac * segments) - i
+                        : filled
+                            ? 1.0
+                            : 0.0;
+                    final segColor = filled ? barColor : Colors.white12;
+                    return Container(
+                      width: segW,
+                      height: 14,
+                      margin: EdgeInsets.only(right: i < segments - 1 ? gap : 0),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(3),
+                        color: Colors.black.withOpacity(0.5),
+                        border: Border.all(
+                          color: filled
+                              ? barColor.withOpacity(0.6)
+                              : Colors.white12,
+                          width: 0.8,
+                        ),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(2.5),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: FractionallySizedBox(
+                            widthFactor: partialFill.clamp(0.0, 1.0),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [
+                                    segColor.withOpacity(0.9),
+                                    segColor,
+                                  ],
+                                ),
+                                boxShadow: filled
+                                    ? [BoxShadow(color: barColor.withOpacity(0.9), blurRadius: 6)]
+                                    : null,
+                              ),
                             ),
                           ),
                         ),
-                      );
-                    }),
+                      ),
+                    );
+                  }),
+                );
+              }),
 
-                    // Alien body
-                    Positioned(
-                      left: centerX - alienW / 2,
-                      top: centerY - alienH / 2 + bob,
-                      child: CustomPaint(
-                        size: const Size(alienW, alienH),
-                        painter: _AlienBodyPainter(
-                          alienType: widget.controller.alienType,
-                          isThrowing: false,
-                          throwDirection: Offset.zero,
-                          isHurt: isHurt,
-                          eyeBlinkValue: _eyeBlinkCtrl.value,
-                          armSwingValue: swing,
+              const SizedBox(height: 5),
+
+              // ── Merge progress + warning label ────────────────────────
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.merge_type,
+                          size: 9,
+                          color: Colors.white.withOpacity(0.4)),
+                      const SizedBox(width: 3),
+                      Text(
+                        '${widget.mergesDone} / 22 MERGES',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.4),
+                          fontSize: 8,
+                          letterSpacing: 1.0,
                         ),
                       ),
+                    ],
+                  ),
+                  if (isLowHp)
+                    Text(
+                      '⚠ CRITICAL',
+                      style: TextStyle(
+                        color: barColorLow.withOpacity(_pulseAnim.value),
+                        fontSize: 8,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1.5,
+                        shadows: [Shadow(color: barColorLow, blurRadius: 6)],
+                      ),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 3),
-              // ── Compact professional HP bar ───────────────────────────
-              _AlienHealthBar(
-                health: widget.controller.alienHealth,
-                mergesDone: widget.controller.mergesDone,
-                compact: true,
+                ],
               ),
             ],
           ),
@@ -2191,6 +1843,132 @@ class _AlienDeliveryWidgetState extends State<AlienDeliveryWidget>
       },
     );
   }
+}
+
+// ─── Alien Particle Painter ────────────────────────────────────────────────────
+
+class _AlienParticlePainter extends CustomPainter {
+  final double progress;
+  final int alienHealth;
+  final bool isHurt;
+
+  _AlienParticlePainter({
+    required this.progress,
+    required this.alienHealth,
+    required this.isHurt,
+  });
+
+  static final _rng = math.Random(42);
+  static final List<_AParticle> _particles = List.generate(28, (i) {
+    return _AParticle(
+      angle: _rng.nextDouble() * math.pi * 2,
+      radius: 45 + _rng.nextDouble() * 60,
+      speed: 0.12 + _rng.nextDouble() * 0.25,
+      size: 1.5 + _rng.nextDouble() * 3.5,
+      phase: _rng.nextDouble(),
+      type: i % 4, // 0=orb, 1=spark, 2=ring, 3=dust
+    );
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height * 0.62;
+
+    final hpFrac = (alienHealth / 100.0).clamp(0.0, 1.0);
+    final Color baseColor = isHurt
+        ? const Color(0xFF00FFCC)
+        : hpFrac < 0.3
+            ? const Color(0xFFFF3344)
+            : hpFrac < 0.6
+                ? const Color(0xFFFFD700)
+                : const Color(0xFFCC00FF);
+
+    for (final p in _particles) {
+      final t = (progress * p.speed + p.phase) % 1.0;
+      final angle = p.angle + progress * p.speed * math.pi * 2;
+      final r = p.radius * (0.7 + 0.3 * math.sin(t * math.pi * 2));
+      final x = cx + math.cos(angle) * r;
+      final y = cy + math.sin(angle) * r * 0.45; // flatten orbit slightly
+
+      final alphaPulse = (math.sin(t * math.pi * 2 + p.phase * 6) + 1) / 2;
+      final alpha = (0.25 + alphaPulse * 0.65).clamp(0.0, 1.0);
+
+      if (p.type == 0) {
+        // Glowing orb
+        final paint = Paint()
+          ..color = baseColor.withOpacity(alpha * 0.9)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+        canvas.drawCircle(Offset(x, y), p.size, paint);
+        final corePaint = Paint()
+          ..color = Colors.white.withOpacity(alpha * 0.8);
+        canvas.drawCircle(Offset(x, y), p.size * 0.4, corePaint);
+      } else if (p.type == 1) {
+        // Spark line
+        final paint = Paint()
+          ..color = baseColor.withOpacity(alpha * 0.7)
+          ..strokeWidth = p.size * 0.4
+          ..strokeCap = StrokeCap.round
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
+        final dx = math.cos(angle + math.pi / 2) * p.size * 2;
+        final dy = math.sin(angle + math.pi / 2) * p.size * 2;
+        canvas.drawLine(
+          Offset(x - dx, y - dy),
+          Offset(x + dx, y + dy),
+          paint,
+        );
+      } else if (p.type == 2) {
+        // Energy ring
+        final paint = Paint()
+          ..color = baseColor.withOpacity(alpha * 0.4)
+          ..strokeWidth = 0.8
+          ..style = PaintingStyle.stroke
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
+        canvas.drawCircle(Offset(x, y), p.size * 1.5, paint);
+      } else {
+        // Dust dot
+        final paint = Paint()
+          ..color = Colors.white.withOpacity(alpha * 0.35);
+        canvas.drawCircle(Offset(x, y), p.size * 0.4, paint);
+      }
+    }
+
+    // Central energy aura around alien
+    if (!isHurt) {
+      final auraPulse = (math.sin(progress * math.pi * 2) + 1) / 2;
+      final auraPaint = Paint()
+        ..color = baseColor.withOpacity(0.06 + auraPulse * 0.08)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 30 + auraPulse * 15);
+      canvas.drawCircle(Offset(cx, cy), 55 + auraPulse * 15, auraPaint);
+    } else {
+      // Hurt: white flash ring
+      final hurtPaint = Paint()
+        ..color = const Color(0xFF00FFCC).withOpacity(0.25)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 20);
+      canvas.drawCircle(Offset(cx, cy), 70, hurtPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_AlienParticlePainter old) =>
+      old.progress != progress || old.isHurt != isHurt || old.alienHealth != alienHealth;
+}
+
+class _AParticle {
+  final double angle;
+  final double radius;
+  final double speed;
+  final double size;
+  final double phase;
+  final int type;
+  const _AParticle({
+    required this.angle,
+    required this.radius,
+    required this.speed,
+    required this.size,
+    required this.phase,
+    required this.type,
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
