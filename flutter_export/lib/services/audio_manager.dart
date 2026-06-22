@@ -19,7 +19,7 @@
 //
 //   2. Each SFX player: AudioContextAndroid(audioFocus: none).
 //      Does NOT participate in the focus protocol at all.
-//      Android OS never sends AUDIOFOCUS_LOSS to the BGM.
+//      Android OS never sends AUDIOFOCUS_LOSS to the BGM player.
 //      iOS: AVAudioSessionOptions.mixWithOthers on every player.
 //
 // Result: BGM and SFX play fully simultaneously, at all times.
@@ -41,23 +41,18 @@ const double _kBgmVolume = 0.30; // 30 % — calm background, raised from 0.2
 const double _kSfxVolume = 1.00; // 100 % — full clarity on every interaction
 
 // ── Default BGM track ─────────────────────────────────────────────────────────
-// "Floating Cities" by Kevin MacLeod (incompetech.com)
-// Licensed under Creative Commons: By Attribution 4.0 License
 const String _kDefaultBgm = 'audio/bgm_ambient.mp3';
 
 // ── Audio context: BGM — holds full focus, loops indefinitely ─────────────────
 final AudioContext _kBgmContext = AudioContext(
   android: AudioContextAndroid(
-    // Full, persistent focus — the BGM owns audio for the session.
     audioFocus: AndroidAudioFocus.gain,
-    // game usageType = optimised for low-latency game audio mixing
     usageType:   AndroidUsageType.game,
     contentType: AndroidContentType.music,
     stayAwake:   true,
     isSpeakerphoneOn: false,
   ),
   iOS: AudioContextIOS(
-    // mixWithOthers lets BGM coexist with SFX on the same AVAudioSession.
     category: AVAudioSessionCategory.playback,
     options: {
       AVAudioSessionOptions.mixWithOthers,
@@ -69,8 +64,6 @@ final AudioContext _kBgmContext = AudioContext(
 // ── Audio context: SFX — no focus request, always mixes with BGM ──────────────
 final AudioContext _kSfxContext = AudioContext(
   android: AudioContextAndroid(
-    // THE CRITICAL FIX: AudioFocus.none means this player NEVER sends
-    // AUDIOFOCUS_GAIN to Android, so the OS never evicts the BGM player.
     audioFocus: AndroidAudioFocus.none,
     usageType:   AndroidUsageType.game,
     contentType: AndroidContentType.sonification,
@@ -78,7 +71,6 @@ final AudioContext _kSfxContext = AudioContext(
     isSpeakerphoneOn: false,
   ),
   iOS: AudioContextIOS(
-    // ambient category + mixWithOthers = SFX mixes on top of BGM on iOS.
     category: AVAudioSessionCategory.ambient,
     options: {
       AVAudioSessionOptions.mixWithOthers,
@@ -92,7 +84,6 @@ class AudioManager with WidgetsBindingObserver {
 
   final AudioPlayer _bgm = AudioPlayer();
 
-  // Runtime-settable volumes (updated by SettingsProvider)
   double _bgmVol = _kBgmVolume;
   double _sfxVol = _kSfxVolume;
 
@@ -109,9 +100,10 @@ class AudioManager with WidgetsBindingObserver {
 
   /// Saved BGM asset path before creature (Data Kraken) takes over.
   String? _preCreatureBgm;
+
+  /// Saved BGM asset path before alien invasion takes over.
   String? _preAlienBgm;
 
-  // Getters for SettingsProvider / UI
   double get bgmVolume => _bgmVol;
   double get sfxVolume => _sfxVol;
   bool   get isMuted   => _muted;
@@ -122,21 +114,16 @@ class AudioManager with WidgetsBindingObserver {
     try {
       WidgetsBinding.instance.addObserver(this);
       _initialized = true;
-
-      // Apply the BGM-specific audio context BEFORE any playback call.
-      // This tells Android: "this player holds full, persistent focus".
       await _bgm.setAudioContext(_kBgmContext);
       await _bgm.setReleaseMode(ReleaseMode.loop);
       await _bgm.setVolume(_bgmVol);
     } catch (e) {
       debugPrint('[Audio] initialize() failed: $e');
     }
-
-    // Auto-start ambient BGM — runs after runApp(), never stalls cold-start UI.
     await playBgm(_kDefaultBgm);
   }
 
-  // ── Volume setters (called by SettingsProvider) ───────────────────────────
+  // ── Volume setters ────────────────────────────────────────────────────────
 
   void setBgmVolume(double v) {
     _bgmVol = v.clamp(0.0, 1.0);
@@ -170,7 +157,7 @@ class AudioManager with WidgetsBindingObserver {
 
   void toggleMute() => setMuted(!_muted);
 
-  // ── Malware BGM switchover ─────────────────────────────────────────────────
+  // ── Malware BGM switchover (Levels 5, 7, 9, 10) ──────────────────────────
 
   /// Switch to villain/scary BGM the moment malware appears.
   /// Saves the current track so [resumePreMalwareBgm] can restore it.
@@ -201,12 +188,19 @@ class AudioManager with WidgetsBindingObserver {
     if (prev != null) await playBgm(prev);
   }
 
-  // ── Creature BGM switchover (Data Kraken, Levels 23-29) ──────────────────
+  // ── Creature BGM switchover (Data Kraken, Levels 23, 25, 27, 29) ─────────
 
-  /// Switch to scary creature BGM when Data Kraken appears.
+  /// Villain entry BGM — played while creature assembles on screen.
+  /// Saves the current track so [resumePreCreatureBgm] can restore it later.
   Future<void> playCreatureBgm() async {
     _preCreatureBgm = _currentBgmAsset;
     await playBgm('audio/bgm_malware.mp3');
+  }
+
+  /// Switch to energetic gameplay BGM once Data Kraken is fully active.
+  /// Uses bgm_megacorp.mp3 — epic/energetic feel for the battle phase.
+  Future<void> playCreatureActiveBgm() async {
+    await playBgm('audio/bgm_megacorp.mp3');
   }
 
   /// Restore the BGM that was playing before the creature took over.
@@ -218,7 +212,10 @@ class AudioManager with WidgetsBindingObserver {
 
   // ── Alien BGM switchover (Levels 31, 32, 33) ─────────────────────────────
 
-  /// Switch to alien invasion BGM. Each level has its own track.
+  /// Switch to villain/scary BGM while alien ships enter.
+  /// Saves the current track so [resumePreAlienBgm] can restore it later.
+  /// AlienController will switch to the level-specific alien BGM once
+  /// the ship entry animation is complete and the alien goes active.
   Future<void> playAlienBgm(String assetPath) async {
     _preAlienBgm = _currentBgmAsset;
     await playBgm(assetPath);
@@ -237,13 +234,10 @@ class AudioManager with WidgetsBindingObserver {
     if (!_initialized) return;
     try {
       final String asset = assetPath.replaceFirst('assets/', '');
-      // Same track already playing — do nothing (avoids needless stop/restart)
       if (_currentBgmAsset == asset && !_bgmPaused) return;
       _currentBgmAsset = asset;
       await _bgm.stop();
       if (!_muted) {
-        // Re-apply context and loop mode after every stop, as some Android
-        // versions reset these on stop().
         await _bgm.setAudioContext(_kBgmContext);
         await _bgm.setReleaseMode(ReleaseMode.loop);
         await _bgm.setVolume(_bgmVol);
@@ -285,10 +279,6 @@ class AudioManager with WidgetsBindingObserver {
   }
 
   // ── SFX controls ──────────────────────────────────────────────────────────
-  //
-  // KEY DESIGN: every SFX gets a fresh AudioPlayer configured with
-  // _kSfxContext (audioFocus: none). It plays, then disposes itself.
-  // The BGM player's audio focus is NEVER affected.
 
   Future<void> playSpawnPop()    => _playSfx('audio/spawn_pop.mp3');
   Future<void> playMergeSnap()   => _playSfx('audio/merge_snap.mp3');
@@ -301,15 +291,9 @@ class AudioManager with WidgetsBindingObserver {
     if (!_initialized || _muted) return;
     try {
       final player = AudioPlayer();
-
-      // ▶ CRITICAL FIX: Apply SFX context BEFORE play().
-      // audioFocus: none → Android never sends AUDIOFOCUS_LOSS to BGM.
-      // mixWithOthers   → iOS lets this SFX layer over the BGM session.
       await player.setAudioContext(_kSfxContext);
       await player.setVolume(_sfxVol);
       await player.play(AssetSource(asset));
-
-      // Self-dispose after playback completes — no memory leak.
       player.onPlayerComplete.first
           .then((_) => player.dispose())
           .catchError((_) => player.dispose());

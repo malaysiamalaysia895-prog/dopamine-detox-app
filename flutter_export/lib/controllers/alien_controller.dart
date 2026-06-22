@@ -57,7 +57,7 @@ const Map<int, AlienType> kAlienLevels = {
   33: AlienType.waving,
 };
 
-/// BGM asset per level
+/// BGM asset per level — played once alien is fully on screen (active phase)
 const Map<int, String> kAlienBgm = {
   31: 'assets/audio/bgm_alien2.mp3',
   32: 'assets/audio/bgm_alien3.mp3',
@@ -114,6 +114,10 @@ class AlienController extends ChangeNotifier with WidgetsBindingObserver {
   int    _gridCols = 6;
   int    _gridRows = 5;
   double _throwIdCounter = 0;
+
+  /// Stores the alien gameplay BGM for this level.
+  /// During ship entry we play villain BGM; once alien is active we switch here.
+  String? _alienGameplayBgm;
 
   /// Called each meteor cycle — gives (col, row) targets for cells to hit
   void Function(List<AlienMeteorThrow>)? onMeteorThrow;
@@ -176,9 +180,11 @@ class AlienController extends ChangeNotifier with WidgetsBindingObserver {
 
     _hapticBurst();
 
-    // Switch to alien BGM
-    final bgm = kAlienBgm[level] ?? 'assets/audio/bgm_alien2.mp3';
-    AudioManager.instance.playAlienBgm(bgm).catchError((_) {});
+    // Save the alien gameplay BGM for this level.
+    // During ship entry we play villain BGM (bgm_malware) to build tension.
+    // Once the alien fully appears (active phase) we switch to the alien track.
+    _alienGameplayBgm = kAlienBgm[level] ?? 'assets/audio/bgm_alien2.mp3';
+    AudioManager.instance.playAlienBgm('assets/audio/bgm_malware.mp3').catchError((_) {});
 
     if (level == 31) {
       // Level 31: show warning first
@@ -249,6 +255,12 @@ class AlienController extends ChangeNotifier with WidgetsBindingObserver {
       if (_disposed) return;
       shipsEntryComplete = true;
       phase = AlienPhase.active;
+      // Ship entry complete — alien is now fully on screen.
+      // Switch from villain entry BGM to the alien gameplay BGM.
+      final gameplay = _alienGameplayBgm;
+      if (gameplay != null) {
+        AudioManager.instance.playBgm(gameplay).catchError((_) {});
+      }
       _startMeteorCycle();
       _startVibPulse();
       notifyListeners();
@@ -363,9 +375,7 @@ class AlienController extends ChangeNotifier with WidgetsBindingObserver {
     activeMeteors     = [];
     lastLaserHit      = null;
     shipsEntryComplete = false;
-    onMeteorThrow     = null;
-    onCellDestroyed   = null;
-    onPlayerDamage    = null;
+    _alienGameplayBgm = null;
     notifyListeners();
   }
 
