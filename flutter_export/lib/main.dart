@@ -51,15 +51,6 @@ import 'models/models.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ── Global crash shield — prevents gray "error box" widget from showing ──────
-  // Any widget that crashes in release mode normally shows a solid gray box.
-  // Replacing it with a transparent Container keeps the game visually intact
-  // (the layer behind shows through) while still reporting the error to Flutter.
-  ErrorWidget.builder = (FlutterErrorDetails details) {
-    debugPrint('[ErrorWidget] ${details.exceptionAsString()}');
-    return Container(color: Colors.black.withOpacity(0.0));
-  };
-
   // ── Portrait-only lock ──────────────────────────────────────────────────────
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,

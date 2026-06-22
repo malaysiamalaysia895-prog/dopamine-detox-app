@@ -47,3 +47,28 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# React / Node web app (only Flutter code belongs in this repo)
+artifacts/
+/lib/
+dist/
+pnpm-lock.yaml
+pnpm-workspace.yaml
+package.json
+tsconfig*.json
+*.tsbuildinfo
+.turbo/
+
+# Explicitly track flutter dart source (override any accidental ignores)
+!flutter_export/lib/
+!flutter_export/lib/**
+
+# Flutter build output
+flutter_export/build/
+flutter_export/.dart_tool/
+flutter_export/.flutter-plugins
+flutter_export/.flutter-plugins-dependencies
+flutter_export/.packages
+flutter_export/android/.gradle/
+flutter_export/android/local.properties
+flutter_export/android/captures/
