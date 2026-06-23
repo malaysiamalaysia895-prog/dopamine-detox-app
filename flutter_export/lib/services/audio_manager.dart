@@ -194,13 +194,13 @@ class AudioManager with WidgetsBindingObserver {
   /// Saves the current track so [resumePreCreatureBgm] can restore it later.
   Future<void> playCreatureBgm() async {
     _preCreatureBgm = _currentBgmAsset;
-    await playBgm('audio/bgm_malware.mp3');
+    await playBgm('audio/bgm_creature.mp3');
   }
 
   /// Switch to energetic gameplay BGM once Data Kraken is fully active.
   /// Uses bgm_megacorp.mp3 — epic/energetic feel for the battle phase.
   Future<void> playCreatureActiveBgm() async {
-    await playBgm('audio/bgm_megacorp.mp3');
+    await playBgm('audio/bgm_creature.mp3');
   }
 
   /// Restore the BGM that was playing before the creature took over.
