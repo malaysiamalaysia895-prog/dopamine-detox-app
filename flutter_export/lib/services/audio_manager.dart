@@ -285,6 +285,7 @@ class AudioManager with WidgetsBindingObserver {
   Future<void> playErrorBuzz()   => _playSfx('audio/error_buzz.mp3');
   Future<void> playVictory()     => _playSfx('audio/level_victory_fanfare.mp3');
   Future<void> playTimeWarning() => _playSfx('audio/time_warning.mp3');
+  Future<void> playMalwareBlast()  => _playSfx('audio/level_victory_fanfare.mp3');
   Future<void> playUnlock()      => _playSfx('audio/spawn_pop.mp3');
 
   Future<void> _playSfx(String asset) async {
