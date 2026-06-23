@@ -37,7 +37,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 // ── Volume defaults ───────────────────────────────────────────────────────────
-const double _kBgmVolume = 0.30; // 30 % — calm background, raised from 0.2
+const double _kBgmVolume = 0.15; // 15 % — softer background during gameplay
 const double _kSfxVolume = 1.00; // 100 % — full clarity on every interaction
 
 // ── Default BGM track ─────────────────────────────────────────────────────────
