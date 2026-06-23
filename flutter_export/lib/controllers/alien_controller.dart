@@ -59,9 +59,9 @@ const Map<int, AlienType> kAlienLevels = {
 
 /// BGM asset per level — played once alien is fully on screen (active phase)
 const Map<int, String> kAlienBgm = {
-  31: 'assets/audio/bgm_alien2.mp3',
-  32: 'assets/audio/bgm_alien3.mp3',
-  33: 'assets/audio/bgm_alien1.mp3',
+  31: 'assets/audio/bgm_alien_boss.mp3',
+  32: 'assets/audio/bgm_alien_boss.mp3',
+  33: 'assets/audio/bgm_alien_boss.mp3',
 };
 
 /// Merge thresholds and per-hit damage (cumulative = 100 HP total)
@@ -184,7 +184,7 @@ class AlienController extends ChangeNotifier with WidgetsBindingObserver {
     // During ship entry we play villain BGM (bgm_malware) to build tension.
     // Once the alien fully appears (active phase) we switch to the alien track.
     _alienGameplayBgm = kAlienBgm[level] ?? 'assets/audio/bgm_alien2.mp3';
-    AudioManager.instance.playAlienBgm('assets/audio/bgm_malware.mp3').catchError((_) {});
+    AudioManager.instance.playAlienBgm('assets/audio/bgm_alien_boss.mp3').catchError((_) {});
 
     if (level == 31) {
       // Level 31: show warning first
