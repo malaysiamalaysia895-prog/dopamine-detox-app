@@ -548,11 +548,19 @@ class _RulesCard extends StatelessWidget {
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Text('🛸 LEVEL $level — SPACESHIP ALIEN', style: const TextStyle(color: Color(0xFFCC00FF),
           fontSize: 13, fontWeight: FontWeight.w900, letterSpacing: 2), textAlign: TextAlign.center),
-        const SizedBox(height: 10),
-        _r('🛸', 'Every 10s: 5 mini-ships land on cells with 10s timers'),
-        _r('🔧', 'Merge items → neutralize ships → earn +15 💰 each!'),
-        _r('❌', 'Timer expires → item destroyed + −25 HP'),
-        _r('🎯', 'Merge $n items total → Alien obliterated!'),
+        const SizedBox(height: 8),
+        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(color: const Color(0xFFCC00FF).withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFCC00FF).withOpacity(0.5))),
+          child: Text('🎯 WIN: Merge $n items total (track X/$n on screen!)',
+            style: const TextStyle(color: Color(0xFFCC00FF), fontSize: 10, fontWeight: FontWeight.w900),
+            textAlign: TextAlign.center)),
+        const SizedBox(height: 8),
+        _r('🛸', 'Every 10s: 5 mini-ships land on grid cells (10s fuse!)'),
+        _r('✅', 'Merge items on a mini-ship cell → ship neutralized + +15 💰'),
+        _r('❌', 'Fuse hits 0 → item destroyed + you lose 25 HP!'),
+        _r('📊', 'Each merge = 1 progress toward $n total — keep merging!'),
         if (level == 35) ...[
           const SizedBox(height: 6),
           Container(padding: const EdgeInsets.all(8),
@@ -566,7 +574,9 @@ class _RulesCard extends StatelessWidget {
       ]));
   }
   Widget _r(String i, String t) => Padding(padding: const EdgeInsets.symmetric(vertical: 3),
-    child: Row(children: [Text(i, style: const TextStyle(fontSize: 14)), const SizedBox(width: 8),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(i, style: const TextStyle(fontSize: 13)),
+      const SizedBox(width: 8),
       Expanded(child: Text(t, style: const TextStyle(color: Colors.white70, fontSize: 11, height: 1.4)))]));
 }
 
@@ -598,32 +608,86 @@ class _TailPainter extends CustomPainter {
   @override bool shouldRepaint(_) => false;
 }
 
-class _ShipWidget extends StatelessWidget {
+// Animated ship with a living alien pilot inside the dome
+class _ShipWidget extends StatefulWidget {
   final double glow, thruster;
   const _ShipWidget({required this.glow, required this.thruster});
+  @override State<_ShipWidget> createState() => _ShipWidgetState();
+}
+class _ShipWidgetState extends State<_ShipWidget> with SingleTickerProviderStateMixin {
+  late AnimationController _wave;
+  @override void initState() {
+    super.initState();
+    _wave = AnimationController(vsync: this, duration: const Duration(milliseconds: 650))..repeat(reverse: true);
+  }
+  @override void dispose() { _wave.dispose(); super.dispose(); }
   @override
-  Widget build(BuildContext context) => SizedBox(width: 110, height: 70,
-    child: Stack(alignment: Alignment.center, children: [
-      Container(width: 100, height: 48, decoration: BoxDecoration(borderRadius: BorderRadius.circular(24),
-        gradient: RadialGradient(colors: [const Color(0xFF9B30FF).withOpacity(glow*0.8),
-          const Color(0xFF3300AA).withOpacity(glow*0.5), Colors.transparent]),
-        boxShadow: [BoxShadow(color: const Color(0xFFCC00FF).withOpacity(glow*0.7), blurRadius: 24, spreadRadius: 4)])),
-      Positioned(top: 2, child: Container(width: 48, height: 30,
-        decoration: BoxDecoration(borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-            colors: [const Color(0xFF00DDFF).withOpacity(0.9), const Color(0xFF0044AA).withOpacity(0.6)]),
-          border: Border.all(color: const Color(0xFF00FFFF).withOpacity(0.8), width: 1.5)),
-        child: const Center(child: Text('👾', style: TextStyle(fontSize: 18))))),
-      Positioned(bottom: 8, child: Container(width: 90, height: 22,
-        decoration: BoxDecoration(borderRadius: BorderRadius.circular(11),
-          gradient: const LinearGradient(colors: [Color(0xFF6600CC), Color(0xFF9B30FF), Color(0xFF6600CC)]),
-          border: Border.all(color: const Color(0xFFCC00FF).withOpacity(0.8), width: 1)))),
-      Positioned(bottom: 0, child: Row(children: List.generate(3, (_) => Container(
-        width: 14, height: 10 + thruster * 8, margin: const EdgeInsets.symmetric(horizontal: 4),
-        decoration: BoxDecoration(borderRadius: BorderRadius.circular(7),
-          gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-            colors: [const Color(0xFFFF8800).withOpacity(0.9), const Color(0xFFFF4400).withOpacity(0.6), Colors.transparent])))))),
-    ]));
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(animation: _wave, builder: (_, __) {
+      final w = _wave.value;
+      final g = widget.glow;
+      final th = widget.thruster;
+      return SizedBox(width: 110, height: 82, child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
+        // Saucer body with glow
+        Container(width: 100, height: 48, decoration: BoxDecoration(borderRadius: BorderRadius.circular(24),
+          gradient: RadialGradient(colors: [const Color(0xFF9B30FF).withOpacity(g*0.85),
+            const Color(0xFF3300AA).withOpacity(g*0.55), Colors.transparent]),
+          boxShadow: [BoxShadow(color: const Color(0xFFCC00FF).withOpacity(g*0.75), blurRadius: 26, spreadRadius: 5)])),
+        // Dome with animated alien pilot
+        Positioned(top: 0, child: Container(width: 58, height: 40,
+          decoration: BoxDecoration(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(29)),
+            gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
+              colors: [const Color(0xFF00DDFF).withOpacity(0.88), const Color(0xFF0044AA).withOpacity(0.68)]),
+            border: Border.all(color: const Color(0xFF00FFFF).withOpacity(0.85), width: 1.5)),
+          child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
+            // Alien head
+            Positioned(top: 5, child: Container(width: 24, height: 20,
+              decoration: BoxDecoration(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(12), bottom: Radius.circular(8)),
+                color: const Color(0xFF1A4A1A).withOpacity(0.95),
+                border: Border.all(color: const Color(0xFF00FF88).withOpacity(0.65 + w*0.35), width: 1.2),
+                boxShadow: [BoxShadow(color: const Color(0xFF00FF44).withOpacity(0.25 + w*0.25), blurRadius: 7)]),
+              child: Padding(padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 4),
+                child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                  // Left eye — pulses red
+                  Container(width: 6, height: 7, decoration: BoxDecoration(shape: BoxShape.circle,
+                    color: const Color(0xFFFF1A00).withOpacity(0.80 + w*0.20),
+                    boxShadow: [BoxShadow(color: const Color(0xFFFF0000).withOpacity(0.9 + w*0.1), blurRadius: 5 + w*3)])),
+                  // Right eye
+                  Container(width: 6, height: 7, decoration: BoxDecoration(shape: BoxShape.circle,
+                    color: const Color(0xFFFF1A00).withOpacity(0.80 + w*0.20),
+                    boxShadow: [BoxShadow(color: const Color(0xFFFF0000).withOpacity(0.9 + w*0.1), blurRadius: 5 + w*3)])),
+                ])))),
+            // Left arm waving up-down (opposite phase to right)
+            Positioned(left: 2, top: 16, child: Transform.rotate(
+              angle: -0.45 - w*0.75, alignment: Alignment.centerRight,
+              child: Container(width: 10, height: 4, decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(2),
+                color: const Color(0xFF1A4A1A).withOpacity(0.95),
+                border: Border.all(color: const Color(0xFF00FF88).withOpacity(0.55), width: 0.8))))),
+            // Right arm waving (counter-phase)
+            Positioned(right: 2, top: 16, child: Transform.rotate(
+              angle: 0.45 + (1-w)*0.75, alignment: Alignment.centerLeft,
+              child: Container(width: 10, height: 4, decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(2),
+                color: const Color(0xFF1A4A1A).withOpacity(0.95),
+                border: Border.all(color: const Color(0xFF00FF88).withOpacity(0.55), width: 0.8))))),
+          ]))),
+        // Bottom ring
+        Positioned(bottom: 8, child: Container(width: 90, height: 22,
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(11),
+            gradient: const LinearGradient(colors: [Color(0xFF6600CC), Color(0xFF9B30FF), Color(0xFF6600CC)]),
+            border: Border.all(color: const Color(0xFFCC00FF).withOpacity(0.85), width: 1)))),
+        // Thrusters — height pulses with parent thruster anim
+        Positioned(bottom: 0, child: Row(children: List.generate(3, (_) => Container(
+          width: 14, height: 10 + th*14, margin: const EdgeInsets.symmetric(horizontal: 4),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(7),
+            gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
+              colors: [const Color(0xFFFF8800).withOpacity(0.95), const Color(0xFFFF4400).withOpacity(0.65), Colors.transparent])))))),
+      ]));
+    });
+  }
 }
 
 class _Ptcl { final double angle, speed, size, delay; final Color color;

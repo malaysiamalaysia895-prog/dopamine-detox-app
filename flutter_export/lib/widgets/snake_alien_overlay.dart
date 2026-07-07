@@ -355,13 +355,16 @@ class _SnakeBody extends StatelessWidget {
             gradient: LinearGradient(colors: [const Color(0xFFAA3300).withOpacity(0.85-i*0.12), const Color(0xFF660000).withOpacity(0.7-i*0.1)]),
             border: Border.all(color: const Color(0xFFFF4400).withOpacity((glow-i*0.1).clamp(0.0,1.0)), width: 1)))));
       }),
-      Positioned(top: 0, left: 5, child: Container(width: 100, height: 75,
+      Positioned(top: 0, left: 5, child: Container(width: 100, height: 80,
         decoration: BoxDecoration(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(50), bottom: Radius.circular(15)),
           gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-            colors: [const Color(0xFF880000).withOpacity(0.95), const Color(0xFF550000).withOpacity(0.85)]),
-          border: Border.all(color: const Color(0xFFFF4400).withOpacity(glow*0.9), width: 2.5),
-          boxShadow: [BoxShadow(color: const Color(0xFFFF2200).withOpacity(glow*0.5), blurRadius: 20, spreadRadius: 4)]),
+            colors: [const Color(0xFF990000).withOpacity(0.97), const Color(0xFF550000).withOpacity(0.90)]),
+          border: Border.all(color: const Color(0xFFFF4400).withOpacity(glow*0.95), width: 3.0),
+          boxShadow: [
+            BoxShadow(color: const Color(0xFFFF2200).withOpacity(glow*0.65), blurRadius: 28, spreadRadius: 6),
+            BoxShadow(color: const Color(0xFFFF6600).withOpacity(glow*0.3), blurRadius: 12, spreadRadius: 2),
+          ]),
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [_Eye(glow: glow), _Eye(glow: glow)]),
           const SizedBox(height: 5),
@@ -397,11 +400,16 @@ class _ArmP extends CustomPainter {
   final Offset end; final Color color; final double glow;
   const _ArmP({required this.end, required this.color, required this.glow});
   @override void paint(Canvas canvas, Size size) {
-    final p = Paint()..color = color.withOpacity(0.85)..strokeWidth = 4..strokeCap = StrokeCap.round..style = PaintingStyle.stroke;
-    final g = Paint()..color = color.withOpacity(0.3*glow)..strokeWidth = 8..strokeCap = StrokeCap.round..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3)..style = PaintingStyle.stroke;
-    final mid = Offset(end.dx*0.4, end.dy+8);
+    final mid = Offset(end.dx*0.4, end.dy+10);
     final path = Path()..moveTo(0,0)..quadraticBezierTo(mid.dx,mid.dy,end.dx,end.dy);
-    canvas.drawPath(path, g); canvas.drawPath(path, p);
+    // Wide glow
+    canvas.drawPath(path, Paint()..color = color.withOpacity(0.35*glow)..strokeWidth = 16..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5)..style = PaintingStyle.stroke);
+    // Main arm body — thick and chunky
+    canvas.drawPath(path, Paint()..color = color.withOpacity(0.90)..strokeWidth = 8..strokeCap = StrokeCap.round..style = PaintingStyle.stroke);
+    // Claw/fist at the end
+    canvas.drawCircle(end, 5, Paint()..color = color.withOpacity(0.95)..style = PaintingStyle.fill);
+    canvas.drawCircle(end, 5, Paint()..color = Colors.black.withOpacity(0.5)..strokeWidth = 1.5..style = PaintingStyle.stroke);
   }
   @override bool shouldRepaint(_ArmP o) => true;
 }
@@ -420,24 +428,25 @@ class _RulesCard extends StatelessWidget {
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Text('🐍 LEVEL $level — SNAKE-ALIEN BOSS', style: const TextStyle(color: Color(0xFFFF4400),
           fontSize: 12, fontWeight: FontWeight.w900, letterSpacing: 1.5), textAlign: TextAlign.center),
-        const SizedBox(height: 10),
-        if (level == 37) ...[
-          Container(padding: const EdgeInsets.all(8), margin: const EdgeInsets.only(bottom: 8),
-            decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.orange.withOpacity(0.4))),
-            child: const Text('📋 L35 RECAP: 25 merges defeated Spaceship Alien.\nNow face something MUCH worse!',
-              style: TextStyle(color: Colors.orange, fontSize: 10, height: 1.4), textAlign: TextAlign.center)),
-        ],
-        _r('👽', 'Every 10s: 5 mini-aliens drop — 5s timer before destruction'),
+        const SizedBox(height: 8),
+        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(color: Colors.red.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFFF4400).withOpacity(0.55))),
+          child: Text('🎯 WIN: Merge $n items total (track X/$n on screen!)',
+            style: const TextStyle(color: Color(0xFFFF6600), fontSize: 10, fontWeight: FontWeight.w900),
+            textAlign: TextAlign.center)),
+        const SizedBox(height: 8),
+        _r('👽', 'Every 10s: 5 mini-aliens drop onto cells — 5s fuse!'),
+        _r('✅', 'Merge items on a mini-alien cell before fuse hits 0 → cell saved!'),
         _r('🐍', 'Every 20s: Snake Jr. permanently blocks one grid cell!'),
-        _r('🔧', 'Merge any 2 items to save a cell from mini-aliens'),
-        _r('🎯', 'Merge $n items total → Snake-Alien obliterated!'),
-        _r('💰', 'Defeat = +50 COINS BONUS!'),
+        _r('📊', 'Each merge = 1 progress toward $n total — keep merging!'),
+        _r('💰', 'Win = +50 COINS BONUS!'),
         if (level == 38) Padding(padding: const EdgeInsets.only(top: 6),
           child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-            decoration: BoxDecoration(color: Colors.red.withOpacity(0.12), borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.red.withOpacity(0.35))),
-            child: const Text('👑 FINAL BOSS — Defeat to conquer ALL levels!',
+            decoration: BoxDecoration(color: Colors.red.withOpacity(0.14), borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.red.withOpacity(0.45))),
+            child: const Text('👑 FINAL BOSS — Defeat all $n merges to conquer EVERY level!',
               style: TextStyle(color: Colors.redAccent, fontSize: 10, fontWeight: FontWeight.bold), textAlign: TextAlign.center))),
       ]));
   }

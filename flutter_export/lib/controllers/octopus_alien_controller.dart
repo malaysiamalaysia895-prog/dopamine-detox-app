@@ -56,7 +56,8 @@ class OctopusAlienController extends ChangeNotifier {
   void Function(int coins)?        onCoinReward;
   bool Function(int col, int row)? isCellOccupied;
 
-  bool _disposed = false;
+  bool _disposed      = false;
+  bool _winTriggered  = false;   // guards against impact timers firing after win
   final Random _rng       = Random();
   double       _idCounter = 0;
 
@@ -102,6 +103,7 @@ class OctopusAlienController extends ChangeNotifier {
     onCoinReward          = onCoins;
     this.isCellOccupied   = isCellOccupied;
 
+    _winTriggered = false;
     _hapticBurst();
     AudioManager.instance.playAlienBgm('assets/audio/bgm_alien.mp3').catchError((_) {});
 
@@ -211,7 +213,7 @@ class OctopusAlienController extends ChangeNotifier {
     notifyListeners();
 
     Timer(const Duration(milliseconds: 1200), () {
-      if (_disposed || phase != OctopusAlienPhase.active) return;
+      if (_disposed || _winTriggered || phase != OctopusAlienPhase.active) return;
       for (final s in strikes) {
         // Re-verify the item is still there right before impact (it may have
         // been merged away in the meantime) to avoid destroying empty cells.
@@ -253,6 +255,7 @@ class OctopusAlienController extends ChangeNotifier {
 
   void _handleWin() {
     _cancelTimers();
+    _winTriggered = true;
     isSlowMo     = true;
     isShielded   = false;
     dialogueText = 'NO... IMPOSSIBLE! 😱';
@@ -292,10 +295,11 @@ class OctopusAlienController extends ChangeNotifier {
     mergesDone           = 0;
     entryComplete        = false;
     isShielded           = false;
-    isSlowMo              = false;
-    isLowHp               = false;
-    dialogueText          = null;
+    isSlowMo             = false;
+    isLowHp              = false;
+    dialogueText         = null;
     activeTentacleStrikes = [];
+    _winTriggered        = false;
     notifyListeners();
   }
 

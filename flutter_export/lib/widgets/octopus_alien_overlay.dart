@@ -349,21 +349,22 @@ class _ActivePhaseState extends State<_ActivePhase> with TickerProviderStateMixi
 
   List<Widget> _tentacleLine(Offset start, Offset end, double progress) {
     if (progress < 0.05) return [];
-    final segs = 12; final rng = Random(42); final out = <Widget>[];
+    final segs = 14; final rng = Random(42); final out = <Widget>[];
     for (int i = 0; i < segs; i++) {
       final t0 = i/segs; final t1 = (i+1)/segs;
       if (t0 > progress) break;
       final p0 = Offset.lerp(start, end, t0)!; final p1 = Offset.lerp(start, end, t1.clamp(0.0, progress))!;
-      final w = (rng.nextDouble()-0.5)*18*math.sin(t0*math.pi);
+      final w = (rng.nextDouble()-0.5)*22*math.sin(t0*math.pi);
       final perp = Offset(-(end.dy-start.dy), end.dx-start.dx); final pLen = perp.distance;
       final pn = pLen > 0 ? Offset(perp.dx/pLen, perp.dy/pLen) : Offset.zero;
       final wp0 = Offset(p0.dx+pn.dx*w, p0.dy+pn.dy*w); final wp1 = Offset(p1.dx+pn.dx*w, p1.dy+pn.dy*w);
-      final th = 5.0*(1-t0*0.5); final mid = Offset((wp0.dx+wp1.dx)/2,(wp0.dy+wp1.dy)/2);
+      // Thicker at base, tapering to tip
+      final th = 11.0*(1-t0*0.65); final mid = Offset((wp0.dx+wp1.dx)/2,(wp0.dy+wp1.dy)/2);
       final len = (wp1-wp0).distance; final angle = math.atan2(wp1.dy-wp0.dy, wp1.dx-wp0.dx);
       out.add(Positioned(left: mid.dx-len/2, top: mid.dy-th/2, child: IgnorePointer(child: Transform.rotate(angle: angle,
         child: Container(width: len, height: th, decoration: BoxDecoration(borderRadius: BorderRadius.circular(th/2),
-          gradient: const LinearGradient(colors: [Color(0xFF00FF88), Color(0xFF00CC66)]),
-          boxShadow: [BoxShadow(color: const Color(0xFF00FF44).withOpacity(0.5), blurRadius: 6)]))))));
+          gradient: const LinearGradient(colors: [Color(0xFF00FF88), Color(0xFF009955)]),
+          boxShadow: [BoxShadow(color: const Color(0xFF00FF44).withOpacity(0.65), blurRadius: 10, spreadRadius: 1)]))))));
     }
     return out;
   }
@@ -451,13 +452,13 @@ class _OctBody extends StatelessWidget {
       if (tentacles)
         ...List.generate(8, (i) {
           final ba = (i/8)*math.pi*2 + math.pi*0.5;
-          final wo = math.sin(wave*math.pi*2 + i*math.pi/4)*12;
-          final len = 45+wo;
+          final wo = math.sin(wave*math.pi*2 + i*math.pi/4)*16;
+          final len = 54+wo;
           final tc = shielded ? const Color(0xFFFFAA00) : const Color(0xFF00CC66);
           return Positioned(left: 0, top: 0, right: 0, bottom: 0, child: IgnorePointer(child: CustomPaint(
             painter: _TentP(start: Offset(55+math.cos(ba)*30, 55+math.sin(ba)*30),
               end: Offset(55+math.cos(ba)*len, 70+math.sin(ba)*len+wo*0.5),
-              color: tc, thickness: 5.0-i*0.3, glow: glow))));
+              color: tc, thickness: 11.0-i*0.7, glow: glow))));
         }),
       const Positioned(top: 20, left: 35, child: Text('👾', style: TextStyle(fontSize: 20))),
     ]));
@@ -475,13 +476,36 @@ class _Eye extends StatelessWidget {
 class _TentP extends CustomPainter {
   final Offset start, end; final Color color; final double thickness, glow;
   const _TentP({required this.start, required this.end, required this.color, required this.thickness, required this.glow});
+
+  Offset _qBez(Offset p0, Offset p1, Offset p2, double t) {
+    final mt = 1 - t;
+    return Offset(mt*mt*p0.dx + 2*mt*t*p1.dx + t*t*p2.dx,
+                  mt*mt*p0.dy + 2*mt*t*p1.dy + t*t*p2.dy);
+  }
+
   @override void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = color.withOpacity(0.85)..strokeWidth = thickness..strokeCap = StrokeCap.round..style = PaintingStyle.stroke;
-    final gPaint = Paint()..color = color.withOpacity(0.3*glow)..strokeWidth = thickness+4..strokeCap = StrokeCap.round
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4)..style = PaintingStyle.stroke;
-    final mid = Offset((start.dx+end.dx)/2+(end.dy-start.dy)*0.2, (start.dy+end.dy)/2+(start.dx-end.dx)*0.2);
+    final mid = Offset((start.dx+end.dx)/2+(end.dy-start.dy)*0.28,
+                       (start.dy+end.dy)/2+(start.dx-end.dx)*0.28);
     final path = Path()..moveTo(start.dx,start.dy)..quadraticBezierTo(mid.dx,mid.dy,end.dx,end.dy);
-    canvas.drawPath(path, gPaint); canvas.drawPath(path, paint);
+    // Wide outer glow
+    canvas.drawPath(path, Paint()
+      ..color = color.withOpacity(0.38*glow)..strokeWidth = thickness+10..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7)..style = PaintingStyle.stroke);
+    // Mid glow layer
+    canvas.drawPath(path, Paint()
+      ..color = color.withOpacity(0.55*glow)..strokeWidth = thickness+4..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke);
+    // Solid tentacle body
+    canvas.drawPath(path, Paint()
+      ..color = color.withOpacity(0.92)..strokeWidth = thickness..strokeCap = StrokeCap.round..style = PaintingStyle.stroke);
+    // Sucker dots evenly along the tentacle
+    final suckerCount = (thickness / 3).round().clamp(2, 5);
+    for (int s = 1; s <= suckerCount; s++) {
+      final t = s / (suckerCount + 1);
+      final sp = _qBez(start, mid, end, t);
+      canvas.drawCircle(sp, thickness * 0.42, Paint()..color = Colors.black.withOpacity(0.65)..style = PaintingStyle.fill);
+      canvas.drawCircle(sp, thickness * 0.28, Paint()..color = color.withOpacity(0.75)..style = PaintingStyle.fill);
+    }
   }
   @override bool shouldRepaint(_TentP o) => true;
 }
@@ -499,12 +523,20 @@ class _RulesCard extends StatelessWidget {
     child: Column(mainAxisSize: MainAxisSize.min, children: [
       const Text('🐙 LEVEL 36 — OCTOPUS ALIEN BOSS', style: TextStyle(color: Color(0xFF00FF88),
         fontSize: 12, fontWeight: FontWeight.w900, letterSpacing: 1.5), textAlign: TextAlign.center),
-      const SizedBox(height: 10),
-      _r('🐙', 'Tentacle strikes every 5s: −10 HP'),
-      _r('🛡️', 'Shield activates every 20s for 6s — merges BLOCKED!'),
-      _r('⏳', 'Wait for shield to drop, then merge!'),
-      _r('🔧', '30 total merges → Octopus Alien defeated!'),
-      _r('💰', 'Win = +50 COINS BONUS!'),
+      const SizedBox(height: 8),
+      Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(color: const Color(0xFF00FF44).withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFF00FF88).withOpacity(0.5))),
+        child: const Text('🎯 WIN: Merge 30 items total (watch X/30 on screen!)',
+          style: TextStyle(color: Color(0xFF00FF88), fontSize: 10, fontWeight: FontWeight.w900),
+          textAlign: TextAlign.center)),
+      const SizedBox(height: 8),
+      _r('🐙', 'Every 5s: tentacles strike 4-5 cells → items destroyed!'),
+      _r('🛡️', 'Shield appears every ~20s for 6s — merges BLOCKED while shielded'),
+      _r('✅', 'When shield drops: merge items freely → each merge = 1 progress'),
+      _r('📊', 'Tentacle hits do NOT count as merges — keep merging to win!'),
+      _r('💰', 'Defeat = +50 COINS BONUS!'),
     ]));
   Widget _r(String i, String t) => Padding(padding: const EdgeInsets.symmetric(vertical: 2),
     child: Row(children: [Text(i, style: const TextStyle(fontSize: 14)), const SizedBox(width: 6),
