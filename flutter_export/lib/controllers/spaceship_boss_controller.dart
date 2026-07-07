@@ -127,7 +127,7 @@ class SpaceshipBossController extends ChangeNotifier {
     onCellUnblocked = onUnblock;
 
     _hapticBurst();
-    AudioManager.instance.playAlienBgm('assets/audio/bgm_alien_boss.mp3').catchError((_) {});
+    AudioManager.instance.playAlienBgm('assets/audio/bgm_alien.mp3').catchError((_) {});
 
     phase = SpaceshipBossPhase.entry;
     notifyListeners();

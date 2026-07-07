@@ -103,7 +103,7 @@ class OctopusAlienController extends ChangeNotifier {
     this.isCellOccupied   = isCellOccupied;
 
     _hapticBurst();
-    AudioManager.instance.playAlienBgm('assets/audio/bgm_alien_boss.mp3').catchError((_) {});
+    AudioManager.instance.playAlienBgm('assets/audio/bgm_alien.mp3').catchError((_) {});
 
     phase = OctopusAlienPhase.alienEntry;
     notifyListeners();
