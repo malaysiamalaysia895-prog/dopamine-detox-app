@@ -79,6 +79,7 @@ class CreatureController extends ChangeNotifier with WidgetsBindingObserver {
     _onThrow     = onThrow;
 
     _hapticBurst();
+    // Villain entry BGM — dramatic/scary while creature assembles
     AudioManager.instance.playCreatureBgm().catchError((_) {});
 
     if (level == 23) {
@@ -126,6 +127,9 @@ class CreatureController extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
     _postAnim = Timer(const Duration(milliseconds: 4200), () {
       phase = CreaturePhase.active;
+      // Assembly complete — creature is fully on screen and attacking.
+      // Switch from villain entry BGM to energetic gameplay BGM.
+      AudioManager.instance.playCreatureActiveBgm().catchError((_) {});
       _startThrowCycle();
       _startVibPulse();
       notifyListeners();

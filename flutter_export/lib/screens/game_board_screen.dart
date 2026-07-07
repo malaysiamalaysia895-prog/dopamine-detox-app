@@ -23,6 +23,9 @@ import '../widgets/malware_overlay.dart';
 import '../widgets/robot_overlay.dart';
 import '../widgets/creature_overlay.dart';
 import '../widgets/alien_overlay.dart';
+import '../widgets/spaceship_boss_overlay.dart';
+import '../widgets/octopus_alien_overlay.dart';
+import '../widgets/snake_alien_overlay.dart';
 import '../controllers/robot_controller.dart';
 import '../controllers/creature_controller.dart';
 import '../controllers/alien_controller.dart';
@@ -37,8 +40,9 @@ class GameBoardScreen extends ConsumerStatefulWidget {
 }
 
 class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
-  final _spawnerKey = GlobalKey();
-  final _gridKey    = GlobalKey();
+  final _spawnerKey    = GlobalKey();
+  final _gridKey       = GlobalKey();
+  final _boardStackKey = GlobalKey();
   double _lastCellSize = 60.0;
 
   void _onCellSizeChanged(double size) {
@@ -59,6 +63,7 @@ class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
             phase: levelDef.phase,
             child: SafeArea(
               child: Stack(
+                key: _boardStackKey,
                 children: [
                   // Full-screen ambient particles — floats behind everything, theme-tinted
                   Positioned.fill(
@@ -270,6 +275,62 @@ class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
                       if (spawnerBox == null) return null;
                       final pos = spawnerBox.localToGlobal(Offset.zero);
                       return Offset(pos.dx + spawnerBox.size.width / 2, pos.dy + spawnerBox.size.height / 2);
+                    },
+                  ),
+                  // Spaceship Alien Boss (L34, L35) — entry animation + mini-ship timers
+                  SpaceshipBossOverlay(
+                    controller: ref.read(gameProvider.notifier).spaceshipBossController,
+                    isDialogActive: ref.watch(dialogProvider) != ActiveDialog.none,
+                    getCellRect: (col, row) {
+                      final box      = _gridKey.currentContext?.findRenderObject() as RenderBox?;
+                      final stackBox = _boardStackKey.currentContext?.findRenderObject() as RenderBox?;
+                      if (box == null || stackBox == null || _lastCellSize == 0) return null;
+                      const gap = 5.0;
+                      final cs     = _lastCellSize;
+                      final totalW = levelDef.gridCols * (cs + gap) - gap;
+                      final totalH = levelDef.gridRows * (cs + gap) - gap;
+                      // Use ancestor-relative coords so Positioned widgets in the overlay
+                      // Stack align perfectly with the grid on every device/inset.
+                      final gridLocal = box.localToGlobal(Offset.zero, ancestor: stackBox);
+                      final dx = gridLocal.dx + (box.size.width  - totalW) / 2 + col * (cs + gap);
+                      final dy = gridLocal.dy + (box.size.height - totalH) / 2 + row * (cs + gap);
+                      return Rect.fromLTWH(dx, dy, cs, cs);
+                    },
+                  ),
+                  // Octopus Alien Boss (L36) — half alien, half octopus
+                  OctopusAlienOverlay(
+                    controller: ref.read(gameProvider.notifier).octopusAlienController,
+                    isDialogActive: ref.watch(dialogProvider) != ActiveDialog.none,
+                    getCellRect: (col, row) {
+                      final box      = _gridKey.currentContext?.findRenderObject() as RenderBox?;
+                      final stackBox = _boardStackKey.currentContext?.findRenderObject() as RenderBox?;
+                      if (box == null || stackBox == null || _lastCellSize == 0) return null;
+                      const gap = 5.0;
+                      final cs     = _lastCellSize;
+                      final totalW = levelDef.gridCols * (cs + gap) - gap;
+                      final totalH = levelDef.gridRows * (cs + gap) - gap;
+                      final gridLocal = box.localToGlobal(Offset.zero, ancestor: stackBox);
+                      final dx = gridLocal.dx + (box.size.width  - totalW) / 2 + col * (cs + gap);
+                      final dy = gridLocal.dy + (box.size.height - totalH) / 2 + row * (cs + gap);
+                      return Rect.fromLTWH(dx, dy, cs, cs);
+                    },
+                  ),
+                  // Snake Alien Boss (L37, L38) — snake-alien hybrid, drops mini-aliens
+                  SnakeAlienOverlay(
+                    controller: ref.read(gameProvider.notifier).snakeAlienController,
+                    isDialogActive: ref.watch(dialogProvider) != ActiveDialog.none,
+                    getCellRect: (col, row) {
+                      final box      = _gridKey.currentContext?.findRenderObject() as RenderBox?;
+                      final stackBox = _boardStackKey.currentContext?.findRenderObject() as RenderBox?;
+                      if (box == null || stackBox == null || _lastCellSize == 0) return null;
+                      const gap = 5.0;
+                      final cs     = _lastCellSize;
+                      final totalW = levelDef.gridCols * (cs + gap) - gap;
+                      final totalH = levelDef.gridRows * (cs + gap) - gap;
+                      final gridLocal = box.localToGlobal(Offset.zero, ancestor: stackBox);
+                      final dx = gridLocal.dx + (box.size.width  - totalW) / 2 + col * (cs + gap);
+                      final dy = gridLocal.dy + (box.size.height - totalH) / 2 + row * (cs + gap);
+                      return Rect.fromLTWH(dx, dy, cs, cs);
                     },
                   ),
 

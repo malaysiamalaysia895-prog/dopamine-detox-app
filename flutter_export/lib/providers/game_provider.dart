@@ -17,6 +17,9 @@ import '../controllers/malware_controller.dart';
 import '../controllers/robot_controller.dart';
 import '../controllers/creature_controller.dart';
 import '../controllers/alien_controller.dart';
+import '../controllers/spaceship_boss_controller.dart';
+import '../controllers/octopus_alien_controller.dart';
+import '../controllers/snake_alien_controller.dart';
 
 // ─── Persistence Keys ─────────────────────────────────────────────────────────
 
@@ -228,10 +231,13 @@ class GameNotifier extends StateNotifier<GameState> {
   Timer? _decoyTeleportTimer;
   bool   _disposed = false;
   final Random _rng = Random();
-  final malwareController   = MalwareController();
-  final robotController     = RobotController();
-  final creatureController  = CreatureController();
-  final alienController     = AlienController();
+  final malwareController       = MalwareController();
+  final robotController         = RobotController();
+  final creatureController      = CreatureController();
+  final alienController         = AlienController();
+  final spaceshipBossController = SpaceshipBossController();
+  final octopusAlienController  = OctopusAlienController();
+  final snakeAlienController    = SnakeAlienController();
   Timer? _creatureThrowCdTimer;
 
   /// True if the player voluntarily watched the Rewarded Ad (3× coins) on the
@@ -276,6 +282,9 @@ class GameNotifier extends StateNotifier<GameState> {
     _creatureThrowCdTimer = null;
     creatureController.reset();
     alienController.reset();
+    spaceshipBossController.reset();
+    octopusAlienController.reset();
+    snakeAlienController.reset();
     final level = state.currentLevel;
     state = state.copyWith(
       screen: AppScreen.map,
@@ -310,6 +319,9 @@ class GameNotifier extends StateNotifier<GameState> {
     robotController.reset();
     creatureController.reset();
     alienController.reset();
+    spaceshipBossController.reset();
+    octopusAlienController.reset();
+    snakeAlienController.reset();
 
     // CRITICAL FIX: Do NOT start the timer here. The story dialog is about to
     // be shown, and the player cannot interact with the board while it is open.
@@ -699,6 +711,55 @@ class GameNotifier extends StateNotifier<GameState> {
     } else {
       alienController.reset();
     }
+
+    // ── Spaceship Boss trigger (L34, L35) ─────────────────────────────────────
+    if (kSpaceshipBossLevels.containsKey(cfg.number)) {
+      spaceshipBossController.triggerForLevel(
+        cfg.number,
+        gridCols: cfg.gridCols,
+        gridRows: cfg.gridRows,
+        onThrow: (_) {}, // overlay renders timers
+        onCellDestroy: _onBossThrowExpire,
+        onDamage: _onBossDamage,
+        onCoins: _onCoinReward,
+        onBlock: _onCellBlocked,
+        onUnblock: _onCellUnblocked,
+      );
+    } else {
+      spaceshipBossController.reset();
+    }
+
+    // ── Octopus Alien trigger (L36) ───────────────────────────────────────────
+    if (cfg.number == 36) {
+      octopusAlienController.triggerForLevel(
+        cfg.number,
+        gridCols: cfg.gridCols,
+        gridRows: cfg.gridRows,
+        onCellDestroy: _onBossThrowExpire,
+        onDamage: _onBossDamage,
+        onCoins: _onCoinReward,
+        isCellOccupied: (c, r) =>
+            state.grid[c][r].itemId != null && !state.grid[c][r].isBlocked,
+      );
+    } else {
+      octopusAlienController.reset();
+    }
+
+    // ── Snake Alien trigger (L37, L38) ────────────────────────────────────────
+    if (kSnakeAlienLevels.containsKey(cfg.number)) {
+      snakeAlienController.triggerForLevel(
+        cfg.number,
+        gridCols: cfg.gridCols,
+        gridRows: cfg.gridRows,
+        onWave: (_) {}, // overlay renders drop timers
+        onCellDestroy: _onBossThrowExpire,
+        onDamage: _onBossDamage,
+        onBlock: _onCellBlocked,
+        onUnblock: _onCellUnblocked,
+      );
+    } else {
+      snakeAlienController.reset();
+    }
   }
 
   // ── Spawn Item ────────────────────────────────────────────────────────────
@@ -846,6 +907,13 @@ class GameNotifier extends StateNotifier<GameState> {
     HapticFeedback.lightImpact();
     malwareController.onItemMerged(); // ← Malware boss: count this merge
     alienController.onItemMerged();   // ← Alien boss: fire laser on milestones
+    spaceshipBossController.onItemMerged(); // ← Spaceship boss (L34-35)
+    spaceshipBossController.neutralizeThrowAt(tc, tr); // ← cancel any throw at merge target
+    spaceshipBossController.neutralizeThrowAt(fc, fr);
+    octopusAlienController.onItemMerged(); // ← Octopus alien (L36)
+    snakeAlienController.onItemMerged(tc, tr); // ← Snake alien (L37-38)
+    snakeAlienController.onMergeAtCell(fc, fr); // ← save adjacent cells too
+    snakeAlienController.onMergeAtCell(tc, tr);
     // Data Kraken: cancel countdown if merged from/to a creature-thrown cell
     _cancelCreatureThrowAt(fc, fr);
     _cancelCreatureThrowAt(tc, tr);
@@ -1086,9 +1154,55 @@ class GameNotifier extends StateNotifier<GameState> {
     HapticFeedback.mediumImpact();
   }
 
+  // ── Boss cell-destroy callback (L34-38) ──────────────────────────────────
+
+  void _onBossThrowExpire(int col, int row) {
+    // Destroy item on that cell
+    final cfg  = state.currentLevel;
+    if (col < 0 || col >= cfg.gridCols || row < 0 || row >= cfg.gridRows) return;
+    final cell = state.grid[col][row];
+    if (cell.itemId == null || cell.isBlocked) return;
+    final newGrid = _cloneGrid();
+    newGrid[col][row] = newGrid[col][row].clearItem();
+    state = state.copyWith(grid: newGrid);
+  }
+
+  void _onBossDamage(int damage) {
+    final newEnergy = (state.energy - damage).clamp(0, state.maxEnergy);
+    state = state.copyWith(energy: newEnergy);
+    if (newEnergy <= 0) {
+      // Treat as energy-out loss
+      _timer?.cancel();
+      state = state.copyWith(activeDialog: ActiveDialog.timeFail);
+    }
+  }
+
+  void _onCoinReward(int coins) {
+    state = state.copyWith(levelEarnedCoins: state.levelEarnedCoins + coins);
+  }
+
+  void _onCellBlocked(int col, int row) {
+    final cfg = state.currentLevel;
+    if (col < 0 || col >= cfg.gridCols || row < 0 || row >= cfg.gridRows) return;
+    final newGrid = _cloneGrid();
+    newGrid[col][row] = newGrid[col][row].copyWith(obstacle: ObstacleType.lockedCrate);
+    state = state.copyWith(grid: newGrid);
+  }
+
+  void _onCellUnblocked(int col, int row) {
+    final cfg = state.currentLevel;
+    if (col < 0 || col >= cfg.gridCols || row < 0 || row >= cfg.gridRows) return;
+    final newGrid = _cloneGrid();
+    newGrid[col][row] = newGrid[col][row].copyWith(obstacle: ObstacleType.none);
+    state = state.copyWith(grid: newGrid);
+  }
+
   void _onLevelComplete() {
     creatureController.onLevelComplete(); // ← Data Kraken win blast
     alienController.onLevelComplete();    // ← Alien boss win blast
+    spaceshipBossController.onLevelComplete(); // ← Spaceship boss (L34-35)
+    octopusAlienController.onLevelComplete();  // ← Octopus alien (L36)
+    snakeAlienController.onLevelComplete();    // ← Snake alien (L37-38)
     _timer?.cancel();
     AudioManager.instance.pauseBgm();
     AudioManager.instance.playVictory();
@@ -1414,6 +1528,9 @@ class GameNotifier extends StateNotifier<GameState> {
     _creatureThrowCdTimer?.cancel();
     creatureController.dispose();
     alienController.dispose();
+    spaceshipBossController.dispose();
+    octopusAlienController.dispose();
+    snakeAlienController.dispose();
     super.dispose();
   }
 }
