@@ -446,8 +446,8 @@ class _RulesCard extends StatelessWidget {
           child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
             decoration: BoxDecoration(color: Colors.red.withOpacity(0.14), borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.red.withOpacity(0.45))),
-            child: const Text('👑 FINAL BOSS — Defeat all $n merges to conquer EVERY level!',
-              style: TextStyle(color: Colors.redAccent, fontSize: 10, fontWeight: FontWeight.bold), textAlign: TextAlign.center))),
+            child: Text('👑 FINAL BOSS — Defeat all $n merges to conquer EVERY level!',
+              style: const TextStyle(color: Colors.redAccent, fontSize: 10, fontWeight: FontWeight.bold), textAlign: TextAlign.center))),
       ]));
   }
   Widget _r(String i, String t) => Padding(padding: const EdgeInsets.symmetric(vertical: 2.5),
