@@ -1,0 +1,463 @@
+/* ============================================================
+   ZOMBIE NEON RUNNER — Game Styles
+   Offline-ready: fonts loaded from local assets/fonts/
+   ============================================================ */
+
+@font-face {
+  font-family: 'Creepster';
+  src: url('../fonts/Creepster-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Orbitron';
+  src: url('../fonts/Orbitron-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Orbitron';
+  src: url('../fonts/Orbitron-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-display: block;
+}
+
+/* ── Reset ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #000;
+  font-family: 'Orbitron', monospace;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Canvas ── */
+#zn-canvas-mount {
+  position: fixed;
+  inset: 0;
+  display: block;
+}
+#zn-canvas-mount canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ── HUD ── */
+#zn-hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Score */
+#zn-score {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+}
+#zn-score .zn-label {
+  font-family: 'Orbitron', monospace;
+  font-size: 11px;
+  color: #00ffcc;
+  letter-spacing: 3px;
+  text-shadow: 0 0 8px #00ffcc;
+}
+#zn-score-value {
+  font-family: 'Orbitron', monospace;
+  font-size: 28px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 0 16px #00ffcc, 0 0 30px #00ffcc;
+  min-width: 80px;
+  display: inline-block;
+  text-align: center;
+}
+
+/* Kill bar */
+#zn-killbar {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  text-align: right;
+}
+#zn-killbar-text {
+  font-family: 'Orbitron', monospace;
+  font-size: 13px;
+  color: #ff4444;
+  text-shadow: 0 0 10px #ff2200;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.zn-killbar-track {
+  width: 120px;
+  height: 5px;
+  background: rgba(255,50,50,0.2);
+  border-radius: 3px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+.zn-killbar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ff2200, #ff6600);
+  border-radius: 3px;
+  transition: width 0.2s;
+  box-shadow: 0 0 8px #ff4400;
+  width: 0%;
+}
+
+/* Phase */
+#zn-phase {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  font-family: 'Orbitron', monospace;
+  font-size: 11px;
+  color: #ff00ff;
+  text-shadow: 0 0 10px #ff00ff;
+  letter-spacing: 2px;
+}
+
+/* Phase pop message */
+#zn-phase-pop {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: 'Creepster', cursive;
+  font-size: 48px;
+  color: #ff00ff;
+  text-shadow: 0 0 20px #ff00ff, 0 0 40px #aa00ff;
+  text-align: center;
+  letter-spacing: 4px;
+  display: none;
+  animation: phasePop 0.4s ease-out;
+  z-index: 20;
+  white-space: nowrap;
+}
+@keyframes phasePop {
+  0%   { transform: translate(-50%, -50%) scale(0.4); opacity: 0; }
+  60%  { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1);   opacity: 1; }
+}
+
+/* Player HP (shown always) */
+#zn-player-hp {
+  position: absolute;
+  bottom: 140px;
+  left: 16px;
+}
+.zn-hp-label {
+  font-family: 'Orbitron', monospace;
+  font-size: 10px;
+  color: #00ff88;
+  text-shadow: 0 0 6px #00ff88;
+  letter-spacing: 2px;
+  margin-bottom: 4px;
+}
+.zn-hp-track {
+  width: 140px;
+  height: 8px;
+  background: rgba(0,255,100,0.15);
+  border-radius: 4px;
+  border: 1px solid rgba(0,255,100,0.3);
+  overflow: hidden;
+}
+#zn-player-hp-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #00ff88, #00ffcc);
+  border-radius: 4px;
+  transition: width 0.3s;
+  box-shadow: 0 0 8px #00ff88;
+  width: 100%;
+}
+
+/* Boss UI */
+#zn-boss-ui {
+  position: absolute;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  display: none;
+}
+#zn-boss-ui .zn-label {
+  font-family: 'Creepster', cursive;
+  font-size: 18px;
+  color: #ff2200;
+  text-shadow: 0 0 12px #ff2200;
+  letter-spacing: 4px;
+  animation: bossFlicker 0.8s infinite alternate;
+}
+@keyframes bossFlicker {
+  from { opacity: 1; } to { opacity: 0.6; }
+}
+#zn-boss-hp {
+  width: 220px;
+  height: 10px;
+  background: rgba(255,0,0,0.2);
+  border-radius: 5px;
+  border: 1px solid rgba(255,30,0,0.5);
+  margin-top: 6px;
+  overflow: hidden;
+}
+#zn-boss-hp-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ff0000, #ff6600);
+  border-radius: 5px;
+  transition: width 0.2s;
+  box-shadow: 0 0 10px #ff2200;
+  width: 100%;
+}
+
+/* ── Controls ── */
+#zn-controls {
+  position: fixed;
+  bottom: 0;
+  left: 0; right: 0;
+  height: 140px;
+  pointer-events: none;
+  z-index: 15;
+}
+
+/* Joystick zone */
+#zn-joystick-zone {
+  position: absolute;
+  left: 20px;
+  bottom: 20px;
+  width: 110px;
+  height: 110px;
+  pointer-events: all;
+}
+.zn-joystick-base {
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  background: rgba(0,255,200,0.08);
+  border: 2px solid rgba(0,255,200,0.3);
+  box-shadow: 0 0 20px rgba(0,255,200,0.15);
+  position: relative;
+}
+#zn-stick {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #00ffcc, #005544);
+  border: 2px solid #00ffcc;
+  box-shadow: 0 0 16px #00ffcc;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  transition: box-shadow 0.1s;
+}
+
+/* Action buttons */
+.zn-round-btn {
+  position: absolute;
+  width: 70px;
+  height: 70px;
+  border-radius: 50%;
+  border: 2px solid;
+  font-family: 'Orbitron', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+  pointer-events: all;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.08s, box-shadow 0.1s;
+  -webkit-tap-highlight-color: transparent;
+}
+.zn-round-btn:active { transform: scale(0.9); }
+
+#zn-jump-btn {
+  right: 100px;
+  bottom: 50px;
+  border-color: #00ccff;
+  background: rgba(0,200,255,0.12);
+  color: #00ccff;
+  box-shadow: 0 0 20px rgba(0,200,255,0.3);
+  text-shadow: 0 0 8px #00ccff;
+}
+#zn-fire-btn {
+  right: 20px;
+  bottom: 25px;
+  width: 80px;
+  height: 80px;
+  border-color: #ff4444;
+  background: rgba(255,50,50,0.15);
+  color: #ff4444;
+  box-shadow: 0 0 24px rgba(255,50,50,0.4);
+  text-shadow: 0 0 10px #ff4444;
+  font-size: 13px;
+}
+
+/* ── Start Screen ── */
+#zn-start {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at center, #0a001a 0%, #000 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+#zn-start-title {
+  font-family: 'Creepster', cursive;
+  font-size: clamp(42px, 10vw, 80px);
+  color: #ff00ff;
+  text-shadow: 0 0 30px #ff00ff, 0 0 60px #aa00ff, 0 0 90px #7700cc;
+  text-align: center;
+  letter-spacing: 6px;
+  animation: titlePulse 2s ease-in-out infinite;
+  line-height: 1.1;
+}
+@keyframes titlePulse {
+  0%, 100% { text-shadow: 0 0 30px #ff00ff, 0 0 60px #aa00ff; }
+  50%       { text-shadow: 0 0 50px #ff00ff, 0 0 100px #ff00ff, 0 0 120px #cc00cc; }
+}
+#zn-start-sub {
+  font-family: 'Orbitron', monospace;
+  font-size: 13px;
+  color: #00ffcc;
+  text-shadow: 0 0 10px #00ffcc;
+  letter-spacing: 4px;
+  margin-top: 14px;
+}
+#zn-start-card {
+  margin-top: 50px;
+  font-family: 'Orbitron', monospace;
+  font-size: 16px;
+  color: #fff;
+  text-shadow: 0 0 12px #00ffcc;
+  letter-spacing: 3px;
+  animation: tapBlink 1.2s ease-in-out infinite;
+  border: 1px solid rgba(0,255,200,0.4);
+  padding: 16px 32px;
+  border-radius: 6px;
+  background: rgba(0,255,200,0.06);
+  cursor: pointer;
+}
+@keyframes tapBlink {
+  0%, 100% { opacity: 1; box-shadow: 0 0 10px rgba(0,255,200,0.3); }
+  50%       { opacity: 0.5; box-shadow: 0 0 30px rgba(0,255,200,0.6); }
+}
+
+/* Decorative lines on start screen */
+.zn-deco {
+  position: absolute;
+  border: 1px solid rgba(0,255,200,0.12);
+  border-radius: 50%;
+  animation: decoSpin linear infinite;
+}
+.zn-deco-1 { width: 300px; height: 300px; animation-duration: 20s; top: 50%; left: 50%; transform: translate(-50%,-50%); }
+.zn-deco-2 { width: 500px; height: 500px; animation-duration: 35s; animation-direction: reverse; top: 50%; left: 50%; transform: translate(-50%,-50%); }
+@keyframes decoSpin { from { transform: translate(-50%,-50%) rotate(0deg); } to { transform: translate(-50%,-50%) rotate(360deg); } }
+
+/* ── Game Over ── */
+#zn-gameover {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.88);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  backdrop-filter: blur(4px);
+}
+#zn-gameover-title {
+  font-family: 'Creepster', cursive;
+  font-size: clamp(52px, 14vw, 96px);
+  color: #ff2200;
+  text-shadow: 0 0 30px #ff2200, 0 0 60px #aa0000;
+  letter-spacing: 6px;
+  animation: deathShake 0.5s ease-out;
+}
+@keyframes deathShake {
+  0%   { transform: translateX(-8px); }
+  25%  { transform: translateX(8px); }
+  50%  { transform: translateX(-6px); }
+  75%  { transform: translateX(6px); }
+  100% { transform: translateX(0); }
+}
+#zn-death-reason {
+  font-family: 'Orbitron', monospace;
+  font-size: 15px;
+  color: #ff6666;
+  text-shadow: 0 0 10px #ff4444;
+  letter-spacing: 3px;
+  margin-top: 12px;
+}
+.zn-gameover-stats {
+  margin-top: 28px;
+  text-align: center;
+  font-family: 'Orbitron', monospace;
+  font-size: 13px;
+  color: #aaa;
+  letter-spacing: 2px;
+  line-height: 2;
+}
+.zn-gameover-stats span {
+  color: #00ffcc;
+  text-shadow: 0 0 8px #00ffcc;
+}
+#zn-retry-btn {
+  margin-top: 36px;
+  padding: 14px 48px;
+  font-family: 'Orbitron', monospace;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: #ff2200;
+  background: transparent;
+  border: 2px solid #ff2200;
+  border-radius: 6px;
+  cursor: pointer;
+  text-shadow: 0 0 10px #ff2200;
+  box-shadow: 0 0 20px rgba(255,34,0,0.3);
+  transition: all 0.2s;
+  -webkit-tap-highlight-color: transparent;
+}
+#zn-retry-btn:hover, #zn-retry-btn:active {
+  background: rgba(255,34,0,0.15);
+  box-shadow: 0 0 40px rgba(255,34,0,0.6);
+  transform: scale(1.04);
+}
+
+/* WebGL fallback */
+#zn-webgl-fallback {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  color: #ff4444;
+  font-family: 'Orbitron', monospace;
+  font-size: 16px;
+  text-align: center;
+  padding: 32px;
+  display: none;
+}
+
+/* ── Responsive tweaks ── */
+@media (max-width: 400px) {
+  #zn-start-title { font-size: 38px; }
+  #zn-phase-pop   { font-size: 32px; }
+  .zn-round-btn   { width: 62px; height: 62px; font-size: 10px; }
+  #zn-fire-btn    { width: 72px; height: 72px; }
+}
