@@ -1,0 +1,2 @@
+- [Node scripts in this repo need .cjs](node-scripts-cjs.md) — `scripts/package.json` sets `"type": "module"`; any plain `require()`-based Node script placed under `scripts/` must use a `.cjs` extension or it throws at startup.
+- [3d-game branch static game](3d-game-branch.md) — where the standalone Three.js game lives, how it's previewed, and the push-target convention for that branch.
