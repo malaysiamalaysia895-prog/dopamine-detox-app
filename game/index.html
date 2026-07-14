@@ -126,18 +126,29 @@ function onWindowResize() {
 
 function initGame() {
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x2a0e40); 
-  scene.fog = new THREE.Fog(0x2a0e40, 20, 160);
+  scene.background = new THREE.Color(0x1a0e2e); 
+  scene.fog = new THREE.Fog(0x1a0e2e, 20, 160);
   
   camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1500);
   camera.position.set(0, 7, -12);
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true, failIfMajorPerformanceCaveat: false });
+  } catch(e) {
+    var fb = document.createElement('div');
+    fb.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#ff0055;font-family:Creepster,sans-serif;font-size:24px;text-align:center;';
+    fb.innerText = 'WebGL is not available in this browser. Try a different device.';
+    document.body.appendChild(fb); return;
+  }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = false;
   document.body.appendChild(renderer.domElement);
   
-  scene.add(new THREE.AmbientLight(0xffffff, 0.95)); 
-  var dir = new THREE.DirectionalLight(0xff0055, 1.4); dir.position.set(-10, 50, -20); scene.add(dir);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.85)); 
+  var dir = new THREE.DirectionalLight(0xff0055, 1.2); dir.position.set(-10, 50, -20); scene.add(dir);
+  var dir2 = new THREE.DirectionalLight(0x00aaff, 0.4); dir2.position.set(10, 30, 20); scene.add(dir2);
   muzzleLight = new THREE.PointLight(0xffaa00, 0, 10); scene.add(muzzleLight);
+  var ambientGlow = new THREE.PointLight(0x00ffff, 0.6, 8); scene.add(ambientGlow);
   
   clock = new THREE.Clock();
   createPlayer(); createGround();
