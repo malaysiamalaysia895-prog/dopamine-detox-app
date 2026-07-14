@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Zombie Neon: Tactical Update</title>
+<style>
+@font-face { font-family: 'Creepster'; src: url('fonts/Creepster-Regular.ttf') format('truetype'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'Orbitron'; src: url('fonts/Orbitron-900.woff2') format('woff2'); font-weight: 900; font-display: block; }
+body { margin: 0; overflow: hidden; background: #2a0e40; font-family: 'Orbitron', sans-serif; user-select: none; touch-action: none; }
+#loader { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; color: #ff0000; display: flex; align-items: center; justify-content: center; font-size: 24px; font-family: 'Creepster'; z-index: 9999; }
+#hud { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+.score-box { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); color: #fff; font-size: 24px; text-shadow: 0 0 10px cyan; background: rgba(0,0,0,0.6); padding: 5px 20px; border-radius: 20px; border: 2px solid cyan; white-space: nowrap; }
+#kill-bar { display: none; position: absolute; top: 70px; left: 50%; transform: translateX(-50%); background: rgba(255, 0, 0, 0.7); color: white; font-size: 20px; padding: 5px 20px; border: 2px solid red; border-radius: 10px; font-family: 'Creepster'; }
+#phase-msg { display:none; position: absolute; top: 150px; left: 50%; transform: translateX(-50%); color: cyan; font-size: 30px; text-shadow: 0 0 20px cyan; font-family: 'Creepster'; animation: blink 0.5s infinite; text-align: center; width: 100%; z-index: 20; }
+@keyframes blink { 50% { opacity: 0; } }
+
+#boss-ui { display: none; position: absolute; top: 60px; left: 50%; transform: translateX(-50%); width: 80%; text-align: center; pointer-events: none; }
+.hp-container { width: 100%; height: 25px; background: #222; margin-bottom: 8px; border: 2px solid white; position: relative; border-radius: 10px; overflow: hidden; box-shadow: 0 0 10px black;}
+.hp-fill { height: 100%; width: 100%; transition: width 0.2s; }
+#boss-hp-bar { background: linear-gradient(90deg, #ff0000, #550000); }
+#player-hp-bar { background: linear-gradient(90deg, #00ff00, #005500); }
+
+#start-msg { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); color:white; font-size:30px; background:rgba(0,0,0,0.8); padding:20px; z-index:5000; pointer-events:none; border: 2px solid cyan; text-align: center; font-family: 'Creepster'; letter-spacing: 2px; }
+#controls { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 100; }
+#joystick-zone { position: absolute; bottom: 40px; left: 40px; width: 140px; height: 140px; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; pointer-events: auto; }
+#stick { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: #ff0055; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 15px #ff0055; }
+#jump-btn { position: absolute; bottom: 60px; right: 40px; width: 100px; height: 100px; background: rgba(0, 255, 255, 0.3); border: 2px solid cyan; border-radius: 50%; pointer-events: auto; display: flex; align-items: center; justify-content: center; color: white; font-size: 24px; font-weight: bold; box-shadow: 0 0 20px cyan; }
+#fire-btn { display: none; position: absolute; bottom: 60px; right: 40px; width: 110px; height: 110px; background: rgba(255, 0, 0, 0.4); border: 4px solid red; border-radius: 50%; pointer-events: auto; align-items: center; justify-content: center; color: white; font-size: 28px; font-family: 'Creepster'; box-shadow: 0 0 30px red; }
+#game-over { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); z-index: 6000; flex-direction: column; align-items: center; justify-content: center; pointer-events: auto; }
+.btn-retry { padding: 15px 50px; font-size: 30px; background: red; color: white; border: none; cursor: pointer; font-family: 'Creepster'; margin-top: 20px; border-radius: 10px; box-shadow: 0 0 20px red; }
+</style>
+<script src="three.min.js"></script>
+</head>
+<body>
+
+<div id="loader">LOADING...</div>
+<div id="start-msg">TAP TO START</div>
+<div id="hud">
+  <div class="score-box">SCORE: <span id="score">0</span></div>
+  <div id="phase-msg">PHASE CHANGE!</div>
+  <div id="kill-bar">KILLS: 0/65</div>
+  <div id="boss-ui">
+    <div class="hp-container"><span style="color:red; font-weight:bold; position:absolute; left:50%; transform:translateX(-50%);">DEMON BOSS</span><div id="boss-hp-bar" class="hp-fill"></div></div>
+    <div class="hp-container"><span style="color:lime; font-weight:bold; position:absolute; left:50%; transform:translateX(-50%);">PLAYER</span><div id="player-hp-bar" class="hp-fill"></div></div>
+  </div>
+</div>
+
+<div id="controls">
+<div id="joystick-zone"><div id="stick"></div></div>
+<div id="jump-btn">JUMP</div>
+<div id="fire-btn">FIRE</div>
+</div>
+
+<div id="game-over">
+<h1 style="color:red; font-family: 'Creepster'; font-size: 60px; margin:0;">YOU DIED</h1>
+<h3 id="death-reason" style="color:cyan; font-family: 'Orbitron'; margin:10px;">HIT AN OBSTACLE</h3>
+<button class="btn-retry" onclick="location.reload()">TRY AGAIN</button>
+</div>
+
+<script>
+// --- AUDIO SYSTEM ---
+var AudioSys = {
+  ctx: null, isPlaying: false,
+  init: function() { 
+    var AC = window.AudioContext || window.webkitAudioContext;
+    this.ctx = new AC(); 
+    this.ctx.resume().then(() => {
+        this.startBGM();
+        document.getElementById('start-msg').style.display = 'none';
+    });
+  },
+  play: function(type) {
+    if(!this.ctx) return;
+    var osc = this.ctx.createOscillator(); var gain = this.ctx.createGain();
+    osc.connect(gain); gain.connect(this.ctx.destination);
+    var now = this.ctx.currentTime;
+    if(type==='jump'){ osc.frequency.setValueAtTime(150,now); gain.gain.setValueAtTime(0.2,now); }
+    else if(type==='gun'){ osc.type='square'; osc.frequency.setValueAtTime(100,now); gain.gain.setValueAtTime(0.2,now); }
+    else if(type==='equip'){ osc.frequency.setValueAtTime(400,now); gain.gain.setValueAtTime(0.2,now); }
+    else if(type==='death'){ osc.type='sawtooth'; osc.frequency.setValueAtTime(60,now); gain.gain.setValueAtTime(0.3,now); osc.start(now); osc.stop(now+0.4); return;}
+    else if(type==='phase'){ osc.frequency.setValueAtTime(800,now); gain.gain.setValueAtTime(0.4,now); osc.start(now); osc.stop(now+1.5); return;}
+    osc.start(now); osc.stop(now+0.2);
+  },
+  startBGM: function() {
+    if(this.isPlaying) return; this.isPlaying = true;
+    var self = this; var beat = 0;
+    setInterval(function() {
+      if(!self.ctx) return;
+      var osc = self.ctx.createOscillator(); var gain = self.ctx.createGain();
+      osc.type = 'sawtooth'; var freq = (beat % 4 === 0) ? 60 : 40;
+      if(bossModeActive) freq = (beat % 2 === 0) ? 120 : 80;
+      if(score > 3000) freq += 30; 
+      osc.frequency.setValueAtTime(freq, self.ctx.currentTime);
+      gain.gain.setValueAtTime(0.1, self.ctx.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, self.ctx.currentTime+0.3);
+      osc.connect(gain); gain.connect(self.ctx.destination);
+      osc.start(); osc.stop(self.ctx.currentTime+0.3);
+      beat++;
+    }, bossModeActive ? 250 : 400);
+  }
+};
+
+var scene, camera, renderer, clock, player, limbs = {};
+var worldChunks = [], zombies = [], bullets = [], particles = [];
+var activeObstacles = []; 
+var score = 0, speed = 0.5, baseSpeed = 0.5;
+var isPlaying = false;
+var inputX = 0, inputY = 0, currentX = 0;
+var isJumping = false, jumpY = 0, lastChunkZ = 100;
+var gunMesh = null, gunSpawned = false, isShooterMode = false, hordeTimer = 0;
+var kills = 0, muzzleLight, startX = 0, startY = 0;
+var requiredKills = 30; 
+
+var bossModeActive = false, bossMesh = null, bossHP = 500, playerHP = 100;
+var bossState = 'idle', bossTimer = 0, bossArenaCenter = 0, postBossHardMode = false;
+var currentTier = 1;
+
+window.onload = function() { document.getElementById('loader').style.display = 'none'; initGame(); };
+window.addEventListener('resize', onWindowResize, false);
+
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function initGame() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x2a0e40); 
+  scene.fog = new THREE.Fog(0x2a0e40, 20, 160);
+  
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1500);
+  camera.position.set(0, 7, -12);
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+  
+  scene.add(new THREE.AmbientLight(0xffffff, 0.95)); 
+  var dir = new THREE.DirectionalLight(0xff0055, 1.4); dir.position.set(-10, 50, -20); scene.add(dir);
+  muzzleLight = new THREE.PointLight(0xffaa00, 0, 10); scene.add(muzzleLight);
+  
+  clock = new THREE.Clock();
+  createPlayer(); createGround();
+  
+  for(var z = 50; z > -1500; z -= 40) spawnChunk(z);
+  lastChunkZ = -1500;
+  
+  setupControls();
+  window.addEventListener('touchstart', function(){ if(!AudioSys.ctx) AudioSys.init(); }, {once:true});
+  window.addEventListener('mousedown', function(){ if(!AudioSys.ctx) AudioSys.init(); }, {once:true});
+  isPlaying = true; animate();
+}
+
+function createPlayer() {
+  player = new THREE.Group();
+  var matShirt = new THREE.MeshLambertMaterial({color: 0x00ffff});
+  var body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.4, 0.5), matShirt); body.position.y = 2.2;
+  var head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.6), new THREE.MeshLambertMaterial({color: 0xffccaa})); head.position.y = 3.3;
+  function mkLimb(x, y, mat) {
+    var g = new THREE.Group();
+    var m = new THREE.Mesh(new THREE.BoxGeometry(0.35, 1.5, 0.35), mat); m.position.y = -0.75;
+    g.add(m); g.position.set(x, y, 0); return g;
+  }
+  limbs.lLeg = mkLimb(-0.25, 1.5, new THREE.MeshLambertMaterial({color:0x222})); 
+  limbs.rLeg = mkLimb(0.25, 1.5, new THREE.MeshLambertMaterial({color:0x222}));
+  limbs.lArm = mkLimb(-0.7, 2.8, matShirt); 
+  limbs.rArm = mkLimb(0.7, 2.8, matShirt);
+  player.add(body, head, limbs.lLeg, limbs.rLeg, limbs.lArm, limbs.rArm);
+  scene.add(player);
+}
+
+function createGround() {
+  var road = new THREE.Mesh(new THREE.PlaneGeometry(50, 6000), new THREE.MeshPhongMaterial({color: 0x0a0a0a}));
+  road.rotation.x = -Math.PI/2; road.position.z = -2000; scene.add(road);
+  scene.add(new THREE.GridHelper(50, 20, 0xff0055, 0x00ffff));
+}
+
+function createBuilding(w, h, color) {
+    var g = new THREE.Group();
+    var b = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), new THREE.MeshLambertMaterial({color: 0x111111}));
+    b.position.y = h/2 - 4.0; g.add(b);
+    var edge = new THREE.Mesh(new THREE.BoxGeometry(w+0.2, 0.4, w+0.2), new THREE.MeshBasicMaterial({color: color})); edge.position.y = h - 4.0;
+    var strip = new THREE.Mesh(new THREE.BoxGeometry(0.4, h, 0.4), new THREE.MeshBasicMaterial({color: color})); strip.position.set(w/2, h/2 - 4.0, w/2);
+    g.add(edge, strip); return g;
+}
+
+function createObstacle(tier) {
+    var mesh, collisionHeight = 1.3;
+    var type = 0; 
+    
+    if(tier === 1) type = Math.floor(Math.random() * 5); 
+    if(tier === 2) type = 5 + Math.floor(Math.random() * 8); 
+    if(tier === 3) type = 13 + Math.floor(Math.random() * 7); 
+    if(tier === 4) type = 20 + Math.floor(Math.random() * 6); 
+
+    var matMetal = new THREE.MeshLambertMaterial({color: 0x888888});
+    var matDanger = new THREE.MeshLambertMaterial({color: 0xff0000});
+    var matNeon = new THREE.MeshBasicMaterial({color: 0x00ffff, wireframe: true});
+    var matHell = new THREE.MeshBasicMaterial({color: 0xff0000, wireframe: true}); 
+    
+    mesh = new THREE.Group();
+    var obsType = 'static';
+
+    if(type === 0) { 
+        var b = new THREE.Mesh(new THREE.BoxGeometry(6, 1.2, 1), matMetal); b.position.y = 0.6; mesh.add(b);
+    } else if (type === 1) { 
+        var c=new THREE.Mesh(new THREE.BoxGeometry(1.5,1.5,1.5), matNeon); c.position.y=0.75; mesh.add(c);
+    } else if (type === 2) { 
+        var b = new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,10), matDanger); b.rotation.z=Math.PI/2; b.position.y=0.5; mesh.add(b);
+        collisionHeight = 0.6; 
+    } else if (type === 3) {
+        var b = new THREE.Mesh(new THREE.BoxGeometry(3, 3, 1), matMetal); b.position.y=1.5; mesh.add(b);
+    } else if (type === 4) {
+        var b = new THREE.Mesh(new THREE.BoxGeometry(10, 0.5, 0.5), matDanger); b.position.y=0.25; mesh.add(b);
+        collisionHeight = 0.4;
+    }
+    else if (type === 5) { 
+        var b = new THREE.Mesh(new THREE.BoxGeometry(4, 2, 1), matDanger); b.position.y=1; mesh.add(b); obsType='slideLeft';
+    } else if (type === 6) { 
+        var b = new THREE.Mesh(new THREE.BoxGeometry(4, 2, 1), matDanger); b.position.y=1; mesh.add(b); obsType='slideRight';
+    } else if (type === 7) { 
+        var l = new THREE.Mesh(new THREE.BoxGeometry(6,3,1), matMetal); l.position.set(-7,1.5,0);
+        var r = new THREE.Mesh(new THREE.BoxGeometry(6,3,1), matMetal); r.position.set(7,1.5,0);
+        mesh.add(l,r); obsType='crush'; collisionHeight=2;
+    } else if (type === 8) { 
+        var b = new THREE.Mesh(new THREE.CylinderGeometry(0.8,0.8,12), matDanger); b.rotation.z=Math.PI/2; b.position.y=0.8; mesh.add(b);
+        obsType='rollZ'; collisionHeight = 0.9;
+    } else if (type === 9) { 
+        var s = new THREE.Mesh(new THREE.CylinderGeometry(0.1,0.1,4), matMetal); s.position.y=3;
+        var b = new THREE.Mesh(new THREE.SphereGeometry(1.2), matDanger); b.position.y=-2; s.add(b);
+        mesh.add(s); obsType='swing'; collisionHeight=2;
+    } else if (type === 10) { 
+        var b = new THREE.Mesh(new THREE.BoxGeometry(6,3,0.5), matMetal); b.position.y=-1.5; mesh.add(b); obsType='popup';
+    } else if (type === 11) {
+         var b1 = new THREE.Mesh(new THREE.BoxGeometry(8, 0.4, 0.4), matNeon); b1.position.y=0.2; 
+         var b2 = new THREE.Mesh(new THREE.BoxGeometry(8, 0.4, 0.4), matNeon); b2.position.y=0.2; b2.position.z=3;
+         mesh.add(b1, b2); collisionHeight = 0.5;
+    } else if (type === 12) {
+        var b = new THREE.Mesh(new THREE.BoxGeometry(10, 2, 1), matMetal); b.position.y=1; mesh.add(b);
+    }
+    else if (type === 13) { 
+        var b1 = new THREE.Mesh(new THREE.BoxGeometry(14,0.3,0.3), matNeon);
+        var b2 = new THREE.Mesh(new THREE.BoxGeometry(0.3,14,0.3), matNeon);
+        b1.position.y=2; b2.position.y=2; mesh.add(b1,b2); obsType='spinZ'; collisionHeight=3;
+    } else if (type === 14) { 
+        var c1 = new THREE.Mesh(new THREE.BoxGeometry(2.5,2.5,2.5), matNeon); c1.position.set(-3,2,0);
+        var c2 = new THREE.Mesh(new THREE.BoxGeometry(2.5,2.5,2.5), matNeon); c2.position.set(3,2,0);
+        mesh.add(c1,c2); obsType='float';
+    } else if (type === 15) { 
+        var b = new THREE.Mesh(new THREE.BoxGeometry(12,3,0.5), new THREE.MeshBasicMaterial({color:0xff00ff, transparent:true, opacity:0.6}));
+        b.position.y=1.5; mesh.add(b); obsType='blink'; collisionHeight=3;
+    } else if (type === 16) { 
+        var m = new THREE.Mesh(new THREE.TorusGeometry(2.5, 0.5, 8, 20), new THREE.MeshBasicMaterial({color:0x5500aa})); 
+        m.position.y=2; mesh.add(m); obsType='rotateY'; collisionHeight=2;
+    } else if (type === 17) { 
+        var b = new THREE.Mesh(new THREE.BoxGeometry(18, 0.8, 0.8), matDanger); b.position.y=0.4; mesh.add(b);
+        collisionHeight = 0.7; 
+    } else if (type === 18) { 
+        var l = new THREE.Mesh(new THREE.BoxGeometry(8,4,1), matMetal); l.position.set(-6,2,0);
+        var r = new THREE.Mesh(new THREE.BoxGeometry(8,4,1), matMetal); r.position.set(6,2,0);
+        mesh.add(l,r); obsType='slideGap';
+    } else if (type === 19) {
+        var b = new THREE.Mesh(new THREE.BoxGeometry(12,0.5,0.5), matDanger); b.position.y=1;
+        b.rotation.z = Math.random(); mesh.add(b); obsType='wiggle';
+    }
+    else if (type === 20) {
+        var b = new THREE.Mesh(new THREE.CylinderGeometry(1.5,1.5,20), matHell); 
+        b.rotation.z=Math.PI/2; b.position.y=1.0; mesh.add(b); obsType='rollZFast'; collisionHeight=1.4;
+    } else if (type === 21) {
+        var g = new THREE.Group();
+        for(var k=0; k<4; k++) {
+            var r = new THREE.Mesh(new THREE.BoxGeometry(20, 0.2, 0.2), matHell);
+            r.rotation.z = (Math.PI/4)*k; g.add(r);
+        }
+        g.position.y=2.5; mesh.add(g); obsType='spinZFast'; collisionHeight=4;
+    } else if (type === 22) {
+        var b = new THREE.Mesh(new THREE.BoxGeometry(20, 10, 1), new THREE.MeshLambertMaterial({color:0x000000}));
+        b.position.y=5;
+        var hole = new THREE.Mesh(new THREE.BoxGeometry(3,3,2), new THREE.MeshBasicMaterial({color:0x00ff00}));
+        hole.position.y = -3; hole.visible = false; 
+        mesh.add(b); obsType='slideFast'; 
+    } else if (type === 23) {
+        var g = new THREE.Group();
+        for(var k=0; k<3; k++) {
+            var r = new THREE.Mesh(new THREE.BoxGeometry(18, 0.3, 0.3), matHell);
+            r.position.set(0, 0.3, k*3); g.add(r);
+        }
+        mesh.add(g); collisionHeight=0.5;
+    } else if (type === 24) {
+        var h = new THREE.Mesh(new THREE.BoxGeometry(4,8,4), matMetal); h.position.y=6;
+        mesh.add(h); obsType='slam'; collisionHeight=3;
+    } else if (type === 25) {
+        var b = new THREE.Mesh(new THREE.BoxGeometry(6, 0.5, 6), matDanger); b.position.y=0.1;
+        mesh.add(b); 
+    }
+
+    mesh.userData = { isObstacle: true, collisionHeight: collisionHeight, moveType: obsType, initialX: 0, phase: Math.random()*10 };
+    return mesh;
+}
+
+function spawnZombie(x, z, parent, scale=1) {
+  var g = new THREE.Group();
+  var tier = 1;
+  if(score >= 1000) tier = 2;
+  if(score >= 2000) tier = 3;
+  if(score >= 3000) tier = 4;
+
+  var type = 'walker'; 
+  var skinCol = 0x334433; var shirtCol = 0x221111;
+  var rScale = scale; var fatness = 1;
+  var isGhost = false;
+
+  if (tier === 1) {
+      var types = ['walker', 'crawler', 'ghost', 'alien', 'brute'];
+      type = types[Math.floor(Math.random() * types.length)];
+  } 
+  else if (tier === 2) {
+      var types = ['cyborg', 'glitch', 'magma', 'ice', 'shadow', 'headless', 'twin', 'floater', 'spiked', 'neon'];
+      type = types[Math.floor(Math.random() * types.length)];
+  }
+  else if (tier === 3 || tier === 4) {
+      type = 'mutant_' + Math.floor(Math.random() * 20);
+  }
+
+  if(type === 'walker') { }
+  else if(type === 'crawler') { rScale = 0.8; }
+  else if(type === 'ghost') { skinCol = 0xeeeeee; shirtCol = 0xffffff; isGhost = true; }
+  else if(type === 'alien') { skinCol = 0x00ff00; shirtCol = 0x440044; rScale = 1.1; fatness = 0.6; }
+  else if(type === 'brute') { skinCol = 0x883333; shirtCol = 0x111111; rScale = 1.4; fatness = 1.5; }
+  else if(type === 'cyborg') { skinCol = 0x888888; shirtCol = 0x444444; }
+  else if(type === 'glitch') { skinCol = 0x00ff00; shirtCol = 0xff00ff; }
+  else if(type === 'magma') { skinCol = 0xff4400; shirtCol = 0x220000; }
+  else if(type === 'ice') { skinCol = 0x00ffff; shirtCol = 0xffffff; }
+  else if(type === 'shadow') { skinCol = 0x000000; shirtCol = 0x111111; }
+  else if(type === 'neon') { skinCol = 0xff00aa; shirtCol = 0x00ffaa; }
+  
+  if (type.startsWith('mutant_')) {
+      skinCol = Math.random() * 0xffffff;
+      shirtCol = Math.random() * 0xffffff;
+      rScale = 0.8 + Math.random();
+      fatness = 0.5 + Math.random();
+  }
+
+  var matSkin = new THREE.MeshLambertMaterial({color: skinCol, transparent: isGhost, opacity: isGhost?0.5:1}); 
+  var matShirt = new THREE.MeshLambertMaterial({color: shirtCol, transparent: isGhost, opacity: isGhost?0.5:1});
+  if(type === 'magma' || type === 'neon' || type.startsWith('mutant_')) {
+      matSkin = new THREE.MeshBasicMaterial({color: skinCol}); 
+  }
+  var matEyes = new THREE.MeshBasicMaterial({color: (type==='alien'?0x000000:0xff0000)});
+  
+  var bodyGroup = new THREE.Group();
+  if(type === 'crawler') { bodyGroup.rotation.x = 1.4; bodyGroup.position.y = 0.5; }
+  if(type === 'floater') { bodyGroup.position.y = 1.5; }
+  g.add(bodyGroup);
+
+  var headGroup = new THREE.Group(); headGroup.position.y = 2.8 * rScale;
+  var headGeo = new THREE.BoxGeometry(0.55*rScale*fatness, 0.5*rScale, 0.6*rScale);
+  if(type === 'alien') headGeo = new THREE.ConeGeometry(0.4*rScale, 0.8*rScale, 8); 
+  if(type.startsWith('mutant_')) {
+      if(Math.random()>0.5) headGeo = new THREE.SphereGeometry(0.4*rScale, 8, 8);
+      else headGeo = new THREE.CylinderGeometry(0.3*rScale, 0.6*rScale, 6);
+  }
+
+  if(type !== 'headless') {
+      var cranium = new THREE.Mesh(headGeo, matSkin);
+      var jaw = new THREE.Mesh(new THREE.BoxGeometry(0.5*rScale*fatness, 0.3*rScale, 0.5*rScale), matSkin); 
+      jaw.position.y = -0.3*rScale; jaw.rotation.x = 0.3; 
+      headGroup.add(cranium, jaw);
+      if(type !== 'alien') {
+        var le = new THREE.Mesh(new THREE.BoxGeometry(0.1*rScale,0.1*rScale,0.1*rScale), matEyes); le.position.set(-0.16*rScale, 0.1*rScale, -0.3*rScale);
+        var re = new THREE.Mesh(new THREE.BoxGeometry(0.1*rScale,0.1*rScale,0.1*rScale), matEyes); re.position.set(0.16*rScale, 0.1*rScale, -0.3*rScale);
+        headGroup.add(le, re);
+      }
+      if(type === 'twin') { var head2 = cranium.clone(); head2.position.x = 0.5; headGroup.add(head2); }
+  }
+
+  var body = new THREE.Mesh(new THREE.BoxGeometry(0.7*rScale*fatness, 1.4*rScale, 0.4*rScale), matShirt); body.position.y = 2.0*rScale;
+  function mkLimb(w, h, d, px, py, pz, mat) { var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(px, py, pz); m.geometry.translate(0, -h/2, 0); return m; }
+  var armLen = 1.2 * rScale;
+  if(type === 'slender' || type === 'shadow') armLen = 2.5 * rScale;
+  var lArm = mkLimb(0.2*rScale, armLen, 0.2*rScale, -0.5*rScale*fatness, 2.6*rScale, 0, matSkin);
+  var rArm = mkLimb(0.2*rScale, armLen, 0.2*rScale, 0.5*rScale*fatness, 2.6*rScale, 0, matSkin);
+  var lLeg = mkLimb(0.25*rScale, 1.5*rScale, 0.25*rScale, -0.2*rScale*fatness, 1.4*rScale, 0, matShirt);
+  var rLeg = mkLimb(0.25*rScale, 1.5*rScale, 0.25*rScale, 0.2*rScale*fatness, 1.4*rScale, 0, matShirt);
+  if(type === 'spiked' || type === 'ice' || type.startsWith('mutant_')) { var spike = new THREE.Mesh(new THREE.ConeGeometry(0.2, 1, 4), matSkin); spike.position.set(0, 3, -0.3); spike.rotation.x = -1; bodyGroup.add(spike); }
+  bodyGroup.add(headGroup, body, lArm, rArm);
+  if(type !== 'floater') bodyGroup.add(lLeg, rLeg);
+
+  g.position.set(x, 0, z);
+  g.userData = { speed: 0.2 + Math.random()*0.1, offset: Math.random()*100, type: type, isBoss: scale > 1 };
+  if(scale > 1) bossMesh = g; else zombies.push(g);
+  scene.add(g); 
+  return g;
+}
+
+function spawnChunk(z) {
+  var g = new THREE.Group();
+  for(var side of [-1, 1]) {
+    var x = side * (28 + Math.random()*4);
+    var h = 25 + Math.random() * 30;
+    var w = 10;
+    var envCol = 0x00ffff; 
+    if(score > 1000) envCol = 0xff00ff; 
+    if(score > 2000) envCol = 0xff0000; 
+    if(score > 3000) envCol = 0x550000; 
+
+    var b = createBuilding(w, h, envCol); b.position.set(x, 0, z); g.add(b);
+  }
+
+  // --- NEW: NEON BRIDGE BARRIERS (जगह कम करने के लिए) ---
+  var neonColor = (score > 3000) ? 0xff0000 : 0x00ffff;
+  
+  var baseMat = new THREE.MeshLambertMaterial({color: 0x111122});
+  var leftBase = new THREE.Mesh(new THREE.BoxGeometry(2, 0.5, 40), baseMat); leftBase.position.set(-6.5, 0.25, z);
+  var rightBase = new THREE.Mesh(new THREE.BoxGeometry(2, 0.5, 40), baseMat); rightBase.position.set(6.5, 0.25, z);
+
+  var railMat = new THREE.MeshBasicMaterial({color: neonColor, transparent: true, opacity: 0.6, wireframe: true});
+  var leftRail = new THREE.Mesh(new THREE.BoxGeometry(0.5, 4, 40), railMat); leftRail.position.set(-5.5, 2, z);
+  var rightRail = new THREE.Mesh(new THREE.BoxGeometry(0.5, 4, 40), railMat); rightRail.position.set(5.5, 2, z);
+
+  g.add(leftBase, rightBase, leftRail, rightRail);
+
+  if(!isShooterMode && !bossModeActive && z < -200) { 
+     var spawnChance = 0.4; if(score > 1000) spawnChance = 0.6; if(score > 2000) spawnChance = 0.8;
+
+     if(Math.random() < spawnChance) {
+         var spawnX = (Math.random()-0.5) * 8; // संकरे ब्रिज के अंदर ज़ॉम्बी
+         spawnZombie(spawnX, z, null);
+     } else {
+         if(Math.random() > 0.4) {
+             var tier = 1; 
+             if(score>1000) tier=2; 
+             if(score>2000) tier=3;
+             if(score>3000) tier=4; 
+             
+             var obs = createObstacle(tier);
+             var rx = (Math.random() - 0.5) * 7; // संकरे ब्रिज के अंदर रुकावटें
+             
+             if(tier >= 3 && Math.random() > 0.5) rx = 0; 
+             
+             obs.position.set(rx, obs.position.y, z);
+             obs.userData.initialX = rx;
+             g.add(obs); activeObstacles.push(obs);
+         }
+     }
+  }
+  scene.add(g); worldChunks.push({mesh: g, z: z});
+}
+
+function equipGun(mode) {
+  AudioSys.play('equip');
+  gunSpawned = false; if(gunMesh) scene.remove(gunMesh);
+  player.position.y = 0; isJumping = false; jumpY = 0;
+  player.rotation.y = 0; player.rotation.z = 0;
+
+  if(mode === 'boss') {
+      bossModeActive = true;
+      document.getElementById('boss-ui').style.display = 'block';
+      zombies.forEach(z => scene.remove(z)); zombies = [];
+      activeObstacles.forEach(o => o.parent.remove(o)); activeObstacles = [];
+      spawnBoss();
+  } else {
+      isShooterMode = true; speed = 0; 
+      requiredKills = (score > 2000) ? 65 : 30; 
+      if(score > 3000) requiredKills = 100;
+      kills = 0; 
+      document.getElementById('kill-bar').innerText = "KILLS: "+kills+"/"+requiredKills;
+      document.getElementById('kill-bar').style.display = 'block';
+  }
+  document.getElementById('jump-btn').style.display = 'none';
+  document.getElementById('fire-btn').style.display = 'flex';
+  var gun = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 1), new THREE.MeshBasicMaterial({color: 0xff0000}));
+  gun.position.set(0, -0.6, -0.5); limbs.rArm.add(gun);
+  limbs.lArm.rotation.x = -1.5; limbs.rArm.rotation.x = -1.5;
+}
+
+function spawnBoss() {
+    bossArenaCenter = player.position.z - 100; 
+    spawnZombie(0, bossArenaCenter - 50, null, 3.5); 
+    bossHP = 500; if(score > 3000) bossHP = 1000;
+    playerHP = 100;
+    updateHealthUI();
+    scene.fog = new THREE.Fog(0x330000, 10, 350); 
+}
+
+function updateHealthUI() {
+    var maxBoss = (score > 3000) ? 1000 : 500;
+    document.getElementById('boss-hp-bar').style.width = (bossHP/maxBoss * 100) + "%";
+    document.getElementById('player-hp-bar').style.width = playerHP + "%";
+}
+
+function spawnBullet() {
+  AudioSys.play('gun');
+  muzzleLight.intensity = 5;
+  muzzleLight.position.set(player.position.x, 2.5, player.position.z - 2);
+  setTimeout(() => muzzleLight.intensity = 0, 50);
+  
+  var dirZ = -1;
+  if(bossModeActive && Math.abs(player.rotation.y - Math.PI) < 0.1) dirZ = 1;
+
+  var b = new THREE.Mesh(new THREE.SphereGeometry(0.3), new THREE.MeshBasicMaterial({color: 0xffff00}));
+  b.position.set(player.position.x, 2.5, player.position.z + dirZ);
+  b.userData = { dx: 0, dz: dirZ };
+  scene.add(b); bullets.push(b);
+}
+
+function triggerGameOver(reason) {
+    isPlaying = false;
+    AudioSys.play('death');
+    document.getElementById('death-reason').innerText = reason;
+    document.getElementById('game-over').style.display = 'flex';
+
+    // --- NEW: CALL ANDROID AD ---
+    if(window.Android) {
+        window.Android.showInterstitialAd();
+    }
+}
+
+function animate() {
+  if(!isPlaying) return;
+  requestAnimationFrame(animate);
+  var time = clock.getElapsedTime();
+
+  var newTier = 1;
+  if(score >= 1000) newTier = 2;
+  if(score >= 2000) newTier = 3;
+  if(score >= 3000) newTier = 4;
+
+  if(newTier > currentTier) {
+      currentTier = newTier;
+      var msg = document.getElementById('phase-msg');
+      var txt = "MUTATION PHASE!";
+      if(newTier === 3) txt = "MULTIVERSE COLLAPSE!";
+      if(newTier === 4) txt = "HELLFIRE MODE!";
+      msg.innerText = txt;
+      msg.style.display = 'block';
+      AudioSys.play('phase');
+      setTimeout(() => msg.style.display = 'none', 3000);
+  }
+
+  if(!bossModeActive) {
+      currentX += (inputX * 10 - currentX) * 0.15;
+      
+      // कैरेक्टर की जगह कम कर दी गई है (नियोन ब्रिज के अंदर रहने के लिए)
+      if(currentX > 5) currentX = 5; 
+      if(currentX < -5) currentX = -5;
+      
+      player.position.x = currentX;
+  }
+
+  for(var obs of activeObstacles) {
+      var ph = obs.userData.phase;
+      var mSpeed = 1.0; if(score > 3000) mSpeed = 2.0;
+
+      if(obs.userData.moveType === 'slideLeft') obs.position.x -= 0.1 * mSpeed;
+      if(obs.userData.moveType === 'slideRight') obs.position.x += 0.1 * mSpeed;
+      if(obs.userData.moveType === 'slide') obs.position.x = obs.userData.initialX + Math.sin(time*2+ph)*5;
+      if(obs.userData.moveType === 'spin' || obs.userData.moveType === 'spinZ') obs.children[0].rotation.z += 0.1;
+      
+      if(obs.userData.moveType === 'crush') { 
+          obs.children[0].position.x = -6 + Math.sin(time*(2*mSpeed))*2; 
+          obs.children[1].position.x = 6 - Math.sin(time*(2*mSpeed))*2; 
+      }
+      if(obs.userData.moveType === 'swing') obs.children[0].rotation.z = Math.sin(time*3)*1;
+      if(obs.userData.moveType === 'popup') obs.children[0].position.y = -1.5 + Math.abs(Math.sin(time*mSpeed))*3;
+      if(obs.userData.moveType === 'float') obs.position.y = 2 + Math.sin(time*2);
+      if(obs.userData.moveType === 'blink') obs.visible = Math.floor(time*5)%2===0;
+      if(obs.userData.moveType === 'rotateY') obs.rotation.y += 0.05;
+      if(obs.userData.moveType === 'wiggle') obs.rotation.z = Math.sin(time*10)*0.2;
+      if(obs.userData.moveType === 'slideGap') {
+           var gapOffset = Math.sin(time*1.5) * 5;
+           obs.children[0].position.x = -6 + gapOffset;
+           obs.children[1].position.x = 6 + gapOffset;
+      }
+      if(obs.userData.moveType === 'rollZ' || obs.userData.moveType === 'rollZFast') obs.children[0].rotation.x += (obs.userData.moveType==='rollZFast' ? 0.3 : 0.1);
+      if(obs.userData.moveType === 'spinZFast') obs.children[0].rotation.z += 0.15;
+      if(obs.userData.moveType === 'slideFast') obs.position.x = Math.sin(time*3) * 6;
+      if(obs.userData.moveType === 'slam') obs.children[0].position.y = 2 + Math.abs(Math.sin(time*4))*6; 
+  }
+
+  for(var i=zombies.length-1; i>=0; i--) {
+    var z = zombies[i];
+    var bg = z.children[0]; 
+    var w = time * 10 + z.userData.offset;
+    
+    if(bg && bg.children.length >= 4) {
+        var lIdx = 2, rIdx = 3; 
+        if(z.userData.type === 'crawler') {
+             bg.children[lIdx].rotation.x = -1.5 + Math.sin(w*2);
+             bg.children[rIdx].rotation.x = -1.5 + Math.cos(w*2);
+        } else if (z.userData.type === 'ghost' || z.userData.type === 'floater') {
+             z.position.y = 1 + Math.sin(w*0.5)*0.5;
+        } else {
+             bg.children[lIdx].rotation.x = -0.5 + Math.sin(w)*0.4; 
+             bg.children[rIdx].rotation.x = -0.5 + Math.cos(w)*0.4;
+        }
+    }
+
+    if(!bossModeActive && !isShooterMode) {
+        var zSpeed = 0.4; 
+        if(currentTier === 2) zSpeed = 0.5;
+        if(currentTier === 3) zSpeed = 0.6;
+        if(currentTier === 4) zSpeed = 0.8; 
+        z.position.z += zSpeed; 
+    } 
+    else if(isShooterMode) {
+        if(z.position.z < player.position.z + 0.5) {
+             z.lookAt(player.position.x, 0, player.position.z);
+             z.translateZ(z.userData.speed);
+        } else {
+             z.position.z += z.userData.speed;
+             if(z.position.z > player.position.z + 20) { scene.remove(z); zombies.splice(i,1); continue; }
+        }
+    }
+    if(z.position.distanceTo(player.position) < 1.5) triggerGameOver('KILLED BY HORDE');
+    if(z.position.z > player.position.z + 30) { scene.remove(z); zombies.splice(i,1); }
+  }
+
+  if(!isShooterMode && !bossModeActive) {
+    player.position.z -= speed; score += 0.2;
+    player.rotation.y = 0; player.rotation.z = 0;
+    
+    var targetSpeed = baseSpeed; 
+    if(score > 1000) targetSpeed = 0.6; 
+    if(score > 2000) targetSpeed = 0.7;
+    if(score > 3000) targetSpeed = 0.85; 
+
+    if(gunSpawned && gunMesh) {
+       gunMesh.position.x = 0; gunMesh.rotation.y += 0.05;
+       if(Math.abs(player.position.z - gunMesh.position.z) < 30) {
+           gunMesh.position.x += (player.position.x - gunMesh.position.x) * 0.15;
+       }
+       var distToGun = Math.abs(player.position.z - gunMesh.position.z);
+       if(distToGun < 30) { speed = speed * 0.95; if(speed < 0.05) speed = 0.05; }
+       if(distToGun < 3.0) { score > 3500 ? equipGun('boss') : equipGun('normal'); }
+    } else {
+        if(speed < targetSpeed) speed += 0.01;
+    }
+
+    if(!isJumping) {
+      var rs = time * 14; 
+      limbs.lLeg.rotation.x = Math.sin(rs)*0.8; limbs.rLeg.rotation.x = Math.sin(rs+Math.PI)*0.8;
+      limbs.lArm.rotation.x = Math.sin(rs+Math.PI)*0.8; limbs.rArm.rotation.x = Math.sin(rs)*0.8;
+      player.position.y = Math.abs(Math.sin(rs*2))*0.2;
+    } else {
+      player.position.y += jumpY; jumpY -= 0.025;
+      if(player.position.y <= 0) { player.position.y = 0; isJumping = false; }
+    }
+    
+    if((score > 2000 && score < 2100 && !gunSpawned && kills < 30) || (score > 3500 && !gunSpawned && !postBossHardMode)) { 
+        createGunPickup(player.position.z - 50); gunSpawned = true; 
+    }
+    
+    for(var i = activeObstacles.length - 1; i >= 0; i--) {
+        var obs = activeObstacles[i];
+        if(Math.abs(obs.position.z - player.position.z) < 1.0) {
+             var width = 1.0; 
+             if (obs.userData.moveType === 'spin' || obs.userData.moveType === 'crush' || obs.userData.moveType === 'blink' || obs.userData.moveType === 'slam') width = 5.0; 
+             if (obs.userData.moveType === 'spinZFast' || obs.userData.moveType === 'rollZ' || obs.userData.moveType === 'rollZFast') width = 6.0;
+
+             if(Math.abs(obs.position.x - player.position.x) < (width/2 + 0.4)) {
+                if(player.position.y < (obs.userData.collisionHeight || 1.3)) triggerGameOver('HIT AN OBSTACLE');
+             }
+        }
+    }
+    if(player.position.z < lastChunkZ + 200) { spawnChunk(lastChunkZ - 40); lastChunkZ -= 40; }
+  } 
+  
+  else if (isShooterMode && !bossModeActive) {
+      player.position.y = 0;
+      limbs.lLeg.rotation.x = 0.4; limbs.rLeg.rotation.x = -0.4;
+      player.rotation.y = -inputX * 0.5; 
+      
+      var maxZombiesOnScreen = 6; 
+      if(score > 3000) maxZombiesOnScreen = 7; 
+
+      hordeTimer++;
+      if(zombies.length < maxZombiesOnScreen && hordeTimer > 40) { 
+          var zOffset = player.position.z - 50 - (Math.random() * 20);
+          spawnZombie((Math.random()-0.5)*20, zOffset, null); 
+          hordeTimer = 0; 
+      }
+  }
+  
+  else if (bossModeActive) {
+      player.position.z += inputY * 0.8; 
+      player.position.x += inputX * 0.8;
+      if(Math.abs(inputY) > 0.1) {
+          if(inputY < 0) player.rotation.y = Math.PI; else player.rotation.y = 0; 
+      }
+      if(player.position.z > bossArenaCenter + 200) player.position.z = bossArenaCenter + 200;
+      if(player.position.z < bossArenaCenter - 200) player.position.z = bossArenaCenter - 200;
+      if(player.position.x > 40) player.position.x = 40; if(player.position.x < -40) player.position.x = -40;
+
+      if(bossMesh) {
+          bossTimer++;
+          var w = time * 4;
+          var bg = bossMesh.children[0];
+          if(bossState === 'idle') {
+              bossMesh.lookAt(player.position.x, 0, player.position.z);
+              if(bossTimer > 80) { bossState = 'jump'; bossTimer = 0; AudioSys.play('jump'); }
+          } else if(bossState === 'jump') {
+              bossMesh.position.y += 0.8; 
+              var dz = player.position.z - bossMesh.position.z;
+              var dx = player.position.x - bossMesh.position.x;
+              bossMesh.position.z += dz * 0.02;
+              bossMesh.position.x += dx * 0.02;
+              if(bossMesh.position.y > 15) bossState = 'fall';
+          } else if(bossState === 'fall') {
+               bossMesh.position.y -= 0.8; 
+               if(bossMesh.position.y <= 0) {
+                   bossMesh.position.y = 0; bossState = 'idle'; AudioSys.play('death'); 
+                   if(bossMesh.position.distanceTo(player.position) < 8) {
+                       playerHP -= 20; updateHealthUI();
+                       if(playerHP <= 0) triggerGameOver('CRUSHED BY BOSS');
+                   }
+               }
+          }
+      }
+  }
+
+  var targetCamZ = player.position.z + (bossModeActive ? 40 : (isShooterMode ? 8 : 12));
+  camera.position.z += (targetCamZ - camera.position.z) * 0.1;
+  camera.position.x += ((player.position.x * 0.5) - camera.position.x) * 0.1;
+  if(bossModeActive) {
+      camera.lookAt(player.position.x, 2, player.position.z);
+  } else {
+      camera.lookAt(player.position.x, 2, player.position.z - 20);
+  }
+
+  for(var i=bullets.length-1; i>=0; i--) {
+    var b = bullets[i];
+    b.position.x += b.userData.dx * 3; b.position.z += b.userData.dz * 3;
+    for(var j=zombies.length-1; j>=0; j--) {
+      if(b.position.distanceTo(zombies[j].position) < 3.5) {
+        createBloodEffect(zombies[j].position);
+        scene.remove(zombies[j]); zombies.splice(j,1); scene.remove(b); bullets.splice(i,1);
+        if(!bossModeActive) {
+            kills++; document.getElementById('kill-bar').innerText = "KILLS: "+kills+"/"+requiredKills;
+            if(kills>=requiredKills) endShooterMode();
+        }
+        break;
+      }
+    }
+    if(bossModeActive && b && bossMesh && b.position.distanceTo(bossMesh.position) < 6) {
+        bossHP -= 10; updateHealthUI(); createBloodEffect(b.position);
+        scene.remove(b); bullets.splice(i,1);
+        if(bossHP <= 0) endBossBattle();
+    }
+    if(b && b.position.distanceTo(player.position) > 300) { scene.remove(b); bullets.splice(i,1); }
+  }
+  
+  for(var i=particles.length-1; i>=0; i--){
+      var p = particles[i]; p.position.add(p.userData.vel); p.scale.multiplyScalar(0.9);
+      if(p.scale.x < 0.05) { scene.remove(p); particles.splice(i,1); }
+  }
+
+  document.getElementById('score').innerText = Math.floor(score);
+  renderer.render(scene, camera);
+}
+
+function createGunPickup(z) {
+  if(gunMesh) scene.remove(gunMesh);
+  gunMesh = new THREE.Group();
+  var b = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 1.5), new THREE.MeshBasicMaterial({color: 0xff0000}));
+  var g = new THREE .Mesh(new THREE.BoxGeometry(0.8, 0.8, 1.8), new THREE.MeshBasicMaterial({color: 0xffaa00, wireframe:true}));
+  gunMesh.add(b); gunMesh.add(g);
+  gunMesh.position.set(0, 2, z);
+  scene.add(gunMesh);
+}
+
+function createBloodEffect(pos) {
+    for(var i=0; i<12; i++){
+        var p = new THREE.Mesh(new THREE.BoxGeometry(0.4,0.4,0.4), new THREE.MeshBasicMaterial({color:0xaa0000}));
+        p.position.copy(pos);
+        p.userData = { vel: new THREE.Vector3((Math.random()-0.5), Math.random(), (Math.random()-0.5)) };
+        scene.add(p); particles.push(p);
+    }
+}
+
+function endShooterMode() {
+    isShooterMode = false; speed = baseSpeed; gunSpawned = false; 
+    document.getElementById('kill-bar').style.display='none'; 
+    document.getElementById('fire-btn').style.display='none'; 
+    document.getElementById('jump-btn').style.display='flex'; 
+    limbs.rArm.remove(limbs.rArm.children[1]); 
+    limbs.lArm.rotation.x = 0; limbs.rArm.rotation.x = 0;
+    activeObstacles = [];
+    baseSpeed += 0.1; 
+}
+
+function endBossBattle() {
+    bossModeActive = false; postBossHardMode = true;
+    scene.remove(bossMesh); bossMesh = null;
+    document.getElementById('boss-ui').style.display = 'none';
+    scene.fog = new THREE.Fog(0x440000, 20, 160); speed = baseSpeed + 0.2; 
+    document.getElementById('fire-btn').style.display='none'; 
+    document.getElementById('jump-btn').style.display='flex'; 
+    limbs.rArm.remove(limbs.rArm.children[1]); 
+    limbs.lArm.rotation.x = 0; limbs.rArm.rotation.x = 0;
+    player.rotation.y = 0;
+}
+
+function setupControls() {
+  var zone = document.getElementById('joystick-zone');
+  var stick = document.getElementById('stick'); var dragging = false;
+  function handleMove(cx, cy) {
+      var dx = Math.max(-50, Math.min(50, cx - startX)); 
+      var dy = Math.max(-50, Math.min(50, cy - startY));
+      stick.style.transform = `translate(-50%, -50%) translate(${dx}px, ${dy}px)`; 
+      inputX = dx/50; inputY = dy/50;
+  }
+  zone.addEventListener('mousedown', function(e) { dragging = true; startX = e.clientX; startY = e.clientY; });
+  window.addEventListener('mousemove', function(e) { if(dragging) handleMove(e.clientX, e.clientY); });
+  window.addEventListener('mouseup', function() { dragging = false; inputX = 0; inputY = 0; stick.style.transform = 'translate(-50%, -50%)'; });
+  zone.addEventListener('touchstart', function(e) { e.preventDefault(); startX = e.touches[0].clientX; startY = e.touches[0].clientY; }, {passive:false});
+  zone.addEventListener('touchmove', function(e) { e.preventDefault(); handleMove(e.touches[0].clientX, e.touches[0].clientY); }, {passive:false});
+  zone.addEventListener('touchend', function(e) { e.preventDefault(); inputX = 0; inputY = 0; stick.style.transform = 'translate(-50%, -50%)'; });
+  var jump = document.getElementById('jump-btn');
+  var fire = document.getElementById('fire-btn');
+  jump.addEventListener('mousedown', function(){ if(!isShooterMode && !bossModeActive && !isJumping) { AudioSys.play('jump'); isJumping = true; jumpY = 0.45; } });
+  jump.addEventListener('touchstart', function(e){ e.preventDefault(); if(!isShooterMode && !bossModeActive && !isJumping) { AudioSys.play('jump'); isJumping = true; jumpY = 0.45; } });
+  fire.addEventListener('mousedown', spawnBullet);
+  fire.addEventListener('touchstart', function(e){ e.preventDefault(); spawnBullet(); });
+}
+</script>
+</body>
+</html>
