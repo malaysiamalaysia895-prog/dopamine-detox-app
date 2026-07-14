@@ -26,7 +26,14 @@ The main game — a merge-puzzle with boss battles, alien/creature/spaceship vil
 ### 2. Dopamine Detox (Flutter utility app)
 App-blocking / focus timer app. Source in `flutter_dopamine_detox/`. Versioned tar archives (`flutter_dopamine_detox_v*.tar.gz`) are snapshots.
 
-### 3. Node.js API server (scaffold)
+### 3. 3D Neon Runner (HTML/Three.js game, `3d-game` branch)
+- Located in `game/` (plain HTML + Three.js r128, no build step): `game/index.html`, `game/three.min.js`, fonts/CSS under `game/assets/` and `game/fonts/`.
+- This project only exists on the `3d-game` GitHub branch of `malaysiamalaysia895-prog/dopamine-detox-app` — not on `main`.
+- Run/preview: workflow "3D Game Preview" runs `node scripts/serve-3d-game.cjs`, a static file server for `game/`, on port 8080.
+- Character, jump animation, neon bridge lights, and building window textures were enhanced directly in `game/index.html` (single-file game — all logic lives in the inline `<script>`).
+- **Push convention:** per user instruction, changes made while on this branch should be pushed to `3d-game`, not `main`.
+
+### 4. Node.js API server (scaffold)
 - Located in `artifacts/api-server/`
 - Stack: Express 5, Drizzle ORM, PostgreSQL, Zod
 - Run: `pnpm --filter @workspace/api-server run dev` (port 5000)
