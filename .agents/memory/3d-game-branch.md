@@ -18,5 +18,9 @@ description: Where the standalone Three.js "Zombie Neon" / "Multiverse Crash" ga
 - If Play Store packaging is requested again later, a prior attempt used a separate `NEON_GAME_KEYSTORE_BASE64`/`NEON_GAME_KEY_ALIAS`/`NEON_GAME_KEY_PASSWORD`/`NEON_GAME_STORE_PASSWORD` GitHub-secrets pattern (repo Settings > Secrets and variables > Actions) with a `build-neon-game.yml` workflow — that workflow was deleted per this instruction but the pattern is still valid to redo if asked.
 - The repo already had two unrelated Flutter-based Actions (`build.yml` on push to `main`, `build-apk.yml` on push to `Merge-app`) for a different app (`dopamine_detox`) — pushing to `3d-game`/`neon-game` never triggers those, which is expected, not a bug.
 
+## Gitignore trap in this repo
+- The repo root `.gitignore` has a bare `package.json` rule (meant to keep an old Node/React scaffold out of this now-Flutter-primary repo) that silently ignores **every** `package.json` anywhere in the tree, not just the root one. Any new Node subproject (like `mobile-app/`) needs an explicit `!mobile-app/package.json` negation added right after that line, or its `package.json` never gets committed and CI's `npm install` mysteriously runs the *root* `workspace@0.0.0` preinstall script instead (which hard-fails with "Use pnpm instead") because npm falls back to the nearest tracked/ancestor package.json when the local one is absent from a fresh clone.
+- After adding any new file under a gitignored-by-pattern directory, verify it's actually tracked with `git ls-tree -r HEAD --name-only` / `git check-ignore -v <path>` before assuming a commit picked it up — `git add -A` gives no error for silently-ignored paths.
+
 ## Safety lesson
 - `git remote get-url origin` in this repo prints an embedded GitHub PAT in cleartext (the origin URL has a token baked in) — never run/display that command's raw output; push directly instead (`git push origin <local>:<remote>`) without inspecting the URL.
