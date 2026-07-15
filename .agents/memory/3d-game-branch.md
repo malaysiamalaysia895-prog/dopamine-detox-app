@@ -12,9 +12,10 @@ description: Where the standalone Three.js "Zombie Neon" / "Multiverse Crash" ga
 - Everything the game needs is local under `game/assets/`: `assets/js/three.min.js` + Three.js r128 addon UMD builds (GLTFLoader, EffectComposer, RenderPass, ShaderPass, UnrealBloomPass, CopyShader, LuminosityHighPassShader — loaded in that dependency order, not yet wired into the active render loop, for future levels), `assets/fonts/*` (Creepster-Regular.ttf, Orbitron-900.woff2), and `assets/js/character.js` (reusable player-rig module, `window.ZombieCharacter.create(scene)`).
 - No CDN references anywhere in `index.html` — keep it that way for offline play.
 
-## Play Store Android build
-- A Capacitor Android wrapper lives in `mobile-app/` (appId `com.vikky.zombieneon`, app name "Multiverse crash"). It copies `game/` into `mobile-app/www/` and wraps it in a WebView via `npx cap sync android`.
-- GitHub Actions workflow `.github/workflows/build-neon-game.yml` triggers on push to the `neon-game` branch, builds a release APK + AAB, and signs them if the repo has secrets `NEON_GAME_KEYSTORE_BASE64`, `NEON_GAME_KEY_ALIAS`, `NEON_GAME_KEY_PASSWORD`, `NEON_GAME_STORE_PASSWORD` set (Settings > Secrets and variables > Actions on GitHub — these are GitHub repo secrets, not Replit secrets, so they can't be set from this sandbox).
+## Android build (currently: local test only, not Play Store)
+- A Capacitor Android wrapper lives in `mobile-app/` (test appId `com.test.zombieneon`). It copies `game/` into `mobile-app/www/` and wraps it in a WebView via `npx cap sync android`.
+- GitHub Actions workflow `.github/workflows/build-debug.yml` triggers on push to the `neon-game` branch and builds only an **unsigned debug APK** artifact for sideloading onto a phone to test gameplay — no keystore, no signing, no production package ID. The user explicitly asked to stop all Play Store/signing/production-ID work until the game itself is finished; do not reintroduce a release/signing workflow or ask for a production package ID unless the user asks again.
+- If Play Store packaging is requested again later, a prior attempt used a separate `NEON_GAME_KEYSTORE_BASE64`/`NEON_GAME_KEY_ALIAS`/`NEON_GAME_KEY_PASSWORD`/`NEON_GAME_STORE_PASSWORD` GitHub-secrets pattern (repo Settings > Secrets and variables > Actions) with a `build-neon-game.yml` workflow — that workflow was deleted per this instruction but the pattern is still valid to redo if asked.
 - The repo already had two unrelated Flutter-based Actions (`build.yml` on push to `main`, `build-apk.yml` on push to `Merge-app`) for a different app (`dopamine_detox`) — pushing to `3d-game`/`neon-game` never triggers those, which is expected, not a bug.
 
 ## Safety lesson
