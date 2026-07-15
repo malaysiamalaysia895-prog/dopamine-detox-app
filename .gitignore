@@ -55,6 +55,7 @@ dist/
 pnpm-lock.yaml
 pnpm-workspace.yaml
 package.json
+!mobile-app/package.json
 tsconfig*.json
 *.tsbuildinfo
 .turbo/
