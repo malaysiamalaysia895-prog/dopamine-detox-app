@@ -1,0 +1,64 @@
+name: Build Debug APK (Zombie Neon test)
+
+on:
+  push:
+    branches: [ neon-game ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build unsigned debug APK for local phone testing
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Install wrapper dependencies
+        working-directory: mobile-app
+        run: npm install
+
+      - name: Copy latest game into the wrapper's web assets
+        run: |
+          rm -rf mobile-app/www
+          mkdir -p mobile-app/www
+          cp -r game/* mobile-app/www/
+
+      - name: Sync Capacitor Android project
+        working-directory: mobile-app
+        run: npx cap sync android
+
+      - name: Build debug APK (unsigned, test ID com.test.zombieneon)
+        working-directory: mobile-app/android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Collect build output
+        run: |
+          mkdir -p dist
+          cp mobile-app/android/app/build/outputs/apk/debug/*.apk dist/
+          ls -lh dist/
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: zombieneon-debug-apk
+          path: dist/*.apk
+
+      - name: Build summary
+        run: |
+          echo "### Zombie Neon — Debug APK" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Unsigned debug build, test package ID \`com.test.zombieneon\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "Download the \`zombieneon-debug-apk\` artifact below, transfer it to your phone, and install it (allow \"install from unknown sources\" for debug APKs)." >> "$GITHUB_STEP_SUMMARY"

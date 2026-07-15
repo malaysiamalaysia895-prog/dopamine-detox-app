@@ -1,4 +1,4 @@
-package com.vikky.zombieneon;
+package com.test.zombieneon;
 
 import com.getcapacitor.BridgeActivity;
 
