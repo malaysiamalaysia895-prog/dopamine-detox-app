@@ -72,3 +72,4 @@ flutter_export/.packages
 flutter_export/android/.gradle/
 flutter_export/android/local.properties
 flutter_export/android/captures/
+secure-notes/

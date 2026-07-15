@@ -54,3 +54,9 @@ id = "wN-4RcoBE0RnmqnHK5V5O"
 uri = "file://flutter_dopamine_detox_v7_final.tar.gz"
 type = "unspecified"
 title = "Dopamine Detox v7 — Final Verified Build"
+
+[[outputs]]
+id = "8125kVnu7AVmwN6UvVnmn"
+uri = "file://secure-notes/neon-game-play-store-signing.txt"
+type = "text"
+title = "Multiverse Crash — Play Store signing key & GitHub secrets"
