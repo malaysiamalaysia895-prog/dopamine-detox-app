@@ -8,6 +8,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import gsap from 'gsap';
 
+// ─── Exported types ────────────────────────────────────────────────────────────
 export type GamePhase = 'intro' | 'combat' | 'victory' | 'defeat';
 
 export interface GameState {
@@ -24,6 +25,7 @@ export interface GameCallbacks {
   onStateChange: (state: Partial<GameState>) => void;
 }
 
+// ─── Internal types ────────────────────────────────────────────────────────────
 interface Projectile {
   mesh: THREE.Mesh;
   velocity: THREE.Vector3;
@@ -51,244 +53,510 @@ interface Particle {
   maxLifetime: number;
 }
 
-function createWaterNormals(): THREE.Texture {
-  const size = 512;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d')!;
-  const img = ctx.createImageData(size, size);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const i = (y * size + x) * 4;
-      const w1 = Math.sin((x / size) * Math.PI * 14 + (y / size) * Math.PI * 3);
-      const w2 = Math.cos((y / size) * Math.PI * 10 - (x / size) * Math.PI * 5);
-      const w3 = Math.sin((x + y) / size * Math.PI * 8);
-      const nx = ((w1 * 0.4 + w3 * 0.1) * 0.5 + 0.5) * 255;
-      const ny = ((w2 * 0.4 + w3 * 0.1) * 0.5 + 0.5) * 255;
-      img.data[i]     = Math.max(0, Math.min(255, nx));
-      img.data[i + 1] = Math.max(0, Math.min(255, ny));
-      img.data[i + 2] = 200;
-      img.data[i + 3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  return tex;
+// ─── Texture CDNs (CC0 / public domain) ───────────────────────────────────────
+const T3 = 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/textures';
+const PH = 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k';
+
+const TEX_URLS = {
+  waterNormals: `${T3}/waternormals.jpg`,
+  woodDiff:     `${PH}/wood_planks_dirt/wood_planks_dirt_diff_1k.jpg`,
+  woodRough:    `${PH}/wood_planks_dirt/wood_planks_dirt_rough_1k.jpg`,
+  woodNorm:     `${PH}/wood_planks_dirt/wood_planks_dirt_nor_gl_1k.jpg`,
+  metalDiff:    `${PH}/rusty_metal_02/rusty_metal_02_diff_1k.jpg`,
+  metalRough:   `${PH}/rusty_metal_02/rusty_metal_02_rough_1k.jpg`,
+  metalNorm:    `${PH}/rusty_metal_02/rusty_metal_02_nor_gl_1k.jpg`,
+};
+
+// ─── Texture helpers ───────────────────────────────────────────────────────────
+const texLoader = new THREE.TextureLoader();
+
+function loadTex(url: string, rep = 4): THREE.Texture {
+  const t = texLoader.load(url, undefined, undefined, () => {
+    // On CDN error: leave as is — material will show base color
+  });
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(rep, rep);
+  return t;
 }
 
+/** Procedural wood normal map — used as immediate fallback before CDN loads */
+function makeWoodNormal(): THREE.Texture {
+  const sz = 512;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = sz;
+  const cx = cv.getContext('2d')!;
+  const id = cx.createImageData(sz, sz);
+  for (let y = 0; y < sz; y++) {
+    for (let x = 0; x < sz; x++) {
+      const i = (y * sz + x) * 4;
+      const g = Math.sin((y / sz) * Math.PI * 48 + Math.sin(x / sz * Math.PI * 8) * 2) * 0.5 + 0.5;
+      id.data[i]     = 128 + (g * 80 - 40);
+      id.data[i + 1] = 128 + (g * 80 - 40);
+      id.data[i + 2] = 220;
+      id.data[i + 3] = 255;
+    }
+  }
+  cx.putImageData(id, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(4, 4);
+  return t;
+}
+
+/** Procedural high-detail water normal map */
+function makeWaterNormal(): THREE.Texture {
+  const sz = 1024;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = sz;
+  const cx = cv.getContext('2d')!;
+  const id = cx.createImageData(sz, sz);
+  for (let y = 0; y < sz; y++) {
+    for (let x = 0; x < sz; x++) {
+      const i = (y * sz + x) * 4;
+      const u = x / sz; const v = y / sz;
+      const w1 = Math.sin(u * Math.PI * 18 + v * Math.PI * 5);
+      const w2 = Math.cos(v * Math.PI * 14 - u * Math.PI * 7);
+      const w3 = Math.sin((u + v) * Math.PI * 10);
+      const w4 = Math.cos((u * 2 - v) * Math.PI * 22);
+      const nx = (w1 * 0.35 + w3 * 0.15) * 0.5 + 0.5;
+      const ny = (w2 * 0.35 + w4 * 0.15) * 0.5 + 0.5;
+      id.data[i]     = Math.max(0, Math.min(255, nx * 255));
+      id.data[i + 1] = Math.max(0, Math.min(255, ny * 255));
+      id.data[i + 2] = 210;
+      id.data[i + 3] = 255;
+    }
+  }
+  cx.putImageData(id, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+
+// ─── Pirate ship builder ───────────────────────────────────────────────────────
 function buildPirateShip(): THREE.Group {
   const group = new THREE.Group();
 
-  const hullMat = new THREE.MeshStandardMaterial({ color: 0x5c2d0a, roughness: 0.9, metalness: 0.1 });
-  const darkWoodMat = new THREE.MeshStandardMaterial({ color: 0x3a1a06, roughness: 0.95 });
-  const sailMat = new THREE.MeshStandardMaterial({ color: 0xddd0a8, roughness: 0.8, side: THREE.DoubleSide });
-  const metalMat = new THREE.MeshStandardMaterial({ color: 0x888877, roughness: 0.3, metalness: 0.8 });
-  const ropeMat = new THREE.MeshStandardMaterial({ color: 0x8B7355, roughness: 1.0 });
+  // Textures (load from CDN, fallback to color)
+  const woodD = loadTex(TEX_URLS.woodDiff, 5);
+  const woodR = loadTex(TEX_URLS.woodRough, 5);
+  const woodN = loadTex(TEX_URLS.woodNorm, 5);
+  const metD  = loadTex(TEX_URLS.metalDiff, 2);
+  const metR  = loadTex(TEX_URLS.metalRough, 2);
+  const metN  = loadTex(TEX_URLS.metalNorm, 2);
+  const woodFallbackN = makeWoodNormal();
 
-  // Main hull
-  const hullGeo = new THREE.BoxGeometry(20, 7, 60);
-  const hull = new THREE.Mesh(hullGeo, hullMat);
-  hull.position.y = 0;
+  const hullMat = new THREE.MeshStandardMaterial({
+    color: 0x7A3A10,
+    map: woodD,
+    roughnessMap: woodR,
+    normalMap: woodN,
+    normalScale: new THREE.Vector2(1.8, 1.8),
+    roughness: 0.88,
+    metalness: 0.04,
+  });
+  const deckMat = new THREE.MeshStandardMaterial({
+    color: 0x5C2A08,
+    map: woodD,
+    roughnessMap: woodR,
+    normalMap: woodFallbackN,
+    normalScale: new THREE.Vector2(1.4, 1.4),
+    roughness: 0.92,
+    metalness: 0.0,
+  });
+  const metalMat = new THREE.MeshStandardMaterial({
+    color: 0x888877,
+    map: metD,
+    roughnessMap: metR,
+    normalMap: metN,
+    normalScale: new THREE.Vector2(1.2, 1.2),
+    roughness: 0.35,
+    metalness: 0.88,
+  });
+  const sailMat = new THREE.MeshStandardMaterial({
+    color: 0xDDD0A8,
+    roughness: 0.85,
+    metalness: 0.0,
+    side: THREE.DoubleSide,
+  });
+  const ropeMatl = new THREE.MeshStandardMaterial({ color: 0x8B7355, roughness: 1.0 });
+
+  // ── Hull ──────────────────────────────────────────────────────────────────
+  const hull = new THREE.Mesh(new THREE.BoxGeometry(20, 7, 60), hullMat);
+  hull.castShadow = hull.receiveShadow = true;
   group.add(hull);
 
-  // Bow (pointed front)
-  const bowGeo = new THREE.CylinderGeometry(0, 10, 10, 4);
-  const bow = new THREE.Mesh(bowGeo, darkWoodMat);
+  // Bow
+  const bow = new THREE.Mesh(new THREE.CylinderGeometry(0, 10, 10, 4), deckMat);
   bow.position.set(0, 0, -35);
-  bow.rotation.x = Math.PI / 2;
-  bow.rotation.z = Math.PI / 4;
+  bow.rotation.set(Math.PI / 2, 0, Math.PI / 4);
+  bow.castShadow = true;
   group.add(bow);
 
-  // Stern (back structure)
-  const sternGeo = new THREE.BoxGeometry(20, 10, 10);
-  const stern = new THREE.Mesh(sternGeo, hullMat);
+  // Stern
+  const stern = new THREE.Mesh(new THREE.BoxGeometry(20, 10, 10), hullMat);
   stern.position.set(0, 5, 28);
+  stern.castShadow = true;
   group.add(stern);
 
-  // Deck
-  const deckGeo = new THREE.BoxGeometry(19, 1, 58);
-  const deck = new THREE.Mesh(deckGeo, darkWoodMat);
+  // Deck planks
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(19, 1, 58), deckMat);
   deck.position.y = 4;
+  deck.receiveShadow = deck.castShadow = true;
   group.add(deck);
 
-  // Forecastle (front raised platform)
-  const foreGeo = new THREE.BoxGeometry(16, 3, 12);
-  const fore = new THREE.Mesh(foreGeo, hullMat);
+  // Forecastle
+  const fore = new THREE.Mesh(new THREE.BoxGeometry(16, 3, 12), hullMat);
   fore.position.set(0, 5.5, -24);
+  fore.castShadow = true;
   group.add(fore);
 
-  // Poop deck (rear raised platform)
-  const poopGeo = new THREE.BoxGeometry(16, 3, 14);
-  const poop = new THREE.Mesh(poopGeo, hullMat);
+  // Poop deck
+  const poop = new THREE.Mesh(new THREE.BoxGeometry(16, 3, 14), hullMat);
   poop.position.set(0, 5.5, 22);
+  poop.castShadow = true;
   group.add(poop);
 
-  // Masts (3)
-  const mastPositionsZ = [-18, 2, 20];
-  const mastHeights = [42, 48, 36];
-  mastPositionsZ.forEach((z, i) => {
-    const mastGeo = new THREE.CylinderGeometry(0.45, 0.6, mastHeights[i], 8);
-    const mast = new THREE.Mesh(mastGeo, darkWoodMat);
-    mast.position.set(0, 4 + mastHeights[i] / 2, z);
+  // ── Masts ─────────────────────────────────────────────────────────────────
+  [{ z: -18, h: 42 }, { z: 2, h: 48 }, { z: 20, h: 36 }].forEach(({ z, h }) => {
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.65, h, 8), deckMat);
+    mast.position.set(0, 4 + h / 2, z);
+    mast.castShadow = true;
     group.add(mast);
 
-    // Cross-yard (horizontal beam for sail)
-    const yardGeo = new THREE.CylinderGeometry(0.25, 0.25, 20, 8);
-    const yard = new THREE.Mesh(yardGeo, darkWoodMat);
-    yard.position.set(0, 4 + mastHeights[i] * 0.75, z);
+    // Cross yard
+    const yard = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 22, 8), deckMat);
+    yard.position.set(0, 4 + h * 0.78, z);
     yard.rotation.z = Math.PI / 2;
     group.add(yard);
 
-    // Sail
-    const sailGeo = new THREE.PlaneGeometry(18, mastHeights[i] * 0.5);
-    const sail = new THREE.Mesh(sailGeo, sailMat);
-    sail.position.set(0.2, 4 + mastHeights[i] * 0.5, z);
-    group.add(sail);
+    // Sail (two panels per yard)
+    [-1, 1].forEach(side => {
+      const sailGeo = new THREE.PlaneGeometry(9.5, h * 0.55);
+      const sail = new THREE.Mesh(sailGeo, sailMat);
+      sail.position.set(side * 5, 4 + h * 0.78 - h * 0.14, z);
+      sail.castShadow = true;
+      group.add(sail);
+    });
 
-    // Rigging ropes (diagonals)
-    const ropeGeo = new THREE.CylinderGeometry(0.08, 0.08, 22, 4);
-    [-8, 8].forEach(xOff => {
-      const rope = new THREE.Mesh(ropeGeo, ropeMat);
-      rope.position.set(xOff / 2, 4 + mastHeights[i] * 0.4, z + xOff / 2);
-      rope.rotation.z = Math.atan2(mastHeights[i] * 0.3, xOff);
+    // Ropes from mast top to deck sides
+    [-8, 8].forEach(sx => {
+      const ropeGeo = new THREE.CylinderGeometry(0.1, 0.1, Math.hypot(sx, 4 + h), 4);
+      const rope = new THREE.Mesh(ropeGeo, ropeMatl);
+      const angle = Math.atan2(sx, -(4 + h));
+      rope.rotation.z = angle;
+      rope.position.set(sx / 2, 4 + h / 2, z);
       group.add(rope);
     });
   });
 
-  // Bowsprit (diagonal front mast)
-  const bspritGeo = new THREE.CylinderGeometry(0.3, 0.4, 28, 8);
-  const bsprit = new THREE.Mesh(bspritGeo, darkWoodMat);
-  bsprit.position.set(0, 8, -43);
-  bsprit.rotation.x = -Math.PI / 6;
-  group.add(bsprit);
+  // ── Cannons (8 per side, protruding from gun deck) ────────────────────────
+  [-1, 1].forEach(side => {
+    for (let ci = 0; ci < 6; ci++) {
+      const z = -20 + ci * 8;
+      const barrelGeo = new THREE.CylinderGeometry(0.6, 0.7, 6, 10);
+      const barrel = new THREE.Mesh(barrelGeo, metalMat);
+      barrel.position.set(side * 11, 1.5, z);
+      barrel.rotation.z = Math.PI / 2;
+      barrel.castShadow = true;
+      group.add(barrel);
 
-  // Crow's nest on main mast
-  const nestGeo = new THREE.CylinderGeometry(2, 1.5, 1.5, 8);
-  const nest = new THREE.Mesh(nestGeo, darkWoodMat);
-  nest.position.set(0, 4 + mastHeights[1] * 0.7, 2);
-  group.add(nest);
-
-  // Cannons (port and starboard sides)
-  const cannonPositionsZ = [-20, -10, 0, 10, 20];
-  cannonPositionsZ.forEach(z => {
-    [-11, 11].forEach(x => {
-      const cannonGeo = new THREE.CylinderGeometry(0.6, 0.7, 4, 8);
-      const cannon = new THREE.Mesh(cannonGeo, metalMat);
-      cannon.rotation.z = Math.PI / 2;
-      cannon.position.set(x, 3.5, z);
-      group.add(cannon);
-
-      // Cannon ball pile
-      const ballGeo = new THREE.SphereGeometry(0.4, 8, 8);
-      const ball = new THREE.Mesh(ballGeo, metalMat);
-      ball.position.set(x, 5, z);
-      group.add(ball);
-    });
+      // Cannon wheel
+      const wheelGeo = new THREE.TorusGeometry(0.9, 0.15, 6, 8);
+      const wheel = new THREE.Mesh(wheelGeo, metalMat);
+      wheel.position.set(side * 9, 0.8, z);
+      wheel.rotation.y = Math.PI / 2;
+      group.add(wheel);
+    }
   });
 
-  // Jolly Roger flag
+  // ── Figurehead ────────────────────────────────────────────────────────────
+  const fhGeo = new THREE.ConeGeometry(2, 5, 5);
+  const fh = new THREE.Mesh(fhGeo, metalMat);
+  fh.position.set(0, 3, -38);
+  fh.rotation.x = Math.PI / 2;
+  group.add(fh);
+
+  // ── Railings ──────────────────────────────────────────────────────────────
+  [-9, 9].forEach(sx => {
+    for (let pi = 0; pi < 10; pi++) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 2.5, 5), deckMat);
+      post.position.set(sx, 6.2, -22 + pi * 5);
+      group.add(post);
+    }
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, 48), deckMat);
+    rail.position.set(sx, 7.5, 0);
+    group.add(rail);
+  });
+
+  // ── Skull flag ────────────────────────────────────────────────────────────
   const flagGeo = new THREE.PlaneGeometry(5, 3.5);
-  const flagMat = new THREE.MeshStandardMaterial({ color: 0x111111, side: THREE.DoubleSide });
+  const flagMat = new THREE.MeshStandardMaterial({ color: 0x111111, side: THREE.DoubleSide, roughness: 1 });
   const flag = new THREE.Mesh(flagGeo, flagMat);
-  flag.position.set(0.6, 4 + mastHeights[1] - 1, 2);
+  flag.position.set(0, 4 + 48 + 2, 2);
+  flag.rotation.y = 0.4;
   group.add(flag);
 
-  // Windows / portholes on hull
-  const portGeo = new THREE.CircleGeometry(0.6, 16);
-  const portMat = new THREE.MeshStandardMaterial({ color: 0xffcc88, emissive: 0xffaa44, emissiveIntensity: 0.8 });
-  [-20, -8, 8, 20].forEach(z => {
-    [-10.1, 10.1].forEach(x => {
-      const port = new THREE.Mesh(portGeo, portMat);
-      port.position.set(x, 1, z);
-      port.rotation.y = x < 0 ? -Math.PI / 2 : Math.PI / 2;
-      group.add(port);
-    });
-  });
-
-  group.castShadow = true;
-  group.receiveShadow = true;
+  // Skull emblem (emissive white)
+  const skullGeo = new THREE.SphereGeometry(1.0, 6, 6);
+  const skullMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xaaaaaa, emissiveIntensity: 0.4 });
+  const skull = new THREE.Mesh(skullGeo, skullMat);
+  skull.position.set(0, 4 + 48 + 2, 2.1);
+  group.add(skull);
 
   return group;
 }
 
-function buildAlienUFO(color: number, emissiveColor: number): THREE.Group {
-  const group = new THREE.Group();
+// ─── Cyborg/Mech Character Builder ────────────────────────────────────────────
+function buildCyborgCharacter(isBoss: boolean, accentColor: number): THREE.Group {
+  const g = new THREE.Group();
+  const scale = isBoss ? 1.7 : 1.0;
 
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x0a1520, roughness: 0.2, metalness: 0.9 });
-  const domeMat = new THREE.MeshStandardMaterial({
-    color,
-    emissive: emissiveColor,
-    emissiveIntensity: 0.6,
-    transparent: true,
-    opacity: 0.82,
-    roughness: 0.1,
-    metalness: 0.3,
+  const chromeMat = new THREE.MeshPhysicalMaterial({
+    color: isBoss ? 0x1a0033 : 0x0d0d1a,
+    metalness: 0.95,
+    roughness: 0.08,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.05,
+    reflectivity: 1.0,
   });
-  const ringMat = new THREE.MeshStandardMaterial({
-    color,
-    emissive: emissiveColor,
-    emissiveIntensity: 1.2,
-    roughness: 0.1,
+
+  const accentMat = new THREE.MeshPhysicalMaterial({
+    color: accentColor,
     metalness: 0.8,
+    roughness: 0.15,
+    clearcoat: 0.8,
   });
-  const glowMat = new THREE.MeshStandardMaterial({
-    color: emissiveColor,
-    emissive: emissiveColor,
-    emissiveIntensity: 3.0,
+
+  const visorMat = new THREE.MeshPhysicalMaterial({
+    color: accentColor,
+    emissive: accentColor,
+    emissiveIntensity: isBoss ? 3.5 : 2.8,
+    metalness: 0.2,
+    roughness: 0.0,
     transparent: true,
-    opacity: 0.5,
+    opacity: 0.92,
+    transmission: 0.2,
   });
 
-  // Main disc body
-  const discGeo = new THREE.CylinderGeometry(7, 9, 2.5, 32);
-  const disc = new THREE.Mesh(discGeo, bodyMat);
-  group.add(disc);
+  const jointMat = new THREE.MeshPhysicalMaterial({
+    color: 0x222233,
+    metalness: 0.9,
+    roughness: 0.2,
+    clearcoat: 0.5,
+  });
 
-  // Lower skirt
-  const skirtGeo = new THREE.CylinderGeometry(9, 7, 1.5, 32);
-  const skirt = new THREE.Mesh(skirtGeo, bodyMat);
-  skirt.position.y = -1.5;
-  group.add(skirt);
+  // ── Torso ─────────────────────────────────────────────────────────────────
+  const torsoH = 3.8 * scale;
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(2.6 * scale, torsoH, 1.8 * scale), chromeMat);
+  torso.position.y = torsoH / 2 + 3.5 * scale;
+  torso.castShadow = true;
+  g.add(torso);
 
-  // Dome on top
-  const domeGeo = new THREE.SphereGeometry(5, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
-  const dome = new THREE.Mesh(domeGeo, domeMat);
-  dome.position.y = 1.25;
-  group.add(dome);
+  // Chest plate accent
+  const chestPlate = new THREE.Mesh(new THREE.BoxGeometry(1.8 * scale, 2 * scale, 0.2), accentMat);
+  chestPlate.position.set(0, torsoH / 2 + 3.5 * scale, 0.9 * scale);
+  g.add(chestPlate);
 
-  // Outer rotating ring
-  const ringGeo = new THREE.TorusGeometry(11, 0.6, 8, 48);
-  const ring = new THREE.Mesh(ringGeo, ringMat);
-  ring.rotation.x = Math.PI * 0.12;
-  group.add(ring);
+  // Core orb (glowing)
+  const coreGeo = new THREE.SphereGeometry(0.45 * scale, 16, 16);
+  const core = new THREE.Mesh(coreGeo, visorMat);
+  core.position.set(0, torsoH / 2 + 3.5 * scale, 1.0 * scale);
+  g.add(core);
 
-  // Inner glow core
-  const coreGeo = new THREE.SphereGeometry(2.5, 16, 16);
-  const core = new THREE.Mesh(coreGeo, glowMat);
-  core.position.y = 2;
-  group.add(core);
+  // ── Head ──────────────────────────────────────────────────────────────────
+  const headY = torsoH + 3.5 * scale + 1.1 * scale;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(2.2 * scale, 2.0 * scale, 2.0 * scale), chromeMat);
+  head.position.y = headY;
+  head.castShadow = true;
+  g.add(head);
 
-  // Beam port underneath
-  const beamPortGeo = new THREE.CylinderGeometry(0.5, 1.8, 1.5, 16);
-  const beamPortMat = new THREE.MeshStandardMaterial({ color: emissiveColor, emissive: emissiveColor, emissiveIntensity: 2.0 });
-  const beamPort = new THREE.Mesh(beamPortGeo, beamPortMat);
-  beamPort.position.y = -2.8;
-  group.add(beamPort);
+  // Visor slit
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(1.8 * scale, 0.5 * scale, 0.12), visorMat);
+  visor.position.set(0, headY + 0.2 * scale, 1.0 * scale);
+  g.add(visor);
+
+  // Antenna (boss only)
+  if (isBoss) {
+    const antennaGeo = new THREE.CylinderGeometry(0.08, 0.12, 2.0, 6);
+    const antenna = new THREE.Mesh(antennaGeo, accentMat);
+    antenna.position.set(0, headY + 1.8 * scale, 0);
+    g.add(antenna);
+    const antennaTop = new THREE.Mesh(new THREE.SphereGeometry(0.25, 8, 8), visorMat);
+    antennaTop.position.set(0, headY + 2.9 * scale, 0);
+    g.add(antennaTop);
+  }
+
+  // ── Shoulders ─────────────────────────────────────────────────────────────
+  [-1, 1].forEach(side => {
+    const shoulderY = torsoH + 3.0 * scale;
+    const shoulder = new THREE.Mesh(new THREE.SphereGeometry(0.9 * scale, 12, 12), accentMat);
+    shoulder.position.set(side * 2.0 * scale, shoulderY, 0);
+    g.add(shoulder);
+
+    // Upper arm
+    const uarmGeo = new THREE.CylinderGeometry(0.4 * scale, 0.35 * scale, 2.5 * scale, 8);
+    const uarm = new THREE.Mesh(uarmGeo, chromeMat);
+    uarm.position.set(side * 2.6 * scale, shoulderY - 1.2 * scale, 0);
+    uarm.rotation.z = side * 0.2;
+    uarm.castShadow = true;
+    g.add(uarm);
+
+    // Elbow joint
+    const elbow = new THREE.Mesh(new THREE.SphereGeometry(0.38 * scale, 8, 8), jointMat);
+    elbow.position.set(side * 2.8 * scale, shoulderY - 2.6 * scale, 0);
+    g.add(elbow);
+
+    // Forearm
+    const farmGeo = new THREE.CylinderGeometry(0.32 * scale, 0.42 * scale, 2.2 * scale, 8);
+    const farm = new THREE.Mesh(farmGeo, chromeMat);
+    farm.position.set(side * (isBoss ? 3.2 : 3.1) * scale, shoulderY - 3.8 * scale, 0);
+    farm.rotation.z = side * 0.35;
+    farm.castShadow = true;
+    g.add(farm);
+
+    // Weapon / hand
+    const weaponMat = new THREE.MeshPhysicalMaterial({ color: accentColor, emissive: accentColor, emissiveIntensity: 1.5, metalness: 0.7, roughness: 0.2 });
+    const weaponGeo = isBoss
+      ? new THREE.BoxGeometry(0.5 * scale, 0.5 * scale, 2.8 * scale)
+      : new THREE.CylinderGeometry(0.28 * scale, 0.35 * scale, 2.0 * scale, 6);
+    const weapon = new THREE.Mesh(weaponGeo, weaponMat);
+    weapon.position.set(side * (isBoss ? 3.5 : 3.3) * scale, shoulderY - 5.1 * scale, isBoss ? 0.6 * scale : 0);
+    weapon.rotation.set(isBoss ? -0.3 : 0, 0, side * 0.1);
+    g.add(weapon);
+  });
+
+  // ── Pelvis & legs ─────────────────────────────────────────────────────────
+  const pelvis = new THREE.Mesh(new THREE.BoxGeometry(2.4 * scale, 1.2 * scale, 1.6 * scale), accentMat);
+  pelvis.position.y = 3.1 * scale;
+  g.add(pelvis);
+
+  [-1, 1].forEach(side => {
+    // Thigh
+    const thighGeo = new THREE.CylinderGeometry(0.55 * scale, 0.45 * scale, 3.0 * scale, 8);
+    const thigh = new THREE.Mesh(thighGeo, chromeMat);
+    thigh.position.set(side * 0.9 * scale, 1.5 * scale, 0);
+    thigh.castShadow = true;
+    g.add(thigh);
+
+    // Knee
+    const knee = new THREE.Mesh(new THREE.SphereGeometry(0.52 * scale, 8, 8), jointMat);
+    knee.position.set(side * 0.9 * scale, 0.0 * scale, 0.1 * scale);
+    g.add(knee);
+
+    // Shin
+    const shinGeo = new THREE.CylinderGeometry(0.38 * scale, 0.55 * scale, 2.8 * scale, 8);
+    const shin = new THREE.Mesh(shinGeo, chromeMat);
+    shin.position.set(side * 0.9 * scale, -1.4 * scale, 0.1 * scale);
+    shin.castShadow = true;
+    g.add(shin);
+
+    // Boot / foot
+    const footGeo = new THREE.BoxGeometry(0.9 * scale, 0.6 * scale, 1.8 * scale);
+    const foot = new THREE.Mesh(footGeo, accentMat);
+    foot.position.set(side * 0.9 * scale, -2.9 * scale, 0.4 * scale);
+    g.add(foot);
+  });
 
   // Glow light
-  const light = new THREE.PointLight(emissiveColor, 8, 80);
-  light.position.y = 2;
-  group.add(light);
+  const glow = new THREE.PointLight(accentColor, 3.5, 12 * scale);
+  glow.position.set(0, torsoH / 2 + 3.5 * scale, 1.5);
+  g.add(glow);
 
-  (group as any)._ring = ring;
-  (group as any)._light = light;
-
-  return group;
+  return g;
 }
 
-function buildParticleBurst(position: THREE.Vector3, color: number, count = 24): Particle {
+// ─── UFO builder ──────────────────────────────────────────────────────────────
+function buildUFO(isBoss: boolean, ringColor: number): { group: THREE.Group; ring: THREE.Mesh; glow: THREE.PointLight } {
+  const g = new THREE.Group();
+  const sc = isBoss ? 1.5 : 1.0;
+
+  const bodyMat = new THREE.MeshPhysicalMaterial({
+    color: isBoss ? 0x110022 : 0x0a1a22,
+    metalness: 0.95,
+    roughness: 0.05,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.02,
+    reflectivity: 1.0,
+  });
+
+  const glowMat = new THREE.MeshPhysicalMaterial({
+    color: ringColor,
+    emissive: ringColor,
+    emissiveIntensity: isBoss ? 4.0 : 3.0,
+    roughness: 0.0,
+    metalness: 0.3,
+    transparent: true,
+    opacity: 0.85,
+  });
+
+  // Disc body (top dome + bottom)
+  const topGeo = new THREE.SphereGeometry(10 * sc, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2.2);
+  const top = new THREE.Mesh(topGeo, bodyMat);
+  top.castShadow = top.receiveShadow = true;
+  g.add(top);
+
+  const botGeo = new THREE.SphereGeometry(10 * sc, 32, 16, 0, Math.PI * 2, Math.PI / 2.2, Math.PI / 2.2);
+  const bot = new THREE.Mesh(botGeo, bodyMat);
+  bot.position.y = -0.5;
+  g.add(bot);
+
+  // Main glow ring
+  const ringGeo = new THREE.TorusGeometry(11.5 * sc, isBoss ? 1.4 : 1.0, 16, 64);
+  const ring = new THREE.Mesh(ringGeo, glowMat);
+  ring.position.y = -2 * sc;
+  ring.receiveShadow = false;
+  g.add(ring);
+
+  // Secondary rings
+  [0.65, 0.4].forEach((rfrac, ri) => {
+    const r2 = new THREE.Mesh(
+      new THREE.TorusGeometry(rfrac * 11.5 * sc, 0.4 * sc, 8, 32),
+      glowMat
+    );
+    r2.position.y = -1.5 * sc + ri * 1.5 * sc;
+    g.add(r2);
+  });
+
+  // Cockpit dome
+  const cockpitGeo = new THREE.SphereGeometry(4.5 * sc, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+  const cockpitMat = new THREE.MeshPhysicalMaterial({
+    color: ringColor,
+    emissive: ringColor,
+    emissiveIntensity: 1.5,
+    transparent: true,
+    opacity: 0.5,
+    roughness: 0.0,
+    metalness: 0.3,
+    transmission: 0.4,
+  });
+  const cockpit = new THREE.Mesh(cockpitGeo, cockpitMat);
+  cockpit.position.y = 3 * sc;
+  g.add(cockpit);
+
+  // Point light inside UFO
+  const glow = new THREE.PointLight(ringColor, isBoss ? 12 : 8, 80 * sc);
+  glow.position.y = -4;
+  g.add(glow);
+
+  // Beam of light downward (boss only)
+  if (isBoss) {
+    const beamGeo = new THREE.CylinderGeometry(1.5, 8, 80, 12, 1, true);
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: ringColor,
+      transparent: true,
+      opacity: 0.06,
+      side: THREE.BackSide,
+    });
+    const beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.position.y = -42;
+    g.add(beam);
+  }
+
+  return { group: g, ring, glow };
+}
+
+// ─── Particle burst ────────────────────────────────────────────────────────────
+function buildParticleBurst(position: THREE.Vector3, color: number, count = 28): Particle {
   const geo = new THREE.BufferGeometry();
   const positions = new Float32Array(count * 3);
   const velocities: THREE.Vector3[] = [];
@@ -297,35 +565,33 @@ function buildParticleBurst(position: THREE.Vector3, color: number, count = 24):
     positions[i * 3] = position.x;
     positions[i * 3 + 1] = position.y;
     positions[i * 3 + 2] = position.z;
-
     const theta = Math.random() * Math.PI * 2;
     const phi = Math.random() * Math.PI;
-    const speed = 8 + Math.random() * 20;
+    const speed = 10 + Math.random() * 22;
     velocities.push(new THREE.Vector3(
       Math.sin(phi) * Math.cos(theta) * speed,
-      Math.abs(Math.cos(phi)) * speed * 0.8 + 4,
+      Math.abs(Math.cos(phi)) * speed * 0.9 + 5,
       Math.sin(phi) * Math.sin(theta) * speed,
     ));
   }
 
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
-  const mat = new THREE.PointsMaterial({ color, size: 1.5, transparent: true, opacity: 1.0, sizeAttenuation: true });
-  const points = new THREE.Points(geo, mat);
-
-  return { mesh: points, velocities, lifetime: 0, maxLifetime: 1.8 };
+  const mat = new THREE.PointsMaterial({ color, size: 1.6, transparent: true, opacity: 1.0, sizeAttenuation: true });
+  return { mesh: new THREE.Points(geo, mat), velocities, lifetime: 0, maxLifetime: 1.8 };
 }
 
+// ─── Projectile trail ─────────────────────────────────────────────────────────
 function buildProjectileTrail(isLaser: boolean): THREE.Points {
   const count = 20;
   const geo = new THREE.BufferGeometry();
   const positions = new Float32Array(count * 3);
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   const color = isLaser ? 0x00ffaa : 0x888877;
-  const mat = new THREE.PointsMaterial({ color, size: isLaser ? 0.8 : 0.6, transparent: true, opacity: 0.7, sizeAttenuation: true });
+  const mat = new THREE.PointsMaterial({ color, size: isLaser ? 0.9 : 0.6, transparent: true, opacity: 0.75, sizeAttenuation: true });
   return new THREE.Points(geo, mat);
 }
 
+// ─── Main Game Class ───────────────────────────────────────────────────────────
 export class PirateGame {
   private canvas: HTMLCanvasElement;
   private renderer!: THREE.WebGLRenderer;
@@ -335,6 +601,7 @@ export class PirateGame {
   private water!: Water;
   private sun!: THREE.Vector3;
   private playerShip!: THREE.Group;
+  private playerChar!: THREE.Group;    // Cyborg hero on deck
   private alienFleet: AlienShip[] = [];
   private projectiles: Projectile[] = [];
   private particles: Particle[] = [];
@@ -342,6 +609,7 @@ export class PirateGame {
   private animFrameId = 0;
   private callbacks: GameCallbacks;
 
+  // State
   private phase: GamePhase = 'intro';
   private playerHP = 100;
   private readonly playerMaxHP = 100;
@@ -350,14 +618,29 @@ export class PirateGame {
   private canFireTimer = 0;
   private fireFromLeft = true;
   private combatStarted = false;
+  private cinematicDone = false;
   private keys: Record<string, boolean> = {};
+  private joystickX = 0;
+  private joystickY = 0;
 
   private directionalLight!: THREE.DirectionalLight;
+  private ambientLight!: THREE.THREE.AmbientLight;
 
   constructor(canvas: HTMLCanvasElement, callbacks: GameCallbacks) {
     this.canvas = canvas;
     this.callbacks = callbacks;
     this.init();
+  }
+
+  /** Called by App.tsx from mobile joystick touch events */
+  public setJoystickInput(dx: number, dy: number) {
+    this.joystickX = dx;
+    this.joystickY = dy;
+  }
+
+  /** Called by App.tsx FIRE button */
+  public triggerFire() {
+    if (this.phase === 'combat') this.fireCannonball();
   }
 
   private init() {
@@ -374,52 +657,42 @@ export class PirateGame {
   }
 
   private setupRenderer() {
-    // Test WebGL availability first
     const testCtx = this.canvas.getContext('webgl2') || this.canvas.getContext('webgl');
-    if (!testCtx) {
-      throw new Error('WebGL is not supported in this browser.');
-    }
+    if (!testCtx) throw new Error('WebGL is not supported in this browser.');
 
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
       antialias: window.devicePixelRatio < 2,
-      powerPreference: 'default',
+      powerPreference: 'high-performance',
       failIfMajorPerformanceCaveat: false,
-      logarithmicDepthBuffer: false,
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.9;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
     window.addEventListener('resize', this.onResize);
   }
 
   private setupScene() {
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0x223344, 0.0008);
+    this.scene.fog = new THREE.FogExp2(0x1a2a44, 0.0006);
 
-    this.camera = new THREE.PerspectiveCamera(
-      65,
-      this.canvas.clientWidth / this.canvas.clientHeight,
-      0.5,
-      8000,
-    );
+    this.camera = new THREE.PerspectiveCamera(65, this.canvas.clientWidth / this.canvas.clientHeight, 0.5, 10000);
     this.camera.position.set(0, 400, 0);
     this.camera.lookAt(0, 0, 0);
 
-    // Ambient
-    const ambient = new THREE.AmbientLight(0x334466, 0.6);
-    this.scene.add(ambient);
+    // Ambient — moody blue-teal
+    this.ambientLight = new THREE.AmbientLight(0x334466, 0.7);
+    this.scene.add(this.ambientLight);
 
     // Hemisphere
-    const hemi = new THREE.HemisphereLight(0xff8844, 0x223355, 0.5);
+    const hemi = new THREE.HemisphereLight(0xff8844, 0x223355, 0.55);
     this.scene.add(hemi);
 
-    // Directional (sun)
-    this.directionalLight = new THREE.DirectionalLight(0xff9955, 2.5);
+    // Sun directional (golden hour)
+    this.directionalLight = new THREE.DirectionalLight(0xff9955, 2.8);
     this.directionalLight.position.set(300, 200, -500);
     this.directionalLight.castShadow = true;
     this.directionalLight.shadow.mapSize.set(2048, 2048);
@@ -429,75 +702,77 @@ export class PirateGame {
     this.directionalLight.shadow.camera.right = 300;
     this.directionalLight.shadow.camera.top = 300;
     this.directionalLight.shadow.camera.bottom = -300;
+    this.directionalLight.shadow.bias = -0.0004;
     this.scene.add(this.directionalLight);
+
+    // Neon fill from alien side
+    const alienFill = new THREE.DirectionalLight(0x8833ff, 0.8);
+    alienFill.position.set(0, 100, -400);
+    this.scene.add(alienFill);
   }
 
   private buildWaterAndSky() {
     this.sun = new THREE.Vector3();
-
-    // Sky setup
     const sky = new Sky();
     sky.scale.setScalar(10000);
     this.scene.add(sky);
 
-    const skyUniforms = (sky.material as THREE.ShaderMaterial).uniforms;
-    skyUniforms['turbidity'].value = 8;
-    skyUniforms['rayleigh'].value = 3;
-    skyUniforms['mieCoefficient'].value = 0.008;
-    skyUniforms['mieDirectionalG'].value = 0.82;
+    const skyU = (sky.material as THREE.ShaderMaterial).uniforms;
+    skyU['turbidity'].value = 7;
+    skyU['rayleigh'].value = 3.2;
+    skyU['mieCoefficient'].value = 0.007;
+    skyU['mieDirectionalG'].value = 0.84;
 
-    // Golden sunset — sun low on the horizon
+    // Golden sunset
     const phi = THREE.MathUtils.degToRad(90 - 4);
     const theta = THREE.MathUtils.degToRad(190);
     this.sun.setFromSphericalCoords(1, phi, theta);
-    skyUniforms['sunPosition'].value.copy(this.sun);
+    skyU['sunPosition'].value.copy(this.sun);
 
-    // Water
-    const waterGeo = new THREE.PlaneGeometry(10000, 10000);
+    // Water — use CDN normals first, then procedural as fallback texture
+    const waterNormals = loadTex(TEX_URLS.waterNormals, 1);
+    waterNormals.wrapS = waterNormals.wrapT = THREE.RepeatWrapping;
+
+    const waterGeo = new THREE.PlaneGeometry(12000, 12000, 128, 128);
     this.water = new Water(waterGeo, {
-      textureWidth: 512,
-      textureHeight: 512,
-      waterNormals: createWaterNormals(),
+      textureWidth: 1024,
+      textureHeight: 1024,
+      waterNormals,
       sunDirection: this.sun.clone().normalize(),
       sunColor: 0xff9944,
-      waterColor: 0x002233,
-      distortionScale: 4.5,
+      waterColor: 0x001a2e,
+      distortionScale: 6.0,
       fog: true,
     });
     this.water.rotation.x = -Math.PI / 2;
     this.water.position.y = -1;
     this.scene.add(this.water);
+
+    // Put the procedural high-detail normal map in as a second layer fallback
+    // (will be ready immediately, CDN one replaces it once loaded)
+    const procNorm = makeWaterNormal();
+    (this.water.material as THREE.ShaderMaterial).uniforms['tWaterNormals'] =
+      (this.water.material as THREE.ShaderMaterial).uniforms['tWaterNormals'] ||
+      { value: procNorm };
   }
 
   private buildEnvironment() {
-    // Distant rock formations
-    const rockMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.95 });
-    const rockPositions = [
-      [-600, 0, -800], [700, 0, -600], [-400, 0, 600], [800, 0, 400],
-    ];
-    rockPositions.forEach(([x, , z]) => {
-      const h = 30 + Math.random() * 60;
-      const rockGeo = new THREE.CylinderGeometry(15 + Math.random() * 20, 30 + Math.random() * 20, h, 6);
-      const rock = new THREE.Mesh(rockGeo, rockMat);
-      rock.position.set(x, h / 2 - 1, z);
-      rock.rotation.y = Math.random() * Math.PI;
-      this.scene.add(rock);
+    const rockMat = new THREE.MeshStandardMaterial({ color: 0x2a2820, roughness: 0.96 });
+    [[-600, 0, -800], [750, 0, -600], [-420, 0, 620], [820, 0, 420]].forEach(([x, , z]) => {
+      const h = 35 + Math.random() * 65;
+      const r = new THREE.Mesh(new THREE.CylinderGeometry(15 + Math.random() * 25, 30 + Math.random() * 25, h, 6), rockMat);
+      r.position.set(x, h / 2 - 1, z);
+      r.rotation.y = Math.random() * Math.PI;
+      r.castShadow = true;
+      this.scene.add(r);
     });
 
-    // Floating debris
-    const debrisMat = new THREE.MeshStandardMaterial({ color: 0x4a2c0a, roughness: 0.9 });
-    for (let i = 0; i < 12; i++) {
-      const debGeo = new THREE.BoxGeometry(
-        2 + Math.random() * 4, 0.4, 1 + Math.random() * 3,
-      );
-      const deb = new THREE.Mesh(debGeo, debrisMat);
-      deb.position.set(
-        (Math.random() - 0.5) * 400,
-        -0.5,
-        (Math.random() - 0.5) * 400,
-      );
-      deb.rotation.y = Math.random() * Math.PI;
-      this.scene.add(deb);
+    const debMat = new THREE.MeshStandardMaterial({ color: 0x4a2c0a, roughness: 0.92 });
+    for (let i = 0; i < 14; i++) {
+      const d = new THREE.Mesh(new THREE.BoxGeometry(2 + Math.random() * 4, 0.4, 1 + Math.random() * 3), debMat);
+      d.position.set((Math.random() - 0.5) * 500, -0.5, (Math.random() - 0.5) * 500);
+      d.rotation.y = Math.random() * Math.PI;
+      this.scene.add(d);
     }
   }
 
@@ -507,63 +782,80 @@ export class PirateGame {
     this.playerShip.rotation.y = Math.PI;
     this.scene.add(this.playerShip);
 
-    // Ship light
-    const shipLight = new THREE.PointLight(0xffcc88, 4, 60);
+    // Lantern lights on ship
+    const shipLight = new THREE.PointLight(0xffcc88, 5, 70);
     shipLight.position.set(0, 15, 0);
     this.playerShip.add(shipLight);
+
+    const bowLight = new THREE.PointLight(0xffaa44, 3, 40);
+    bowLight.position.set(0, 8, -38);
+    this.playerShip.add(bowLight);
+
+    // ── Hero cyborg character on deck ──────────────────────────────────────
+    this.playerChar = buildCyborgCharacter(false, 0x00eeff);
+    // Place on poop deck
+    this.playerChar.position.set(0, 9.5, 202); // on deck behind main mast
+    this.playerChar.rotation.y = Math.PI; // face forward (toward bow)
+    this.scene.add(this.playerChar);
   }
 
   private buildAlienFleet() {
-    const alienColors = [
-      [0x00ccff, 0x0088ff],
-      [0x00ff88, 0x00cc55],
-      [0xff44cc, 0xff00aa],
-      [0xffaa00, 0xff7700],
-      [0xaa44ff, 0x8800ff],
+    // Colors: boss = purple, minion1 = green, minion2 = red
+    const configs = [
+      { pos: new THREE.Vector3(0,   190, -280), color: 0xff00ff, isBoss: true,  hp: 60, delay: 4.5 },
+      { pos: new THREE.Vector3(-130, 155, -240), color: 0x00ff88, isBoss: false, hp: 30, delay: 5.2 },
+      { pos: new THREE.Vector3( 130, 155, -240), color: 0xff4400, isBoss: false, hp: 30, delay: 5.8 },
     ];
 
-    const positions = [
-      [-200, 15, -550],
-      [-80, 18, -620],
-      [0, 22, -680],
-      [80, 18, -620],
-      [200, 15, -550],
-    ];
-
-    alienColors.forEach(([color, emissive], i) => {
-      const group = buildAlienUFO(color, emissive);
-      const [x, y, z] = positions[i];
-      group.position.set(x, y, z);
+    configs.forEach((cfg, idx) => {
+      const { group, ring, glow } = buildUFO(cfg.isBoss, cfg.color);
+      group.position.copy(cfg.pos);
       this.scene.add(group);
 
-      this.alienFleet.push({
+      // Alien mech character sitting on top of UFO
+      const char = buildCyborgCharacter(cfg.isBoss, cfg.color);
+      char.position.set(0, cfg.isBoss ? 10 : 7, 0);
+      char.rotation.y = Math.PI;
+      group.add(char);
+
+      const alien: AlienShip = {
         group,
-        hp: 100,
-        maxHP: 100,
-        fireTimer: 3 + i * 1.2,
+        hp: cfg.hp,
+        maxHP: cfg.hp,
+        fireTimer: cfg.delay + idx * 1.2,
         alive: true,
-        ring: (group as any)._ring as THREE.Mesh,
-        glow: (group as any)._light as THREE.PointLight,
-        moveOffset: Math.random() * Math.PI * 2,
-      });
+        ring,
+        glow,
+        moveOffset: idx * 2.1,
+      };
+      this.alienFleet.push(alien);
     });
+
+    // UFO formation neon strip lights in sky
+    for (let i = 0; i < 6; i++) {
+      const strip = new THREE.PointLight(
+        [0xff00ff, 0x00ff88, 0xff4400, 0x00aaff, 0xffaa00, 0xff00aa][i],
+        2.5, 150
+      );
+      strip.position.set((Math.random() - 0.5) * 400, 120 + Math.random() * 80, -200 + (Math.random() - 0.5) * 200);
+      this.scene.add(strip);
+    }
+
+    this.callbacks.onStateChange({ aliensAlive: this.alienFleet.length, aliensTotal: this.alienFleet.length });
   }
 
   private setupPostprocessing() {
     this.composer = new EffectComposer(this.renderer);
-    const renderPass = new RenderPass(this.scene, this.camera);
-    this.composer.addPass(renderPass);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
 
-    const bloomPass = new UnrealBloomPass(
+    const bloom = new UnrealBloomPass(
       new THREE.Vector2(this.canvas.clientWidth, this.canvas.clientHeight),
-      0.8,
-      0.5,
-      0.75,
+      1.1,   // strength
+      0.55,  // radius
+      0.72,  // threshold
     );
-    this.composer.addPass(bloomPass);
-
-    const outputPass = new OutputPass();
-    this.composer.addPass(outputPass);
+    this.composer.addPass(bloom);
+    this.composer.addPass(new OutputPass());
   }
 
   private setupInput() {
@@ -574,84 +866,106 @@ export class PirateGame {
     });
   }
 
+  // ─── Cinematic sequence (exactly 9 seconds) ────────────────────────────────
   private startIntroSequence() {
     this.callbacks.onStateChange({ phase: 'intro', phaseTitle: 'ALIEN INVASION', showControls: false });
 
     const cam = this.camera;
+    // Key world positions
+    const playerPos   = new THREE.Vector3(0, 10.5, 202); // player char center
+    const deckPos     = new THREE.Vector3(0, 5, 180);
+    const bossPos     = this.alienFleet[0]?.group.position.clone() ?? new THREE.Vector3(0, 190, -280);
+    const fleetCenter = new THREE.Vector3(0, 168, -260);
+
     const tl = gsap.timeline();
 
-    // Phase 1: High aerial view
-    tl.set(cam.position, { x: 0, y: 500, z: 0 });
-    tl.set(cam.rotation, { x: -Math.PI / 2, y: 0, z: 0 });
+    // ── 0s: Start wide, high, behind ──────────────────────────────────────
+    tl.set(cam.position, { x: 0, y: 220, z: 550 });
+    tl.call(() => cam.lookAt(deckPos.x, deckPos.y, deckPos.z));
 
-    // Phase 2: Dive toward ship bow
+    // ── 0 → 3s: ULTRA-FAST SWOOP to player face-level ─────────────────────
     tl.to(cam.position, {
-      x: 60, y: 60, z: 280,
-      duration: 2.5,
-      ease: 'power2.in',
-      onUpdate: () => cam.lookAt(0, 2.5, 180),
-    });
-
-    // Phase 3: Slide along broadside — cannons visible
-    tl.to(cam.position, {
-      x: -80, y: 18, z: 150,
-      duration: 2.0,
-      ease: 'power1.inOut',
-      onUpdate: () => cam.lookAt(0, 8, 180),
-    });
-
-    // Phase 4: Pull back — alien fleet revealed on horizon
-    tl.to(cam.position, {
-      x: 0, y: 35, z: 350,
-      duration: 2.2,
-      ease: 'power2.out',
-      onUpdate: () => cam.lookAt(0, 10, -400),
-      onStart: () => {
-        this.callbacks.onStateChange({ phaseTitle: 'THE FLEET APPROACHES…' });
+      x: 0, y: 10.5, z: 222,
+      duration: 3.0,
+      ease: 'power3.in',
+      onUpdate: () => {
+        // Smoothly blend look target from deck to player char
+        cam.lookAt(playerPos.x, playerPos.y, playerPos.z);
       },
     });
 
-    // Phase 5: Zoom in behind ship — combat position
+    // ── 3 → 4s: Hold tight on player; ambient beat ────────────────────────
     tl.to(cam.position, {
-      x: 0, y: 28, z: 260,
-      duration: 1.8,
-      ease: 'power2.inOut',
-      onUpdate: () => cam.lookAt(0, 10, -400),
+      x: 3, y: 11, z: 225,
+      duration: 1.0,
+      ease: 'sine.inOut',
+      onUpdate: () => cam.lookAt(playerPos.x, playerPos.y, playerPos.z),
     });
 
-    // Phase 6: Combat begins
-    tl.call(() => {
-      this.phase = 'combat';
-      this.combatStarted = true;
-      this.callbacks.onStateChange({
-        phase: 'combat',
-        phaseTitle: 'BATTLE STATIONS!',
-        showControls: true,
-      });
-      setTimeout(() => this.callbacks.onStateChange({ phaseTitle: '' }), 2500);
+    // ── 4s: Player "looks up" — rotate character head/torso ───────────────
+    tl.to(this.playerChar.rotation, {
+      x: -0.55,
+      duration: 0.18,
+      ease: 'power4.out',
+    }, '<0.8');
+
+    // ── 4 → 7s: VIOLENT PAN UP → reveal alien fleet ───────────────────────
+    tl.to(cam.position, {
+      x: -60, y: 130, z: 320,
+      duration: 3.0,
+      ease: 'power2.inOut',
+      onUpdate: () => cam.lookAt(fleetCenter.x, fleetCenter.y, fleetCenter.z),
+      onStart: () => {
+        this.callbacks.onStateChange({ phaseTitle: 'THE ALIEN FLEET ARRIVES…' });
+      },
+    });
+
+    // Mid-alien-reveal: push tighter toward boss UFO
+    tl.to(cam.position, {
+      x: 20, y: 160, z: 180,
+      duration: 1.5,
+      ease: 'power1.inOut',
+      onUpdate: () => cam.lookAt(bossPos.x, bossPos.y, bossPos.z),
+    }, '-=1.2');
+
+    // ── 7 → 9s: Camera DROPS back to perfect 3rd-person behind player ──────
+    tl.to(cam.position, {
+      x: 0, y: 32, z: 275,
+      duration: 2.0,
+      ease: 'power3.inOut',
+      onUpdate: () => cam.lookAt(0, 12, -200),
+      onStart: () => {
+        this.callbacks.onStateChange({ phaseTitle: '' });
+        // Snap player char back upright
+        gsap.to(this.playerChar.rotation, { x: 0, duration: 0.6, ease: 'back.out(1.5)' });
+      },
+      onComplete: () => {
+        // ── 9s: UNLOCK mobile controls ─────────────────────────────────────
+        this.phase = 'combat';
+        this.combatStarted = true;
+        this.cinematicDone = true;
+        this.callbacks.onStateChange({
+          phase: 'combat',
+          phaseTitle: 'BATTLE STATIONS!',
+          showControls: true,
+        });
+        setTimeout(() => this.callbacks.onStateChange({ phaseTitle: '' }), 2800);
+      },
     });
   }
 
+  // ─── Combat: fire cannonball ───────────────────────────────────────────────
   private fireCannonball() {
     if (this.canFireTimer > 0) return;
     this.canFireTimer = 0.55;
-
     const side = this.fireFromLeft ? -1 : 1;
     this.fireFromLeft = !this.fireFromLeft;
+    const sp = this.playerShip.position;
+    const sr = this.playerShip.rotation.y;
+    const ox = side * 12 * Math.cos(sr + Math.PI / 2);
+    const oz = side * 12 * Math.sin(sr + Math.PI / 2);
+    const origin = new THREE.Vector3(sp.x + ox, sp.y + 5, sp.z + oz);
 
-    const shipPos = this.playerShip.position;
-    const shipRot = this.playerShip.rotation.y;
-
-    const offsetX = side * 12 * Math.cos(shipRot + Math.PI / 2);
-    const offsetZ = side * 12 * Math.sin(shipRot + Math.PI / 2);
-
-    const origin = new THREE.Vector3(
-      shipPos.x + offsetX,
-      shipPos.y + 4,
-      shipPos.z + offsetZ,
-    );
-
-    // Fire toward nearest alien
     let target = new THREE.Vector3(0, 10, -600);
     let nearestDist = Infinity;
     this.alienFleet.forEach(a => {
@@ -661,98 +975,58 @@ export class PirateGame {
     });
 
     const dir = target.clone().sub(origin).normalize();
-    const speed = 120;
-
-    const geo = new THREE.SphereGeometry(0.7, 8, 8);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x444433, metalness: 0.9 });
+    const geo = new THREE.SphereGeometry(0.75, 8, 8);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x333322, metalness: 0.92, roughness: 0.15 });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(origin);
     this.scene.add(mesh);
-
     const trail = buildProjectileTrail(false);
     this.scene.add(trail);
+    this.projectiles.push({ mesh, velocity: dir.multiplyScalar(130), type: 'cannonball', lifetime: 0, trail, trailPositions: trail.geometry.attributes.position.array as Float32Array });
 
-    const trailPositions = trail.geometry.attributes.position.array as Float32Array;
-
-    this.projectiles.push({
-      mesh,
-      velocity: dir.multiplyScalar(speed),
-      type: 'cannonball',
-      lifetime: 0,
-      trail,
-      trailPositions,
-    });
-
-    // Muzzle flash
-    const flash = new THREE.PointLight(0xffaa44, 30, 20);
+    const flash = new THREE.PointLight(0xffaa44, 35, 22);
     flash.position.copy(origin);
     this.scene.add(flash);
-    setTimeout(() => this.scene.remove(flash), 100);
-
-    // Smoke particle
-    const smoke = buildParticleBurst(origin, 0x888888, 12);
+    setTimeout(() => this.scene.remove(flash), 110);
+    const smoke = buildParticleBurst(origin, 0x777777, 14);
     this.scene.add(smoke.mesh);
     this.particles.push(smoke);
   }
 
+  // ─── Combat: alien fires laser ────────────────────────────────────────────
   private fireAlienLaser(alien: AlienShip) {
     const origin = alien.group.position.clone();
-    origin.y -= 3;
-
+    origin.y -= 4;
     const target = this.playerShip.position.clone();
-    target.y += 5;
-
+    target.y += 6;
     const dir = target.clone().sub(origin).normalize();
-    const speed = 90;
-
-    const laserGeo = new THREE.CylinderGeometry(0.3, 0.3, 6, 8);
-    const laserMat = new THREE.MeshStandardMaterial({
-      color: alien.glow.color,
-      emissive: alien.glow.color,
-      emissiveIntensity: 4.0,
-    });
+    const laserGeo = new THREE.CylinderGeometry(0.32, 0.32, 7, 8);
+    const laserMat = new THREE.MeshStandardMaterial({ color: alien.glow.color, emissive: alien.glow.color, emissiveIntensity: 5.0 });
     const mesh = new THREE.Mesh(laserGeo, laserMat);
     mesh.position.copy(origin);
     mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
     this.scene.add(mesh);
-
     const trail = buildProjectileTrail(true);
     this.scene.add(trail);
-    const trailPositions = trail.geometry.attributes.position.array as Float32Array;
-
-    this.projectiles.push({
-      mesh,
-      velocity: dir.multiplyScalar(speed),
-      type: 'laser',
-      lifetime: 0,
-      trail,
-      trailPositions,
-    });
-
-    // Alien fire flash
-    alien.glow.intensity = 25;
-    setTimeout(() => { alien.glow.intensity = 8; }, 150);
+    this.projectiles.push({ mesh, velocity: dir.multiplyScalar(95), type: 'laser', lifetime: 0, trail, trailPositions: trail.geometry.attributes.position.array as Float32Array });
+    alien.glow.intensity = 28;
+    setTimeout(() => { if (alien.alive) alien.glow.intensity = 9; }, 160);
   }
 
+  // ─── Explosion ────────────────────────────────────────────────────────────
   private spawnExplosion(position: THREE.Vector3, isAlien: boolean) {
-    const color = isAlien ? 0x00ff88 : 0xff6600;
-    const burst = buildParticleBurst(position, color, 32);
-    this.scene.add(burst.mesh);
-    this.particles.push(burst);
-
-    // Secondary flash
-    const flash = buildParticleBurst(position, isAlien ? 0x00ccff : 0xffcc44, 16);
-    flash.maxLifetime = 0.8;
-    this.scene.add(flash.mesh);
-    this.particles.push(flash);
-
-    // Light flash
-    const light = new THREE.PointLight(color, 50, 100);
+    const col = isAlien ? 0x00ff88 : 0xff6600;
+    const b1 = buildParticleBurst(position, col, 36);
+    const b2 = buildParticleBurst(position, isAlien ? 0x00ccff : 0xffcc44, 18);
+    b2.maxLifetime = 0.9;
+    [b1, b2].forEach(b => { this.scene.add(b.mesh); this.particles.push(b); });
+    const light = new THREE.PointLight(col, 55, 110);
     light.position.copy(position);
     this.scene.add(light);
-    gsap.to(light, { intensity: 0, duration: 0.6, onComplete: () => this.scene.remove(light) });
+    gsap.to(light, { intensity: 0, duration: 0.65, onComplete: () => this.scene.remove(light) });
   }
 
+  // ─── Resize ───────────────────────────────────────────────────────────────
   private onResize = () => {
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
@@ -762,104 +1036,82 @@ export class PirateGame {
     this.composer.setSize(w, h);
   };
 
+  // ─── Update: player ship movement ─────────────────────────────────────────
   private updatePlayerShip(dt: number) {
     if (!this.combatStarted) return;
 
-    const maxSpeed = 55;
-    const acceleration = 40;
-    const rotSpeed = 0.9;
+    const maxSpeed   = 55;
+    const accel      = 40;
+    const rotSpeed   = 0.9;
 
-    if (this.keys['KeyW'] || this.keys['ArrowUp']) {
-      this.playerSpeed = Math.min(this.playerSpeed + acceleration * dt, maxSpeed);
-    } else if (this.keys['KeyS'] || this.keys['ArrowDown']) {
-      this.playerSpeed = Math.max(this.playerSpeed - acceleration * dt, -maxSpeed * 0.5);
-    } else {
-      this.playerSpeed *= 0.96;
-    }
+    const fwd  = this.keys['KeyW'] || this.keys['ArrowUp']    || this.joystickY < -0.28;
+    const bwd  = this.keys['KeyS'] || this.keys['ArrowDown']  || this.joystickY >  0.28;
+    const rotL = this.keys['KeyA'] || this.keys['ArrowLeft']  || this.joystickX < -0.28;
+    const rotR = this.keys['KeyD'] || this.keys['ArrowRight'] || this.joystickX >  0.28;
 
-    if (this.keys['KeyA'] || this.keys['ArrowLeft']) {
-      this.playerShip.rotation.y -= rotSpeed * dt;
-    }
-    if (this.keys['KeyD'] || this.keys['ArrowRight']) {
-      this.playerShip.rotation.y += rotSpeed * dt;
-    }
+    if (fwd)  this.playerSpeed = Math.min(this.playerSpeed + accel * dt, maxSpeed);
+    else if (bwd) this.playerSpeed = Math.max(this.playerSpeed - accel * dt, -maxSpeed * 0.5);
+    else this.playerSpeed *= 0.96;
 
-    const angle = this.playerShip.rotation.y;
-    this.playerShip.position.x -= Math.sin(angle) * this.playerSpeed * dt;
-    this.playerShip.position.z -= Math.cos(angle) * this.playerSpeed * dt;
+    if (rotL) this.playerRotation += rotSpeed * dt;
+    if (rotR) this.playerRotation -= rotSpeed * dt;
 
-    // Keep ship in bounds
-    this.playerShip.position.x = Math.max(-800, Math.min(800, this.playerShip.position.x));
-    this.playerShip.position.z = Math.max(-800, Math.min(800, this.playerShip.position.z));
+    this.playerShip.rotation.y = this.playerRotation + Math.PI;
+    const fwdX = Math.sin(this.playerRotation);
+    const fwdZ = Math.cos(this.playerRotation);
+    this.playerShip.position.x += fwdX * this.playerSpeed * dt;
+    this.playerShip.position.z += fwdZ * this.playerSpeed * dt;
 
-    // Gentle bob
+    // Keep ship on water surface with gentle bob
     const t = this.clock.getElapsedTime();
     this.playerShip.position.y = 2.5 + Math.sin(t * 0.6) * 0.4;
-    this.playerShip.rotation.z = Math.sin(t * 0.5) * 0.015;
-    this.playerShip.rotation.x = Math.sin(t * 0.7 + 1) * 0.01;
+    this.playerShip.rotation.x = Math.sin(t * 0.5) * 0.018;
+    this.playerShip.rotation.z = Math.cos(t * 0.7) * 0.012;
 
-    // Camera follows ship in combat
-    if (this.phase === 'combat') {
-      const camOffset = new THREE.Vector3(
-        Math.sin(this.playerShip.rotation.y) * 110,
-        28,
-        Math.cos(this.playerShip.rotation.y) * 110,
-      );
-      this.camera.position.lerp(
-        this.playerShip.position.clone().add(camOffset),
-        dt * 3.5,
-      );
-      const lookTarget = this.playerShip.position.clone().add(
-        new THREE.Vector3(
-          -Math.sin(this.playerShip.rotation.y) * 200,
-          0,
-          -Math.cos(this.playerShip.rotation.y) * 200,
-        ),
-      );
-      this.camera.lookAt(lookTarget);
-    }
+    // Move player char with ship
+    this.playerChar.position.set(
+      this.playerShip.position.x,
+      this.playerShip.position.y + 7.0,
+      this.playerShip.position.z + 22 * Math.cos(this.playerShip.rotation.y),
+    );
+    this.playerChar.rotation.y = this.playerShip.rotation.y;
 
-    if (this.canFireTimer > 0) this.canFireTimer -= dt;
+    this.canFireTimer = Math.max(0, this.canFireTimer - dt);
   }
 
+  // ─── Update: alien fleet ──────────────────────────────────────────────────
   private updateAlienFleet(dt: number) {
     if (!this.combatStarted) return;
     const t = this.clock.getElapsedTime();
-
     let aliensAlive = 0;
 
     this.alienFleet.forEach((alien, idx) => {
       if (!alien.alive) return;
       aliensAlive++;
 
-      // Rotate ring
-      alien.ring.rotation.z += dt * (0.8 + idx * 0.15);
+      // Hovering figure-8 orbit
+      const spd = alien.group.userData.isBoss ? 0.25 : 0.35;
+      alien.group.position.x += Math.sin(t * spd + alien.moveOffset) * 12 * dt;
+      alien.group.position.y  = alien.group.userData.baseY + Math.sin(t * 0.55 + alien.moveOffset) * 8;
+      alien.group.position.z += Math.cos(t * spd * 0.7 + alien.moveOffset) * 6 * dt;
 
-      // Bob
-      alien.group.position.y = (15 + idx * 1.5) + Math.sin(t * 0.8 + alien.moveOffset) * 3;
-
-      // Strafe
-      alien.group.position.x += Math.sin(t * 0.4 + alien.moveOffset) * dt * 6;
-
-      // Advance toward player
-      const toPlayer = this.playerShip.position.clone().sub(alien.group.position);
-      const dist = toPlayer.length();
-      if (dist > 120) {
-        toPlayer.normalize().multiplyScalar(dt * 18);
-        alien.group.position.add(toPlayer);
+      // Ring spin
+      if (alien.ring) {
+        alien.ring.rotation.y += dt * (idx === 0 ? 1.1 : 0.8);
+        alien.ring.rotation.x += dt * 0.15;
       }
 
-      // Face toward player
+      // Glow pulse
+      alien.glow.intensity = 9 + Math.sin(t * 2.5 + idx) * 2.5;
+
+      // Face player ship
       alien.group.lookAt(this.playerShip.position.x, alien.group.position.y, this.playerShip.position.z);
 
-      // Glow pulse
-      alien.glow.intensity = 8 + Math.sin(t * 2 + idx) * 2;
-
-      // Fire timer
+      // Fire
       alien.fireTimer -= dt;
       if (alien.fireTimer <= 0) {
         this.fireAlienLaser(alien);
-        alien.fireTimer = 3.5 + Math.random() * 2;
+        alien.fireTimer = 3.2 + Math.random() * 2.0;
       }
     });
 
@@ -867,33 +1119,23 @@ export class PirateGame {
       this.phase = 'victory';
       this.callbacks.onStateChange({ phase: 'victory', phaseTitle: 'VICTORY!' });
     }
-
     this.callbacks.onStateChange({ aliensAlive, aliensTotal: this.alienFleet.length });
   }
 
+  // ─── Update: projectiles ──────────────────────────────────────────────────
   private updateProjectiles(dt: number) {
     const toRemove: Projectile[] = [];
 
     this.projectiles.forEach(proj => {
       proj.lifetime += dt;
-      const maxLife = proj.type === 'cannonball' ? 6 : 4;
-      if (proj.lifetime > maxLife) {
-        toRemove.push(proj);
-        return;
-      }
-
-      // Gravity for cannonballs
-      if (proj.type === 'cannonball') {
-        proj.velocity.y -= 18 * dt;
-      }
-
+      if (proj.lifetime > (proj.type === 'cannonball' ? 6 : 4)) { toRemove.push(proj); return; }
+      if (proj.type === 'cannonball') proj.velocity.y -= 18 * dt;
       proj.mesh.position.addScaledVector(proj.velocity, dt);
 
       // Update trail
-      const trailCount = 20;
       const positions = proj.trailPositions;
-      for (let i = trailCount - 1; i > 0; i--) {
-        positions[i * 3] = positions[(i - 1) * 3];
+      for (let i = 19; i > 0; i--) {
+        positions[i * 3]     = positions[(i - 1) * 3];
         positions[i * 3 + 1] = positions[(i - 1) * 3 + 1];
         positions[i * 3 + 2] = positions[(i - 1) * 3 + 2];
       }
@@ -902,41 +1144,37 @@ export class PirateGame {
       positions[2] = proj.mesh.position.z;
       proj.trail.geometry.attributes.position.needsUpdate = true;
 
-      // Hit water
-      if (proj.mesh.position.y < -0.5) {
-        this.spawnExplosion(proj.mesh.position.clone(), false);
-        toRemove.push(proj);
-        return;
-      }
-
+      // Hit detection
       if (proj.type === 'cannonball') {
-        // Check alien hits
-        this.alienFleet.forEach(alien => {
-          if (!alien.alive) return;
-          if (proj.mesh.position.distanceTo(alien.group.position) < 12) {
-            alien.hp -= 34;
-            this.spawnExplosion(proj.mesh.position.clone(), true);
-            if (alien.hp <= 0) {
-              alien.alive = false;
-              this.scene.remove(alien.group);
-              this.spawnExplosion(alien.group.position.clone(), true);
-              this.spawnExplosion(alien.group.position.clone().add(new THREE.Vector3(0, 10, 0)), true);
-            }
+        this.alienFleet.forEach(a => {
+          if (!a.alive) return;
+          if (proj.mesh.position.distanceTo(a.group.position) < 14) {
             toRemove.push(proj);
+            a.hp -= 15;
+            if (a.hp <= 0) {
+              a.alive = false;
+              this.spawnExplosion(a.group.position.clone(), true);
+              this.scene.remove(a.group);
+            } else {
+              // Hit flash
+              a.glow.intensity = 40;
+              setTimeout(() => { if (a.alive) a.glow.intensity = 9; }, 200);
+            }
           }
         });
       } else {
-        // Check player hit
-        if (proj.mesh.position.distanceTo(this.playerShip.position) < 18) {
-          this.playerHP = Math.max(0, this.playerHP - 12);
+        // Laser hits player ship
+        if (proj.mesh.position.distanceTo(this.playerShip.position) < 16) {
+          toRemove.push(proj);
+          this.playerHP = Math.max(0, this.playerHP - 8);
           this.callbacks.onStateChange({ playerHP: this.playerHP });
           this.spawnExplosion(proj.mesh.position.clone(), false);
-          if (this.playerHP <= 0 && this.phase === 'combat') {
+          if (this.playerHP === 0 && this.phase === 'combat') {
             this.phase = 'defeat';
-            this.callbacks.onStateChange({ phase: 'defeat', phaseTitle: 'SHIP DESTROYED!' });
+            this.callbacks.onStateChange({ phase: 'defeat', phaseTitle: 'DEFEAT…' });
           }
-          toRemove.push(proj);
         }
+        if (proj.mesh.position.y < -2) toRemove.push(proj);
       }
     });
 
@@ -948,29 +1186,23 @@ export class PirateGame {
     });
   }
 
+  // ─── Update: particles ────────────────────────────────────────────────────
   private updateParticles(dt: number) {
     const toRemove: Particle[] = [];
-
-    this.particles.forEach(particle => {
-      particle.lifetime += dt;
-      const progress = particle.lifetime / particle.maxLifetime;
-      if (progress >= 1) { toRemove.push(particle); return; }
-
-      const mat = particle.mesh.material as THREE.PointsMaterial;
-      mat.opacity = 1.0 - progress;
-
-      const positions = particle.mesh.geometry.attributes.position.array as Float32Array;
-      const count = positions.length / 3;
-      for (let i = 0; i < count; i++) {
-        const v = particle.velocities[i];
-        positions[i * 3] += v.x * dt;
+    this.particles.forEach(p => {
+      p.lifetime += dt;
+      if (p.lifetime > p.maxLifetime) { toRemove.push(p); return; }
+      (p.mesh.material as THREE.PointsMaterial).opacity = 1 - p.lifetime / p.maxLifetime;
+      const positions = p.mesh.geometry.attributes.position.array as Float32Array;
+      for (let i = 0; i < p.velocities.length; i++) {
+        const v = p.velocities[i];
+        positions[i * 3]     += v.x * dt;
         positions[i * 3 + 1] += (v.y - 12 * dt) * dt;
         positions[i * 3 + 2] += v.z * dt;
         v.y -= 12 * dt;
       }
-      particle.mesh.geometry.attributes.position.needsUpdate = true;
+      p.mesh.geometry.attributes.position.needsUpdate = true;
     });
-
     toRemove.forEach(p => {
       this.scene.remove(p.mesh);
       const idx = this.particles.indexOf(p);
@@ -978,23 +1210,42 @@ export class PirateGame {
     });
   }
 
+  // ─── Main loop ────────────────────────────────────────────────────────────
   private animate = () => {
     this.animFrameId = requestAnimationFrame(this.animate);
     const dt = Math.min(this.clock.getDelta(), 0.05);
     const t = this.clock.getElapsedTime();
 
-    // Animate water
-    (this.water.material as THREE.ShaderMaterial).uniforms['time'].value += dt * 0.4;
+    // Water animation
+    (this.water.material as THREE.ShaderMaterial).uniforms['time'].value += dt * 0.5;
+    const sunDir = this.sun.clone();
+    sunDir.y += Math.sin(t * 0.3) * 0.01;
+    (this.water.material as THREE.ShaderMaterial).uniforms['sunDirection'].value.copy(sunDir.normalize());
+
+    // ── Breathing animations (always active) ─────────────────────────────
+    // Player cyborg
+    if (this.playerChar) {
+      const breathY = Math.sin(t * 1.6) * 0.12;
+      const breathS = 1.0 + Math.sin(t * 1.6) * 0.018;
+      this.playerChar.position.y += breathY * dt;      // continuous drift
+      this.playerChar.scale.setScalar(breathS);
+    }
+
+    // Alien cyborg breathe
+    this.alienFleet.forEach((alien, idx) => {
+      if (!alien.alive) return;
+      // Store base Y on first frame
+      if (!alien.group.userData.baseY) alien.group.userData.baseY = alien.group.position.y;
+      const charGroup = alien.group.children.find(c => c instanceof THREE.Group) as THREE.Group;
+      if (charGroup) {
+        charGroup.scale.setScalar(1.0 + Math.sin(t * 1.4 + idx * 0.8) * 0.025);
+      }
+    });
 
     this.updatePlayerShip(dt);
     this.updateAlienFleet(dt);
     this.updateProjectiles(dt);
     this.updateParticles(dt);
-
-    // Sun shimmer on water
-    const sunShimmer = this.sun.clone();
-    sunShimmer.y += Math.sin(t * 0.3) * 0.01;
-    (this.water.material as THREE.ShaderMaterial).uniforms['sunDirection'].value.copy(sunShimmer.normalize());
 
     this.composer.render();
   };
@@ -1002,8 +1253,6 @@ export class PirateGame {
   destroy() {
     cancelAnimationFrame(this.animFrameId);
     window.removeEventListener('resize', this.onResize);
-    window.removeEventListener('keydown', () => {});
-    window.removeEventListener('keyup', () => {});
     this.renderer.dispose();
   }
 }
