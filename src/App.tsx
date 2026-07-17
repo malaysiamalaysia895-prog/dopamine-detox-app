@@ -218,7 +218,7 @@ export default function App() {
       )}
 
       {/* Mobile controls — unlocked only after cinematic */}
-      {hud.showControls && hud.phase === 'combat' && (
+      {hud.phase === 'combat' && !isOver && (
         <>
           {/* Virtual Joystick — bottom left */}
           <div
