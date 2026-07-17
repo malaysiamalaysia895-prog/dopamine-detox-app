@@ -124,9 +124,16 @@ export default function App() {
         <div style={{ fontSize: 64, marginBottom: 12 }}>⚓</div>
         <div style={{ fontSize: 26, fontWeight: 900, color: '#ffd580', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: 10 }}>Pirate Boss Fight</div>
         <div style={{ fontSize: 13, color: '#888', maxWidth: 360, textAlign: 'center', lineHeight: 1.7 }}>
-          WebGL is required. Open in a full browser tab to play.
+          {webglErr?.includes('WebGL') || webglErr?.includes('webgl')
+            ? 'WebGL not supported on this device.'
+            : 'Startup error — tap to retry.'}
         </div>
-        <div style={{ marginTop: 20, fontSize: 10, color: '#333', fontFamily: 'monospace' }}>{webglErr}</div>
+        <div style={{ marginTop: 20, fontSize: 11, color: '#555', fontFamily: 'monospace', maxWidth: 340, textAlign: 'center', wordBreak: 'break-all', lineHeight: 1.5 }}>{webglErr}</div>
+        <button
+          onClick={() => window.location.reload()}
+          style={{ marginTop: 28, padding: '10px 28px', borderRadius: 24, background: 'rgba(255,200,80,0.12)', border: '1.5px solid rgba(255,200,80,0.4)', color: '#ffd580', fontFamily: 'Georgia, serif', fontSize: 13, fontWeight: 700, cursor: 'pointer', letterSpacing: '0.12em' }}>
+          ↺ RETRY
+        </button>
       </div>
     );
   }
