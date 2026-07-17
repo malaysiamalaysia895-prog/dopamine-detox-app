@@ -415,6 +415,8 @@ export class PirateGame {
   private composer: EffectComposer | null = null;
   private water!: Water;
   private sun!: THREE.Vector3;
+  private skyUniforms: any = null;
+  private lensFlareEl: HTMLDivElement|null = null;
 
   private playerShip!: THREE.Group;
   private playerChar!: THREE.Group;
@@ -459,7 +461,7 @@ export class PirateGame {
     // Fallback: if GSAP fails, force combat start at 13s
     this.combatFallbackTimer = setTimeout(()=>{
       if(this.phase==='intro'){ this.forceCombatStart(); }
-    }, 13000);
+    }, 15500);
   }
 
   private forceCombatStart(){
@@ -467,6 +469,11 @@ export class PirateGame {
     this.camLookTarget.set(0,12,-150);
     this.callbacks.onStateChange({phase:'combat',phaseTitle:'BATTLE STATIONS!',showControls:true});
     setTimeout(()=>this.callbacks.onStateChange({phaseTitle:''}),2600);
+    // cleanup lens flare overlay if still in DOM
+    if(this.lensFlareEl?.parentNode){ this.lensFlareEl.parentNode.removeChild(this.lensFlareEl); this.lensFlareEl=null; }
+    // restore sun + exposure in case cinematic was interrupted
+    if(this.skyUniforms){ this.skyUniforms['sunPosition'].value.copy(this.sun); }
+    this.renderer.toneMappingExposure = 0.88;
   }
 
   private setupRenderer() {
@@ -508,8 +515,9 @@ export class PirateGame {
     this.sun = new THREE.Vector3();
     const sky = new Sky(); sky.scale.setScalar(8000); this.scene.add(sky);
     const skyU = (sky.material as THREE.ShaderMaterial).uniforms;
-    skyU['turbidity'].value=4.5; skyU['rayleigh'].value=1.1;
-    skyU['mieCoefficient'].value=0.005; skyU['mieDirectionalG'].value=0.82;
+    this.skyUniforms = skyU;
+    skyU['turbidity'].value=5.5; skyU['rayleigh'].value=1.8;
+    skyU['mieCoefficient'].value=0.006; skyU['mieDirectionalG'].value=0.88;
     const phi=THREE.MathUtils.degToRad(90-28);
     const theta=THREE.MathUtils.degToRad(195);
     this.sun.setFromSphericalCoords(1,phi,theta);
@@ -633,65 +641,105 @@ export class PirateGame {
   }
   private keys: Record<string,boolean>={};
 
-  // ─── 11s Cinematic with character animation ─────────────────────────────────
+  // ─── 13s Cinematic: overhead zenith glow → dive → pirate → boss → combat ─────
   private startIntroSequence(){
     this.callbacks.onStateChange({phase:'intro',phaseTitle:'ALIEN INVASION',showControls:false});
     const cam=this.camera;
     const shipC=new THREE.Vector3(0,4,180);
     const charC=new THREE.Vector3(0,12,202);
     const bossC=new THREE.Vector3(0,190,-280);
-    const ufoIn=new THREE.Vector3(0,195,-248);  // camera inside UFO
-    const ufoAt=new THREE.Vector3(0,190,-280);  // looking at boss
+    const ufoIn=new THREE.Vector3(0,195,-248);
+    const ufoAt=new THREE.Vector3(0,190,-280);
+
+    // Golden-hour sun position (stored on class at buildWaterAndSky time)
+    const sunGolden=this.sun.clone();
+
+    // Zenith sun — almost directly above, creates the white divine glow
+    const sunZenith=new THREE.Vector3();
+    sunZenith.setFromSphericalCoords(1,THREE.MathUtils.degToRad(90-87),THREE.MathUtils.degToRad(195));
+
+    // ─── CSS Lens Flare overlay ────────────────────────────────────────────────
+    const lf=document.createElement('div');
+    lf.style.cssText='position:fixed;inset:0;z-index:50;pointer-events:none;'+
+      'background:radial-gradient(ellipse 80% 55% at 50% 18%,'+
+      'rgba(255,252,240,0.94) 0%,rgba(210,228,255,0.62) 22%,'+
+      'rgba(140,185,220,0.22) 52%,transparent 74%);opacity:0;';
+    document.body.appendChild(lf);
+    this.lensFlareEl=lf;
 
     const tl=gsap.timeline({onComplete:()=>this.forceCombatStart()});
 
-    // 0s: start position
-    tl.set(cam.position,{x:0,y:280,z:600});
-    tl.call(()=>cam.lookAt(shipC.x,shipC.y,shipC.z));
+    // ── SHOT 0 (0s): camera overhead, sun at zenith — GOD'S EYE view ──────────
+    tl.set(cam.position,{x:0,y:520,z:250});
+    tl.call(()=>{
+      cam.lookAt(0,0,180);
+      // Move sky sun to near-zenith for the white blowout effect
+      if(this.skyUniforms) this.skyUniforms['sunPosition'].value.copy(sunZenith);
+      this.renderer.toneMappingExposure=1.38;
+      // Lens flare bursts in
+      gsap.to(lf,{opacity:1,duration:0.55,ease:'power2.in'});
+    });
 
-    // 0→2.5s: wide aerial swoop to ship deck
-    tl.to(cam.position,{x:30,y:28,z:235,duration:2.5,ease:'power3.in',
-      onUpdate:()=>cam.lookAt(shipC.x,shipC.y,shipC.z)});
+    // 0→2.8s: slow overhead drift — "God looks down at the ship"
+    tl.to(cam.position,{x:-18,y:490,z:220,duration:2.8,ease:'sine.inOut',
+      onUpdate:()=>cam.lookAt(0,2,180)});
 
-    // 2.5→4s: slide to character face — pirate raises gun
+    // ── SHOT 1 (2.8s): DIVE — sun animates back to golden hour as we fall ─────
+    tl.to(cam.position,{x:30,y:28,z:235,duration:2.6,ease:'power4.in',
+      onUpdate:()=>cam.lookAt(shipC.x,shipC.y,shipC.z),
+      onStart:()=>{
+        // Fade out lens flare as camera dives into the scene
+        gsap.to(lf,{opacity:0,duration:2.0,ease:'power2.out'});
+        // Sky sun sweeps back to golden hour during the dive
+        if(this.skyUniforms){
+          gsap.to(this.skyUniforms['sunPosition'].value,{
+            x:sunGolden.x,y:sunGolden.y,z:sunGolden.z,
+            duration:2.4,ease:'sine.inOut'
+          });
+        }
+        // Exposure back to cinematic normal
+        gsap.to(this.renderer,{toneMappingExposure:0.88,duration:2.2,ease:'sine.out'});
+      }
+    });
+
+    // ── SHOT 2 (5.4s): PIRATE FACE — gun raised ──────────────────────────────
     tl.to(cam.position,{x:5,y:14,z:222,duration:1.5,ease:'power2.inOut',
       onUpdate:()=>cam.lookAt(charC.x,charC.y,charC.z),
       onStart:()=>{
         this.callbacks.onStateChange({phaseTitle:''});
-        // Character raises weapon arm
         const wa=this.playerChar?.userData?.weaponArm;
         if(wa) gsap.to(wa.rotation,{x:-1.1,z:-0.5,duration:0.8,ease:'power2.out'});
       }
     });
 
-    // 3→3.5s: character looks up at sky
+    // Character looks up at the sky
     tl.to(this.playerChar.rotation,{x:-0.55,duration:0.5,ease:'power3.out'},'<0.9');
 
-    // 4→5s: VIOLENT upward pan to sky
+    // ── SHOT 3 (6.9s): VIOLENT upward pan — sky reveal ───────────────────────
     tl.to(cam.position,{x:0,y:170,z:260,duration:1.0,ease:'power4.in',
       onUpdate:()=>cam.lookAt(bossC.x,bossC.y,bossC.z),
       onStart:()=>this.callbacks.onStateChange({phaseTitle:'ALIEN FLEET INCOMING…'})
     });
 
-    // 5→7s: rush at boss UFO
+    // ── SHOT 4 (7.9s): RUSH at boss UFO ──────────────────────────────────────
     tl.to(cam.position,{x:0,y:bossC.y+8,z:bossC.z+85,duration:2.0,ease:'power2.in',
       onUpdate:()=>cam.lookAt(bossC.x,bossC.y,bossC.z)});
 
-    // 7→9s: enter UFO interior — see boss at helm + gunners
+    // ── SHOT 5 (9.9s): UFO INTERIOR — boss at helm ───────────────────────────
     tl.to(cam.position,{x:ufoIn.x,y:ufoIn.y,z:ufoIn.z,duration:2.0,ease:'power3.out',
       onUpdate:()=>cam.lookAt(ufoAt.x,ufoAt.y,ufoAt.z),
       onStart:()=>this.callbacks.onStateChange({phaseTitle:'THE COMMAND DECK'})
     });
 
-    // 9→10.5s: pull back to 3rd-person behind ship
-    tl.to(cam.position,{x:0,y:38,z:275,duration:1.5,ease:'power2.inOut',
+    // ── SHOT 6 (11.9s): PULL BACK to 3rd-person combat position ─────────────
+    tl.to(cam.position,{x:0,y:38,z:275,duration:1.6,ease:'power2.inOut',
       onUpdate:()=>cam.lookAt(0,12,-150),
       onStart:()=>{
         this.callbacks.onStateChange({phaseTitle:''});
-        // Reset character look + lower weapon to idle
         gsap.to(this.playerChar.rotation,{x:0,duration:0.7,ease:'back.out(1.4)'});
         const wa=this.playerChar?.userData?.weaponArm;
         if(wa) gsap.to(wa.rotation,{x:0,z:0.08,duration:0.7,ease:'power2.out'});
+        if(lf.parentNode){ lf.parentNode.removeChild(lf); this.lensFlareEl=null; }
       },
     });
   }
