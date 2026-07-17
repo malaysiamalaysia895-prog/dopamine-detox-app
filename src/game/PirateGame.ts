@@ -431,7 +431,7 @@ export class PirateGame {
   private playerHP = 100;
   readonly playerMaxHP = 100;
   private playerSpeed = 0;
-  private playerRotation = 0;
+  private camAngle = 0;      // orbit angle around character
   private canFireTimer = 0;
   private fireFromLeft = true;
   private combatStarted = false;
@@ -466,7 +466,8 @@ export class PirateGame {
 
   private forceCombatStart(){
     this.phase='combat'; this.combatStarted=true;
-    this.camLookTarget.set(0,12,-150);
+    // camAngle=0 → camera behind ship (+Z from character, ship faces -Z toward aliens)
+    this.camAngle=0;
     this.callbacks.onStateChange({phase:'combat',phaseTitle:'BATTLE STATIONS!',showControls:true});
     setTimeout(()=>this.callbacks.onStateChange({phaseTitle:''}),2600);
     // cleanup lens flare overlay if still in DOM
@@ -558,11 +559,13 @@ export class PirateGame {
     this.playerShip.rotation.y=Math.PI;
     this.scene.add(this.playerShip);
 
-    // Player character — human pirate
-    this.playerChar=buildPirateCharacter(false,0x00eeff);
-    this.playerChar.position.set(0,10,202);
-    this.playerChar.rotation.y=Math.PI;
-    this.scene.add(this.playerChar);
+    // Player character — tiny human pirate ON the ship deck (sc=0.40 so looks small vs ship)
+    // sc=0.40 → character ~4 units tall vs ship 70 units long — realistic sailor scale
+    this.playerChar=buildPirateCharacter(false,0x00eeff,0.40);
+    // Local position on ship deck: y=5 (on deck), z=-5 (helm area, front-ish)
+    this.playerChar.position.set(0,5,-5);
+    this.playerChar.rotation.y=0; // local rotation — faces +Z in parent = -Z world (toward aliens)
+    this.playerShip.add(this.playerChar); // PARENT to ship — moves with ship automatically
   }
 
   private buildAlienFleet(){
@@ -646,7 +649,9 @@ export class PirateGame {
     this.callbacks.onStateChange({phase:'intro',phaseTitle:'ALIEN INVASION',showControls:false});
     const cam=this.camera;
     const shipC=new THREE.Vector3(0,4,180);
-    const charC=new THREE.Vector3(0,12,202);
+    // Character is parented to ship — get actual world position at cinematic start
+    const _cw=new THREE.Vector3(); this.playerChar.getWorldPosition(_cw);
+    const charC=new THREE.Vector3(_cw.x,_cw.y+3,_cw.z);
     const bossC=new THREE.Vector3(0,190,-280);
     const ufoIn=new THREE.Vector3(0,195,-248);
     const ufoAt=new THREE.Vector3(0,190,-280);
@@ -733,7 +738,7 @@ export class PirateGame {
 
     // ── SHOT 6 (11.9s): PULL BACK to 3rd-person combat position ─────────────
     tl.to(cam.position,{x:0,y:38,z:275,duration:1.6,ease:'power2.inOut',
-      onUpdate:()=>cam.lookAt(0,12,-150),
+      onUpdate:()=>{ const cw2=new THREE.Vector3(); this.playerChar.getWorldPosition(cw2); cam.lookAt(cw2.x,cw2.y+2,cw2.z); },
       onStart:()=>{
         this.callbacks.onStateChange({phaseTitle:''});
         gsap.to(this.playerChar.rotation,{x:0,duration:0.7,ease:'back.out(1.4)'});
@@ -744,18 +749,26 @@ export class PirateGame {
     });
   }
 
-  // ─── Cannonball — fiery orange ─────────────────────────────────────────────
+  // ─── Cannonball — fires from character in camera facing direction ─────────
   private fireCannonball(){
     if(this.canFireTimer>0) return;
-    this.canFireTimer=0.55;
-    const side=this.fireFromLeft?-1:1; this.fireFromLeft=!this.fireFromLeft;
-    const sp=this.playerShip.position, sr=this.playerShip.rotation.y;
-    const origin=new THREE.Vector3(
-      sp.x+side*12*Math.cos(sr+Math.PI/2), sp.y+5, sp.z+side*12*Math.sin(sr+Math.PI/2)
-    );
-    let target=new THREE.Vector3(0,10,-600); let nd=Infinity;
-    this.alienFleet.forEach(a=>{if(!a.alive)return; const d=origin.distanceTo(a.group.position); if(d<nd){nd=d;target=a.group.position.clone();}});
-    const dir=target.clone().sub(origin).normalize();
+    this.canFireTimer=0.60;
+    // Origin = character world position at gun height
+    const origin=new THREE.Vector3();
+    this.playerChar.getWorldPosition(origin);
+    origin.y+=3.5; // gun/muzzle height above character feet
+    // Base aim direction = camera forward vector
+    const aimDir=new THREE.Vector3();
+    this.camera.getWorldDirection(aimDir);
+    // Auto-aim: if any alien is within 70° of camera forward, snap to it
+    let bestDir=aimDir.clone(); let bestDot=Math.cos(Math.PI/2.6); // ~70°
+    this.alienFleet.forEach(a=>{
+      if(!a.alive)return;
+      const toA=a.group.position.clone().sub(origin).normalize();
+      const d=toA.dot(aimDir);
+      if(d>bestDot){bestDot=d;bestDir=toA;}
+    });
+    const dir=bestDir.normalize();
 
     // Fiery cannonball — bigger, orange
     const ballMat=stdMat({color:0xff6600,emissive:0xff3300,emissiveIntensity:1.5,metalness:0.3,roughness:0.2});
@@ -808,47 +821,49 @@ export class PirateGame {
     this.renderer.setSize(w,h); this.composer?.setSize(w,h);
   };
 
-  // ─── Third-person follow camera ───────────────────────────────────────────
+  // ─── Orbit camera — joystick pans 360° around character ─────────────────
   private updateCombatCamera(dt: number){
     if(!this.combatStarted) return;
-    const rotY=this.playerRotation;
-    const targetPos=new THREE.Vector3(
-      this.playerShip.position.x-Math.sin(rotY)*80,
-      this.playerShip.position.y+36,
-      this.playerShip.position.z-Math.cos(rotY)*80,
+    // Joystick X pans camera orbit (left/right look)
+    // Keyboard arrows also pan
+    const panSpeed = IS_MOBILE ? 2.4 : 2.0;
+    if(this.joystickX < -0.18 || this.keys['KeyA']||this.keys['ArrowLeft'])
+      this.camAngle += (this.joystickX < -0.18 ? Math.abs(this.joystickX) : 1) * panSpeed * dt;
+    if(this.joystickX >  0.18 || this.keys['KeyD']||this.keys['ArrowRight'])
+      this.camAngle -= (this.joystickX >  0.18 ? Math.abs(this.joystickX) : 1) * panSpeed * dt;
+    // Get character world position (parented to ship)
+    const charWorld = new THREE.Vector3();
+    this.playerChar.getWorldPosition(charWorld);
+    const lookAt = new THREE.Vector3(charWorld.x, charWorld.y+2.5, charWorld.z);
+    // Camera orbits at fixed radius + height around character
+    const radius=72, height=28;
+    const camTarget = new THREE.Vector3(
+      charWorld.x + Math.sin(this.camAngle)*radius,
+      charWorld.y + height,
+      charWorld.z + Math.cos(this.camAngle)*radius,
     );
-    this.camera.position.lerp(targetPos,(IS_MOBILE?4:5)*dt);
-    const newLook=new THREE.Vector3(
-      this.playerShip.position.x+Math.sin(rotY)*200,10,
-      this.playerShip.position.z+Math.cos(rotY)*200,
-    );
-    this.camLookTarget.lerp(newLook,4*dt);
-    this.camera.lookAt(this.camLookTarget);
+    this.camera.position.lerp(camTarget, (IS_MOBILE?4.5:5.5)*dt);
+    this.camera.lookAt(lookAt);
   }
 
   private updatePlayerShip(dt: number){
     if(!this.combatStarted) return;
-    const fwd=this.keys['KeyW']||this.keys['ArrowUp']  ||this.joystickY<-0.28;
-    const bwd=this.keys['KeyS']||this.keys['ArrowDown'] ||this.joystickY> 0.28;
-    const rotL=this.keys['KeyA']||this.keys['ArrowLeft']||this.joystickX<-0.28;
-    const rotR=this.keys['KeyD']||this.keys['ArrowRight']||this.joystickX>0.28;
-    if(fwd)      this.playerSpeed=Math.min(this.playerSpeed+40*dt,55);
-    else if(bwd) this.playerSpeed=Math.max(this.playerSpeed-40*dt,-27);
-    else         this.playerSpeed*=0.96;
-    if(rotL) this.playerRotation+=0.9*dt;
-    if(rotR) this.playerRotation-=0.9*dt;
-    this.playerShip.rotation.y=this.playerRotation+Math.PI;
-    this.playerShip.position.x+=Math.sin(this.playerRotation)*this.playerSpeed*dt;
-    this.playerShip.position.z+=Math.cos(this.playerRotation)*this.playerSpeed*dt;
+    // ── Ship auto-sails forward toward alien fleet — player cannot steer ──
+    // Ship rotation.y=PI → forward direction is -Z world
+    // Slow to a hold at z=-180 so ship battles near aliens
+    const SHIP_SPEED=22;
+    if(this.playerShip.position.z > -180){
+      this.playerShip.position.z -= SHIP_SPEED*dt; // move toward -Z (aliens)
+    } else {
+      // At battle position: gentle side-to-side drift only
+      this.playerShip.position.x += Math.sin(this.clock.getElapsedTime()*0.18)*2*dt;
+    }
+    // Ocean bob — realistic wave movement
     const t=this.clock.getElapsedTime();
-    this.playerShip.position.y=2.5+Math.sin(t*0.6)*0.35;
-    this.playerShip.rotation.x=Math.sin(t*0.5)*0.015;
-    this.playerShip.rotation.z=Math.cos(t*0.7)*0.010;
-    this.playerChar.position.set(
-      this.playerShip.position.x, this.playerShip.position.y+7.5,
-      this.playerShip.position.z+22*Math.cos(this.playerShip.rotation.y),
-    );
-    this.playerChar.rotation.y=this.playerShip.rotation.y;
+    this.playerShip.position.y=2.5+Math.sin(t*0.6)*0.45;
+    this.playerShip.rotation.x=Math.sin(t*0.5)*0.018;
+    this.playerShip.rotation.z=Math.cos(t*0.7)*0.012;
+    // Character is parented to ship — moves automatically
     this.canFireTimer=Math.max(0,this.canFireTimer-dt);
   }
 
