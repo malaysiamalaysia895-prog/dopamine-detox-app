@@ -68,7 +68,8 @@ const TEXTURES = {
 
 const tLoader = new THREE.TextureLoader();
 function loadTex(url: string, rep = 4): THREE.Texture {
-  const t = tLoader.load(url);
+  // Silent fail on CDN load — game uses material.color as offline fallback
+  const t = tLoader.load(url, undefined, undefined, () => { /* offline: texture fails silently, color shows */ });
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(rep, rep);
   return t;
@@ -104,6 +105,9 @@ function stdMat(opts: THREE.MeshStandardMaterialParameters): THREE.MeshStandardM
   return new THREE.MeshStandardMaterial(opts);
 }
 
+
+// ─── Safe add-with-position (Object3D.position is non-writable in THREE r160) ─
+function addP(g, mesh, x, y, z) { mesh.position.set(x, y, z); g.add(mesh); return mesh; }
 // ─── Pirate ship ──────────────────────────────────────────────────────────────
 function buildPirateShip(): THREE.Group {
   const g = new THREE.Group();
@@ -188,27 +192,27 @@ function buildCyborgCharacter(isBoss: boolean, accentColor: number): THREE.Group
   const mk = (geo, mat) => { const m = new THREE.Mesh(geo, mat); m.castShadow = !IS_MOBILE; return m; };
 
   const torsoY = 3.5 * sc + 1.9 * sc;
-  g.add(Object.assign(mk(new THREE.BoxGeometry(2.6 * sc, 3.8 * sc, 1.8 * sc), chrome), { position: new THREE.Vector3(0, torsoY, 0) }));
-  g.add(Object.assign(mk(new THREE.BoxGeometry(1.8 * sc, 2.0 * sc, 0.18), accent),  { position: new THREE.Vector3(0, torsoY, 0.92 * sc) }));
-  g.add(Object.assign(mk(new THREE.SphereGeometry(0.42 * sc, 10, 10), visor),        { position: new THREE.Vector3(0, torsoY, 1.0 * sc) }));
+  addP(g, mk(new THREE.BoxGeometry(2.6 * sc, 3.8 * sc, 1.8 * sc), chrome), 0, torsoY, 0);
+  addP(g, mk(new THREE.BoxGeometry(1.8 * sc, 2.0 * sc, 0.18), accent), 0, torsoY, 0.92 * sc);
+  addP(g, mk(new THREE.SphereGeometry(0.42 * sc, 10, 10), visor), 0, torsoY, 1.0 * sc);
 
   const headY = torsoY + 1.9 * sc + 1.0 * sc;
-  g.add(Object.assign(mk(new THREE.BoxGeometry(2.2 * sc, 2.0 * sc, 2.0 * sc), chrome), { position: new THREE.Vector3(0, headY, 0) }));
-  g.add(Object.assign(mk(new THREE.BoxGeometry(1.8 * sc, 0.5 * sc, 0.1), visor),        { position: new THREE.Vector3(0, headY + 0.2 * sc, 1.0 * sc) }));
+  addP(g, mk(new THREE.BoxGeometry(2.2 * sc, 2.0 * sc, 2.0 * sc), chrome), 0, headY, 0);
+  addP(g, mk(new THREE.BoxGeometry(1.8 * sc, 0.5 * sc, 0.1), visor), 0, headY + 0.2 * sc, 1.0 * sc);
 
   if (isBoss) {
-    g.add(Object.assign(mk(new THREE.CylinderGeometry(0.08, 0.12, 2.0, 6), accent),  { position: new THREE.Vector3(0, headY + 1.7 * sc, 0) }));
-    g.add(Object.assign(mk(new THREE.SphereGeometry(0.22, 8, 8), visor),              { position: new THREE.Vector3(0, headY + 2.8 * sc, 0) }));
+    addP(g, mk(new THREE.CylinderGeometry(0.08, 0.12, 2.0, 6), accent), 0, headY + 1.7 * sc, 0);
+    addP(g, mk(new THREE.SphereGeometry(0.22, 8, 8), visor), 0, headY + 2.8 * sc, 0);
   }
 
   const shoulderY = torsoY + 1.1 * sc;
   [-1, 1].forEach(side => {
-    g.add(Object.assign(mk(new THREE.SphereGeometry(0.85 * sc, 8, 8), accent), { position: new THREE.Vector3(side * 1.95 * sc, shoulderY, 0) }));
+    addP(g, mk(new THREE.SphereGeometry(0.85 * sc, 8, 8), accent), side * 1.95 * sc, shoulderY, 0);
 
     const uarm = mk(new THREE.CylinderGeometry(0.38 * sc, 0.32 * sc, 2.4 * sc, 7), chrome);
     uarm.position.set(side * 2.55 * sc, shoulderY - 1.2 * sc, 0); uarm.rotation.z = side * 0.18; g.add(uarm);
 
-    g.add(Object.assign(mk(new THREE.SphereGeometry(0.35 * sc, 7, 7), joint), { position: new THREE.Vector3(side * 2.7 * sc, shoulderY - 2.5 * sc, 0) }));
+    addP(g, mk(new THREE.SphereGeometry(0.35 * sc, 7, 7), joint), side * 2.7 * sc, shoulderY - 2.5 * sc, 0);
 
     const farm = mk(new THREE.CylinderGeometry(0.3 * sc, 0.38 * sc, 2.2 * sc, 7), chrome);
     farm.position.set(side * 3.0 * sc, shoulderY - 3.8 * sc, 0); farm.rotation.z = side * 0.28; g.add(farm);
@@ -225,13 +229,13 @@ function buildCyborgCharacter(isBoss: boolean, accentColor: number): THREE.Group
   });
 
   const pelvisY = 3.0 * sc;
-  g.add(Object.assign(mk(new THREE.BoxGeometry(2.3 * sc, 1.1 * sc, 1.5 * sc), accent), { position: new THREE.Vector3(0, pelvisY, 0) }));
+  addP(g, mk(new THREE.BoxGeometry(2.3 * sc, 1.1 * sc, 1.5 * sc), accent), 0, pelvisY, 0);
 
   [-1, 1].forEach(side => {
-    g.add(Object.assign(mk(new THREE.CylinderGeometry(0.52 * sc, 0.42 * sc, 3.0 * sc, 7), chrome), { position: new THREE.Vector3(side * 0.88 * sc, 1.5 * sc, 0) }));
-    g.add(Object.assign(mk(new THREE.SphereGeometry(0.48 * sc, 7, 7), joint),                       { position: new THREE.Vector3(side * 0.88 * sc, 0, 0.1 * sc) }));
-    g.add(Object.assign(mk(new THREE.CylinderGeometry(0.35 * sc, 0.52 * sc, 2.8 * sc, 7), chrome), { position: new THREE.Vector3(side * 0.88 * sc, -1.4 * sc, 0.1 * sc) }));
-    g.add(Object.assign(mk(new THREE.BoxGeometry(0.88 * sc, 0.58 * sc, 1.7 * sc), accent),         { position: new THREE.Vector3(side * 0.88 * sc, -2.85 * sc, 0.4 * sc) }));
+    addP(g, mk(new THREE.CylinderGeometry(0.52 * sc, 0.42 * sc, 3.0 * sc, 7), chrome), side * 0.88 * sc, 1.5 * sc, 0);
+    addP(g, mk(new THREE.SphereGeometry(0.48 * sc, 7, 7), joint), side * 0.88 * sc, 0, 0.1 * sc);
+    addP(g, mk(new THREE.CylinderGeometry(0.35 * sc, 0.52 * sc, 2.8 * sc, 7), chrome), side * 0.88 * sc, -1.4 * sc, 0.1 * sc);
+    addP(g, mk(new THREE.BoxGeometry(0.88 * sc, 0.58 * sc, 1.7 * sc), accent), side * 0.88 * sc, -2.85 * sc, 0.4 * sc);
   });
 
   // Subtle glow (1 light per character — cheap)
