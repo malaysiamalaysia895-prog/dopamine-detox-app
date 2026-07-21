@@ -1,0 +1,1 @@
+- [Spaceship entry cinematic invisibility](spaceship-entry-animation.md) — oversized scale + off-screen start can make an entry animation invisible on real devices, not just a wiring bug.

@@ -2,6 +2,7 @@
 // Level 36 — NEW: Dialogue bubble, shield golden aura,
 // HP pulse vignette, slow-mo flash, victory coin shower
 
+import 'dart:async';
 import 'dart:math';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -19,7 +20,7 @@ class OctopusAlienOverlay extends StatelessWidget {
       final p = controller.phase;
       if (p == OctopusAlienPhase.idle) return const SizedBox.shrink();
       if (isDialogActive) return const SizedBox.shrink();
-      return Stack(children: [
+      return Stack(clipBehavior: Clip.none, children: [
         if (controller.isSlowMo) Positioned.fill(child: IgnorePointer(child: _Flash(color: const Color(0xFF00FF88)))),
         if (p == OctopusAlienPhase.alienEntry) _AlienEntry(controller: controller, getCellRect: getCellRect),
         if (p == OctopusAlienPhase.tentacleJoin) _TentacleJoin(controller: controller, getCellRect: getCellRect),
@@ -82,10 +83,14 @@ class _AlienEntryState extends State<_AlienEntry> with TickerProviderStateMixin 
     _ptcl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 4500))..forward();
     _land  = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000));
 
-    // Scale: giant fullscreen alien → elastic bounce settle
+    // Scale: large-but-onscreen alien → elastic bounce settle.
+    // Was 3.8-4.2x, which combined with the -180px fixed start offset
+    // pushed the alien entirely out of the viewport for most of the
+    // descent — on real devices it looked like a static "painting" that
+    // just appeared, not an animation.
     _scale = TweenSequence<double>([
-      TweenSequenceItem(tween: Tween(begin: 3.8, end: 4.2), weight: 6),
-      TweenSequenceItem(tween: Tween(begin: 4.2, end: 1.0), weight: 52),
+      TweenSequenceItem(tween: Tween(begin: 1.9, end: 2.1), weight: 6),
+      TweenSequenceItem(tween: Tween(begin: 2.1, end: 1.0), weight: 52),
       TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.12), weight: 10),
       TweenSequenceItem(tween: Tween(begin: 1.12, end: 1.0), weight: 32),
     ]).animate(CurvedAnimation(parent: _main, curve: Curves.easeInOutCubic));
@@ -117,7 +122,9 @@ class _AlienEntryState extends State<_AlienEntry> with TickerProviderStateMixin 
     final gridTop = cellR?.top ?? sz.height * 0.40;
     final targetY = (gridTop - 130).clamp(8.0, gridTop - 130);
     final cx      = sz.width / 2;
-    const startY  = -180.0;
+    // Start the alien at the very top of the visible area so the entry
+    // cinematic is on-screen from frame 1 on every device.
+    final startY  = -30.0;
 
     return AnimatedBuilder(animation: Listenable.merge([_main,_pulse,_ptcl,_land]), builder: (_, __) {
       final t  = _main.value;
@@ -138,9 +145,11 @@ class _AlienEntryState extends State<_AlienEntry> with TickerProviderStateMixin 
           ? (1.0 - _land.value) * math.sin(_land.value * math.pi * 4) * 0.18
           : 0.0;
 
-      return Stack(children: [
+      return Stack(clipBehavior: Clip.none, children: [
+        // Was capped at 0.78 (near-solid black) — lowered so the alien and
+        // particles stay clearly readable against the backdrop.
         Positioned.fill(child: IgnorePointer(child: Container(
-          color: Colors.black.withOpacity((t*0.78).clamp(0.0,0.78))))),
+          color: Colors.black.withOpacity((0.35 + t*0.30).clamp(0.0,0.65))))),
         // Green energy aura around alien during approach
         if (t < 0.60)
           Positioned.fill(child: IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(
@@ -237,20 +246,42 @@ class _ActivePhase extends StatefulWidget {
   @override State<_ActivePhase> createState() => _ActivePhaseState();
 }
 class _ActivePhaseState extends State<_ActivePhase> with TickerProviderStateMixin {
-  late AnimationController _pulse, _wave, _tent, _hpP, _shld, _dlg;
+  late AnimationController _pulse, _wave, _wave2, _tent, _hpP, _shld, _dlg;
   String? _prevDlg;
+  int _hintIndex = 0;
+  Timer? _hintTimer;
+
+  // Neutral coach-voice hints — NOT the creature's dialogue. Each is an
+  // (icon, text) pair so they match the Level-35 _HintBanner style exactly.
+  static const _kHints = [
+    ('💡', 'Merge items before the tentacle attacks — merged items are protected!'),
+    ('🔀', 'Spot the red glowing cell? Merge that item fast to block the strike.'),
+    ('⚡', 'Item not merged when the tentacle hits = destroyed + energy penalty.'),
+    ('🎯', 'The more you merge proactively, the fewer items the tentacle can target.'),
+  ];
+
   @override void initState() {
     super.initState();
     _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..repeat(reverse: true);
     _wave  = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500))..repeat();
+    _wave2 = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..repeat();
     _tent  = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))..repeat();
     _hpP   = AnimationController(vsync: this, duration: const Duration(milliseconds: 450))..repeat(reverse: true);
     _shld  = AnimationController(vsync: this, duration: const Duration(milliseconds: 600))..repeat(reverse: true);
     _dlg   = AnimationController(vsync: this, duration: const Duration(milliseconds: 350));
     widget.controller.addListener(_onChange);
+    // Rotate the gameplay hint every 6 s so the player always knows what to do
+    _hintTimer = Timer.periodic(const Duration(seconds: 6), (_) {
+      if (mounted) setState(() => _hintIndex = (_hintIndex + 1) % _kHints.length);
+    });
   }
   void _onChange() { final d = widget.controller.dialogueText; if (d != _prevDlg && d != null) { _prevDlg = d; _dlg.forward(from: 0); } }
-  @override void dispose() { widget.controller.removeListener(_onChange); _pulse.dispose(); _wave.dispose(); _tent.dispose(); _hpP.dispose(); _shld.dispose(); _dlg.dispose(); super.dispose(); }
+  @override void dispose() {
+    widget.controller.removeListener(_onChange);
+    _hintTimer?.cancel();
+    _pulse.dispose(); _wave.dispose(); _wave2.dispose(); _tent.dispose(); _hpP.dispose(); _shld.dispose(); _dlg.dispose();
+    super.dispose();
+  }
   @override
   Widget build(BuildContext context) {
     final sz = MediaQuery.of(context).size;
@@ -262,11 +293,11 @@ class _ActivePhaseState extends State<_ActivePhase> with TickerProviderStateMixi
     final strikes = c.activeTentacleStrikes;
     final isAttacking = strikes.isNotEmpty;
 
-    return AnimatedBuilder(animation: Listenable.merge([_pulse,_wave,_tent,_hpP,_shld,_dlg]), builder: (_, __) {
+    return AnimatedBuilder(animation: Listenable.merge([_pulse,_wave,_wave2,_tent,_hpP,_shld,_dlg]), builder: (_, __) {
       final hpOp = isLow ? (0.5 + _hpP.value * 0.5) : 1.0;
       final attackGlow = isAttacking ? (0.85 + _tent.value * 0.15) : (0.7 + _pulse.value * 0.3);
       return Stack(children: [
-        Positioned(left: cx-55, top: by, child: IgnorePointer(child: _OctBody(glow: attackGlow, tentacles: true, wave: _wave.value, shielded: shielded, enraged: isAttacking))),
+        Positioned(left: cx-55, top: by, child: IgnorePointer(child: _OctBody(glow: attackGlow, tentacles: true, wave: _wave.value, wave2: _wave2.value, shielded: shielded, enraged: isAttacking))),
         // Shield aura
         if (shielded)
           Positioned(left: cx-75, top: by-20, child: IgnorePointer(child: Container(width: 150, height: 150,
@@ -281,7 +312,7 @@ class _ActivePhaseState extends State<_ActivePhase> with TickerProviderStateMixi
           Positioned(top: by-50, left: cx-145, width: 290,
             child: ScaleTransition(scale: CurvedAnimation(parent: _dlg, curve: Curves.elasticOut),
               child: _DialogueBubble(text: c.dialogueText!, color: shielded ? const Color(0xFFFFD700) : const Color(0xFF00FF88)))),
-        // HP bar
+        // HP bar + rotating gameplay hint
         Positioned(top: by+128, left: 30, right: 30, child: Column(children: [
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             Row(children: [
@@ -302,18 +333,81 @@ class _ActivePhaseState extends State<_ActivePhase> with TickerProviderStateMixi
               backgroundColor: Colors.white12,
               valueColor: AlwaysStoppedAnimation(isLow ? Colors.red.withOpacity(hpOp)
                 : Color.lerp(glowCol, const Color(0xFFFF4400), 1 - c.progressFraction)!))),
+          // ── Rotating gameplay hint (coach voice, not creature) ────────────
+          const SizedBox(height: 7),
+          _OctHintBanner(
+            icon: isAttacking ? '⚠️' : _kHints[_hintIndex].$1,
+            text: isAttacking
+                ? 'Merge the red-bordered item NOW to save it from the tentacle!'
+                : _kHints[_hintIndex].$2,
+            accent: isAttacking
+                ? const Color(0xFFFF4400)
+                : const Color(0xFF00FF88),
+            hintKey: ValueKey(isAttacking ? 'atk' : _hintIndex),
+          ),
         ])),
-        // Tentacle strikes — one line + target box + spark burst per active target
-        for (final s in strikes) ...() {
+        // ── Tentacle strikes ───────────────────────────────────────────────────
+        // Each attack tentacle starts from the body tentacle base nearest to
+        // the target — so the creature's OWN arm reaches out, not a separate
+        // line from its belly button.
+        for (int si = 0; si < strikes.length; si++) ...() {
+          final s  = strikes[si];
           final sr = widget.getCellRect(s.col, s.row);
           if (sr == null) return <Widget>[];
+
+          // Body center in screen coords (creature sits at cx-55, by; its
+          // head/body centre is ~55px right, 55px down within that container).
+          final bodyCenter = Offset(cx, by + 55);
+
+          // Find the body tentacle whose base angle is closest to the target
+          final toTarget = sr.center - bodyCenter;
+          final targetAngle = math.atan2(toTarget.dy, toTarget.dx);
+          double nearestAngle = 0;
+          double minDiff = double.infinity;
+          for (int ti = 0; ti < 8; ti++) {
+            final ba = (ti / 8) * math.pi * 2 + math.pi * 0.5;
+            // Normalise angle difference to [-π, π]
+            double diff = (ba - targetAngle).abs();
+            if (diff > math.pi) diff = (math.pi * 2) - diff;
+            if (diff < minDiff) { minDiff = diff; nearestAngle = ba; }
+          }
+
+          // Tentacle base in screen coords (28px from body centre)
+          final tentBase = Offset(
+            bodyCenter.dx + math.cos(nearestAngle) * 28,
+            bodyCenter.dy + math.sin(nearestAngle) * 28,
+          );
+
+          // Pulse opacity for urgency border
+          final urgentOp = 0.6 + _hpP.value * 0.4;
+
           return [
-            ..._tentacleLine(Offset(cx, by+70), Offset(sr.center.dx, sr.center.dy), _tent.value),
-            Positioned(left: sr.left, top: sr.top, width: sr.width, height: sr.height,
-              child: IgnorePointer(child: Container(decoration: BoxDecoration(borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF00FF88).withOpacity(0.9), width: 3),
-                color: const Color(0xFF00FF44).withOpacity(0.2),
-                boxShadow: [BoxShadow(color: const Color(0xFF00FF88).withOpacity(0.5), blurRadius: 12)])))),
+            // The creature's body tentacle extends toward the target
+            ..._tentacleLine(tentBase, sr.center, _tent.value),
+            // Urgent red/orange target box — very different from the passive
+            // green borders so the player immediately recognises danger
+            Positioned(left: sr.left - 3, top: sr.top - 3,
+              width: sr.width + 6, height: sr.height + 6,
+              child: IgnorePointer(child: Container(decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFFF3300).withOpacity(urgentOp), width: 3),
+                color: const Color(0xFFFF2200).withOpacity(0.18),
+                boxShadow: [
+                  BoxShadow(color: const Color(0xFFFF4400).withOpacity(urgentOp * 0.7), blurRadius: 16, spreadRadius: 2),
+                ])))),
+            // "MERGE NOW!" floating label above the targeted cell
+            Positioned(
+              left: sr.left - 10, top: sr.top - 24,
+              width: sr.width + 20,
+              child: IgnorePointer(child: Center(child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFCC2200).withOpacity(0.92),
+                  borderRadius: BorderRadius.circular(5),
+                  boxShadow: [BoxShadow(color: const Color(0xFFFF4400).withOpacity(0.6), blurRadius: 8)]),
+                child: Text('⚠️ MERGE NOW!',
+                  style: TextStyle(color: Colors.white.withOpacity(urgentOp),
+                    fontSize: 8, fontWeight: FontWeight.w900, letterSpacing: 0.5)))))),
             ..._impactSparks(sr.center, _tent.value),
           ];
         }(),
@@ -321,14 +415,13 @@ class _ActivePhaseState extends State<_ActivePhase> with TickerProviderStateMixi
     });
   }
 
-  // Radiating spark particles around a strike's impact point — makes each
-  // tentacle hit feel more dangerous/electric.
+  // Radiating spark particles around a strike's impact point.
   List<Widget> _impactSparks(Offset center, double t) {
-    const sparkCount = 6;
+    const sparkCount = 8;
     final out = <Widget>[];
     for (int i = 0; i < sparkCount; i++) {
       final a = (i / sparkCount) * math.pi * 2 + t * math.pi * 2;
-      final reach = 14 + t * 22;
+      final reach = 14 + t * 26;
       final dx = center.dx + math.cos(a) * reach;
       final dy = center.dy + math.sin(a) * reach;
       final op = (1 - ((t + i / sparkCount) % 1.0)).clamp(0.0, 1.0);
@@ -336,8 +429,8 @@ class _ActivePhaseState extends State<_ActivePhase> with TickerProviderStateMixi
       out.add(Positioned(left: dx - sz / 2, top: dy - sz / 2,
         child: IgnorePointer(child: Container(width: sz, height: sz,
           decoration: BoxDecoration(shape: BoxShape.circle,
-            color: const Color(0xFF00FFAA).withOpacity(op * 0.9),
-            boxShadow: [BoxShadow(color: const Color(0xFF00FF88).withOpacity(op * 0.7), blurRadius: 8)])))));
+            color: const Color(0xFFFF6600).withOpacity(op * 0.9),
+            boxShadow: [BoxShadow(color: const Color(0xFFFF4400).withOpacity(op * 0.7), blurRadius: 8)])))));
     }
     return out;
   }
@@ -347,24 +440,38 @@ class _ActivePhaseState extends State<_ActivePhase> with TickerProviderStateMixi
     return shielded ? const Color(0xFFFFD700) : const Color(0xFF00FF88);
   }
 
+  // Tentacle arm extending from body to target — starts at the creature's
+  // tentacle base so it looks like the body's own arm is reaching out.
   List<Widget> _tentacleLine(Offset start, Offset end, double progress) {
     if (progress < 0.05) return [];
-    final segs = 14; final rng = Random(42); final out = <Widget>[];
+    final segs = 16;
+    final rng  = Random(start.dx.toInt() ^ end.dy.toInt()); // stable seed per target
+    final out  = <Widget>[];
     for (int i = 0; i < segs; i++) {
-      final t0 = i/segs; final t1 = (i+1)/segs;
+      final t0 = i / segs;
+      final t1 = (i + 1) / segs;
       if (t0 > progress) break;
-      final p0 = Offset.lerp(start, end, t0)!; final p1 = Offset.lerp(start, end, t1.clamp(0.0, progress))!;
-      final w = (rng.nextDouble()-0.5)*22*math.sin(t0*math.pi);
-      final perp = Offset(-(end.dy-start.dy), end.dx-start.dx); final pLen = perp.distance;
-      final pn = pLen > 0 ? Offset(perp.dx/pLen, perp.dy/pLen) : Offset.zero;
-      final wp0 = Offset(p0.dx+pn.dx*w, p0.dy+pn.dy*w); final wp1 = Offset(p1.dx+pn.dx*w, p1.dy+pn.dy*w);
-      // Thicker at base, tapering to tip
-      final th = 11.0*(1-t0*0.65); final mid = Offset((wp0.dx+wp1.dx)/2,(wp0.dy+wp1.dy)/2);
-      final len = (wp1-wp0).distance; final angle = math.atan2(wp1.dy-wp0.dy, wp1.dx-wp0.dx);
-      out.add(Positioned(left: mid.dx-len/2, top: mid.dy-th/2, child: IgnorePointer(child: Transform.rotate(angle: angle,
-        child: Container(width: len, height: th, decoration: BoxDecoration(borderRadius: BorderRadius.circular(th/2),
-          gradient: const LinearGradient(colors: [Color(0xFF00FF88), Color(0xFF009955)]),
-          boxShadow: [BoxShadow(color: const Color(0xFF00FF44).withOpacity(0.65), blurRadius: 10, spreadRadius: 1)]))))));
+      final p0 = Offset.lerp(start, end, t0)!;
+      final p1 = Offset.lerp(start, end, t1.clamp(0.0, progress))!;
+      final w  = (rng.nextDouble() - 0.5) * 26 * math.sin(t0 * math.pi);
+      final perp = Offset(-(end.dy - start.dy), end.dx - start.dx);
+      final pLen = perp.distance;
+      final pn   = pLen > 0 ? Offset(perp.dx / pLen, perp.dy / pLen) : Offset.zero;
+      final wp0  = Offset(p0.dx + pn.dx * w, p0.dy + pn.dy * w);
+      final wp1  = Offset(p1.dx + pn.dx * w, p1.dy + pn.dy * w);
+      // Thick at base, tapers to tip — reads as a real limb
+      final th   = (14.0 * (1 - t0 * 0.75)).clamp(2.0, 14.0);
+      final mid  = Offset((wp0.dx + wp1.dx) / 2, (wp0.dy + wp1.dy) / 2);
+      final len  = (wp1 - wp0).distance;
+      final ang  = math.atan2(wp1.dy - wp0.dy, wp1.dx - wp0.dx);
+      out.add(Positioned(
+        left: mid.dx - len / 2, top: mid.dy - th / 2,
+        child: IgnorePointer(child: Transform.rotate(angle: ang,
+          child: Container(width: len, height: th,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(th / 2),
+              gradient: const LinearGradient(colors: [Color(0xFF00FF88), Color(0xFF007744)]),
+              boxShadow: [BoxShadow(color: const Color(0xFF00FF44).withOpacity(0.7), blurRadius: 12, spreadRadius: 2)]))))));
     }
     return out;
   }
@@ -376,106 +483,277 @@ class _WinBlast extends StatefulWidget {
   @override State<_WinBlast> createState() => _WinBlastState();
 }
 class _WinBlastState extends State<_WinBlast> with SingleTickerProviderStateMixin {
-  late AnimationController _c; final _rng = Random(); final List<_P> _ps = []; final List<_Coin> _cs = [];
-  @override void initState() {
+  late AnimationController _c;
+  final _rng = Random();
+  final List<_P> _ps = [];
+  final List<_Coin> _cs = [];
+  @override
+  void initState() {
     super.initState();
-    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 3800))..forward();
-    for (int i = 0; i < 70; i++) {
-      _ps.add(_P(_rng.nextDouble()*math.pi*2, 0.3+_rng.nextDouble()*0.7, 4+_rng.nextDouble()*12,
-        [const Color(0xFF00FF88), const Color(0xFFCC00FF), const Color(0xFFFF8800), const Color(0xFFFFEE00), Colors.white][_rng.nextInt(5)],
-        _rng.nextDouble()*0.3));
+    // Enhanced: 4.8s, 130 particles, shockwave rings
+    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 4800))..forward();
+    for (int i = 0; i < 130; i++) {
+      _ps.add(_P(
+        _rng.nextDouble() * math.pi * 2,
+        0.18 + _rng.nextDouble() * 0.82,
+        2 + _rng.nextDouble() * 14,
+        [const Color(0xFF00FF88), const Color(0xFF00FFCC), const Color(0xFFCC00FF),
+         const Color(0xFFFF8800), const Color(0xFFFFEE00), Colors.white,
+         const Color(0xFF00DDFF)][_rng.nextInt(7)],
+        _rng.nextDouble() * 0.28));
     }
-    for (int i = 0; i < 55; i++) { _cs.add(_Coin(_rng.nextDouble(), 0.25+_rng.nextDouble()*0.5, 0.4+_rng.nextDouble()*0.6, 14+_rng.nextDouble()*10)); }
+    for (int i = 0; i < 65; i++) {
+      _cs.add(_Coin(_rng.nextDouble(), 0.22 + _rng.nextDouble() * 0.55,
+        0.38 + _rng.nextDouble() * 0.62, 13 + _rng.nextDouble() * 11));
+    }
   }
   @override void dispose() { _c.dispose(); super.dispose(); }
   @override
   Widget build(BuildContext context) {
-    final sz = MediaQuery.of(context).size; final cx = sz.width/2; final cy = sz.height*0.28;
+    final sz = MediaQuery.of(context).size;
+    final cx = sz.width / 2;
+    final cy = sz.height * 0.27;
     return AnimatedBuilder(animation: _c, builder: (_, __) {
       final t = _c.value;
       return Stack(children: [
-        Positioned.fill(child: IgnorePointer(child: Container(color: Colors.black.withOpacity((math.sin(t*math.pi)*0.85).clamp(0.0,0.85))))),
-        if (t < 0.25) Positioned.fill(child: IgnorePointer(child: Container(color: const Color(0xFF00FF88).withOpacity((1-t/0.25)*0.6)))),
-        ..._ps.map((p) { final pr = ((t-p.delay)/(1-p.delay)).clamp(0.0,1.0); if (pr<=0) return const SizedBox.shrink();
-          final dx = cx+math.cos(p.angle)*pr*sz.width*0.7*p.speed; final dy = cy+math.sin(p.angle)*pr*sz.height*0.9*p.speed;
-          final op = ((1-pr)*(1-pr)).clamp(0.0,1.0);
-          return Positioned(left: dx-p.size/2, top: dy-p.size/2, child: IgnorePointer(child: Container(width: p.size, height: p.size,
-            decoration: BoxDecoration(shape: BoxShape.circle, color: p.color.withOpacity(op),
-              boxShadow: [BoxShadow(color: p.color.withOpacity(op*0.5), blurRadius: p.size*2)]))));
+        // Background
+        Positioned.fill(child: IgnorePointer(child: Container(
+          color: Colors.black.withOpacity((math.sin(t * math.pi) * 0.88).clamp(0.0, 0.88))))),
+        // Bright green flash at start
+        if (t < 0.28) Positioned.fill(child: IgnorePointer(child: Container(
+          color: const Color(0xFF00FF88).withOpacity(((1 - t / 0.28) * 0.75).clamp(0.0, 0.75))))),
+        // 3 expanding shockwave rings
+        ...List.generate(3, (ri) {
+          final rDelay = ri * 0.11;
+          final rT = ((t - rDelay) / (1.0 - rDelay)).clamp(0.0, 1.0);
+          if (rT <= 0) return const SizedBox.shrink();
+          final ringR  = rT * sz.width * 0.80;
+          final ringOp = (1 - rT * 1.45).clamp(0.0, 0.68);
+          if (ringOp <= 0.01) return const SizedBox.shrink();
+          final ringColor = [const Color(0xFF00FF88), Colors.white, const Color(0xFFCC00FF)][ri];
+          return Positioned.fill(child: IgnorePointer(child: CustomPaint(
+            painter: _OctWBRingPainter(center: Offset(cx, cy), radius: ringR, opacity: ringOp, color: ringColor),
+          )));
         }),
-        ..._cs.map((c) { final pr = ((t-c.delay)/(1-c.delay)).clamp(0.0,1.0); if (pr<=0) return const SizedBox.shrink();
-          final op = t > 0.85 ? ((1-t)/0.15).clamp(0.0,1.0) : 1.0;
-          return Positioned(left: c.x*sz.width-c.size/2, top: pr*sz.height*1.1*c.speed-c.size/2,
+        // Particles
+        ..._ps.map((p) {
+          final pr = ((t - p.delay) / (1 - p.delay)).clamp(0.0, 1.0);
+          if (pr <= 0) return const SizedBox.shrink();
+          final dx = cx + math.cos(p.angle) * pr * sz.width  * 0.78 * p.speed;
+          final dy = cy + math.sin(p.angle) * pr * sz.height * 0.92 * p.speed;
+          final op = ((1 - pr) * (1 - pr)).clamp(0.0, 1.0);
+          return Positioned(left: dx - p.size / 2, top: dy - p.size / 2,
+            child: IgnorePointer(child: Container(width: p.size, height: p.size,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: p.color.withOpacity(op),
+                boxShadow: [BoxShadow(color: p.color.withOpacity(op * 0.5), blurRadius: p.size * 2)]))));
+        }),
+        // Coin shower
+        ..._cs.map((c) {
+          final pr = ((t - c.delay) / (1 - c.delay)).clamp(0.0, 1.0);
+          if (pr <= 0) return const SizedBox.shrink();
+          final op = t > 0.86 ? ((1 - t) / 0.14).clamp(0.0, 1.0) : 1.0;
+          return Positioned(left: c.x * sz.width - c.size / 2,
+            top: pr * sz.height * 1.1 * c.speed - c.size / 2,
             child: IgnorePointer(child: Opacity(opacity: op, child: Text('💰', style: TextStyle(fontSize: c.size)))));
         }),
-        if (t > 0.4)
-          Positioned(top: sz.height*0.4, left: 30, right: 30,
-            child: Opacity(opacity: ((t-0.4)/0.4).clamp(0.0,1.0),
+        // Victory text
+        if (t > 0.36)
+          Positioned(top: sz.height * 0.38, left: 24, right: 24,
+            child: Opacity(opacity: ((t - 0.36) / 0.44).clamp(0.0, 1.0),
               child: Column(children: [
                 const Text('🐙 OCTOPUS ALIEN DEFEATED! 💥', textAlign: TextAlign.center,
-                  style: TextStyle(color: Color(0xFF00FF88), fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: 2,
-                    shadows: [Shadow(color: Color(0xFF00FF44), blurRadius: 20)])),
-                const SizedBox(height: 8),
-                Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                  decoration: BoxDecoration(color: const Color(0xFFFFD700).withOpacity(0.2), borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: const Color(0xFFFFD700).withOpacity(0.6))),
-                  child: const Text('+50 COINS BONUS! 💰', style: TextStyle(color: Color(0xFFFFD700), fontSize: 14, fontWeight: FontWeight.w900))),
+                  style: TextStyle(color: Color(0xFF00FF88), fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: 2,
+                    shadows: [Shadow(color: Color(0xFF00FF44), blurRadius: 22),
+                              Shadow(color: Color(0xFFCC00FF), blurRadius: 38)])),
+                const SizedBox(height: 10),
+                Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                  decoration: BoxDecoration(color: const Color(0xFFFFD700).withOpacity(0.20),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFFFD700).withOpacity(0.72))),
+                  child: const Text('+50 COINS BONUS! 💰',
+                    style: TextStyle(color: Color(0xFFFFD700), fontSize: 14, fontWeight: FontWeight.w900))),
               ]))),
       ]);
     });
   }
 }
 
+class _OctWBRingPainter extends CustomPainter {
+  final Offset center;
+  final double radius, opacity;
+  final Color color;
+  const _OctWBRingPainter({required this.center, required this.radius, required this.opacity, required this.color});
+  @override void paint(Canvas canvas, Size size) {
+    if (opacity < 0.01 || radius < 1) return;
+    canvas.drawCircle(center, radius, Paint()
+      ..color = color.withOpacity(opacity)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.2
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7));
+    canvas.drawCircle(center, radius * 0.87, Paint()
+      ..color = color.withOpacity(opacity * 0.36)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2);
+  }
+  @override bool shouldRepaint(_OctWBRingPainter o) => o.radius != radius || o.opacity != opacity;
+}
+
 // ── Octopus Body ──────────────────────────────────────────────────────────────
+// Redesigned from a flat linear-gradient blob with a pasted 👾 emoji (looked
+// like a cheap sticker/painting) into a properly shaded, rounded creature:
+// radial-gradient skull for real curvature, a mottled skin highlight patch,
+// glossy eyes with catch-lights, and a soft contact shadow under the head.
 class _OctBody extends StatelessWidget {
-  final double glow, wave; final bool tentacles, shielded; final bool enraged;
-  const _OctBody({required this.glow, required this.tentacles, required this.wave, required this.shielded, this.enraged = false});
+  final double glow, wave, wave2; final bool tentacles, shielded; final bool enraged;
+  const _OctBody({required this.glow, required this.tentacles, required this.wave, this.wave2 = 0.0, required this.shielded, this.enraged = false});
   @override
   Widget build(BuildContext context) {
     final gc = shielded ? const Color(0xFFFFD700) : (enraged ? const Color(0xFFFF3300) : const Color(0xFF00FF88));
+    final skinColors = enraged
+        ? [const Color(0xFF9A3A2A), const Color(0xFF6E1A1A), const Color(0xFF3A0A0A)]
+        : [const Color(0xFF4FBE7C), const Color(0xFF2D8E4E), const Color(0xFF163D22)];
     return SizedBox(width: 110, height: tentacles ? 120 : 80, child: Stack(alignment: Alignment.topCenter, clipBehavior: Clip.none, children: [
       Positioned(top: 0, left: 5, child: Container(width: 100, height: 80, decoration: BoxDecoration(shape: BoxShape.circle,
         boxShadow: [BoxShadow(color: gc.withOpacity(glow*0.5), blurRadius: 30, spreadRadius: 8)]))),
-      Positioned(top: 0, left: 15, child: Container(width: 80, height: 70,
-        decoration: BoxDecoration(borderRadius: const BorderRadius.vertical(top: Radius.circular(40), bottom: Radius.circular(20)),
-          gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-            colors: enraged
-              ? [const Color(0xFF6E1A1A).withOpacity(0.9), const Color(0xFF3A0A0A).withOpacity(0.85)]
-              : [const Color(0xFF2D8E4E).withOpacity(0.9), const Color(0xFF1A5C30).withOpacity(0.8)]),
-          border: Border.all(color: gc.withOpacity(glow*0.8), width: enraged ? 2.5 : 2)),
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [_Eye(glow: glow, c: gc), _Eye(glow: glow, c: gc)]),
-          const SizedBox(height: 6),
-          Container(width: 30, height: 8, decoration: BoxDecoration(borderRadius: BorderRadius.circular(4),
-            color: const Color(0xFF004422).withOpacity(0.8), border: Border.all(color: gc.withOpacity(0.5), width: 1))),
-        ]))),
+      // Soft contact shadow to ground the head visually
+      Positioned(top: 58, left: 25, child: IgnorePointer(child: Container(width: 60, height: 14,
+        decoration: BoxDecoration(borderRadius: BorderRadius.circular(10),
+          gradient: RadialGradient(colors: [Colors.black.withOpacity(0.45), Colors.transparent]))))),
+      Positioned(top: 0, left: 15, child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(40), bottom: Radius.circular(20)),
+        child: Container(width: 80, height: 70,
+          decoration: BoxDecoration(
+            gradient: RadialGradient(center: const Alignment(-0.3, -0.6), radius: 1.15,
+              colors: skinColors),
+            border: Border.all(color: gc.withOpacity(glow*0.8), width: enraged ? 2.5 : 2)),
+          child: Stack(children: [
+            // Skull highlight patch — reads as a rounded, lit surface
+            Positioned(top: 4, left: 8, child: Container(width: 30, height: 18,
+              decoration: BoxDecoration(borderRadius: BorderRadius.circular(14),
+                gradient: LinearGradient(colors: [
+                  Colors.white.withOpacity(enraged ? 0.10 : 0.16), Colors.transparent])))),
+            // Bottom rim-shade for underside curvature
+            Positioned(bottom: 0, left: 0, right: 0, child: Container(height: 22,
+              decoration: BoxDecoration(borderRadius: const BorderRadius.vertical(bottom: Radius.circular(20)),
+                gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                  colors: [Colors.transparent, Colors.black.withOpacity(0.28)])))),
+            Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [_Eye(glow: glow, c: gc), _Eye(glow: glow, c: gc)]),
+              const SizedBox(height: 5),
+              // Animated mouth — opens/closes using wave cycle (1.5 s period)
+              Builder(builder: (_) {
+                final mouthH = (4.0 + (math.sin(wave * math.pi * 2).abs() * 8.0)).clamp(4.0, 12.0);
+                return AnimatedContainer(
+                  duration: const Duration(milliseconds: 80),
+                  width: enraged ? 34 : 28,
+                  height: mouthH,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(4),
+                    color: const Color(0xFF001A0C).withOpacity(0.90),
+                    border: Border.all(color: gc.withOpacity(enraged ? 0.9 : 0.5), width: enraged ? 1.5 : 1),
+                    boxShadow: enraged ? [BoxShadow(color: gc.withOpacity(0.5), blurRadius: 6)] : null,
+                  ),
+                );
+              }),
+            ]),
+          ]),
+        ))),
       if (tentacles)
         ...List.generate(8, (i) {
-          final ba = (i/8)*math.pi*2 + math.pi*0.5;
-          final wo = math.sin(wave*math.pi*2 + i*math.pi/4)*16;
-          final len = 54+wo;
-          final tc = shielded ? const Color(0xFFFFAA00) : const Color(0xFF00CC66);
+          // Each tentacle gets its own independent phase so they never all
+          // move in sync — stagger by a generous 0.75 rad per tentacle.
+          final phase1 = wave  * math.pi * 2 + i * 0.75;
+          final phase2 = wave2 * math.pi * 2 + i * 0.62;
+          // Compound wave: two frequencies → organic, non-repeating motion
+          final wo  = math.sin(phase1) * 18.0 + math.sin(phase2 * 1.6) * 9.0;
+          final ba  = (i / 8) * math.pi * 2 + math.pi * 0.5;
+          // Longer tentacles (base 64) for a more menacing reach
+          final len = 64.0 + wo;
+          final tc  = shielded ? const Color(0xFFFFAA00) : const Color(0xFF00CC66);
+          // Thick at inner tentacles, slightly thinner toward outer ring
+          final baseThick = 14.5 - i * 0.5;
+          // Ctrl point offset gives each arm a different curve direction
+          final ctrlOff = Offset(
+            math.sin(phase2) * 18.0,
+            math.cos(phase1) * 14.0,
+          );
           return Positioned(left: 0, top: 0, right: 0, bottom: 0, child: IgnorePointer(child: CustomPaint(
-            painter: _TentP(start: Offset(55+math.cos(ba)*30, 55+math.sin(ba)*30),
-              end: Offset(55+math.cos(ba)*len, 70+math.sin(ba)*len+wo*0.5),
-              color: tc, thickness: 11.0-i*0.7, glow: glow))));
+            painter: _TentP(
+              start: Offset(55 + math.cos(ba) * 28, 55 + math.sin(ba) * 28),
+              end:   Offset(55 + math.cos(ba) * len, 70 + math.sin(ba) * len + wo * 0.5),
+              ctrl:  ctrlOff,
+              color: tc, thickness: baseThick, glow: glow))));
         }),
-      const Positioned(top: 20, left: 35, child: Text('👾', style: TextStyle(fontSize: 20))),
     ]));
   }
 }
 
-class _Eye extends StatelessWidget {
-  final double glow; final Color c; const _Eye({required this.glow, required this.c});
-  @override Widget build(BuildContext context) => Container(width: 16, height: 16,
-    decoration: BoxDecoration(shape: BoxShape.circle, color: c.withOpacity(glow),
-      boxShadow: [BoxShadow(color: c.withOpacity(glow*0.8), blurRadius: 8)]),
-    child: Center(child: Container(width: 6, height: 6, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.black))));
+// ── Blinking eye — blinks randomly every 2-4 s ──────────────────────────────
+class _Eye extends StatefulWidget {
+  final double glow; final Color c;
+  const _Eye({required this.glow, required this.c});
+  @override State<_Eye> createState() => _EyeState();
+}
+class _EyeState extends State<_Eye> with SingleTickerProviderStateMixin {
+  late AnimationController _blink;
+  final _rng = math.Random();
+  bool _scheduled = false;
+
+  @override void initState() {
+    super.initState();
+    _blink = AnimationController(vsync: this, duration: const Duration(milliseconds: 110));
+    _scheduleBlink();
+  }
+
+  void _scheduleBlink() {
+    if (_scheduled) return;
+    _scheduled = true;
+    final delay = 1800 + _rng.nextInt(2400); // 1.8 – 4.2 s between blinks
+    Future.delayed(Duration(milliseconds: delay), () {
+      if (!mounted) return;
+      _scheduled = false;
+      _blink.forward().then((_) {
+        if (!mounted) return;
+        _blink.reverse().then((_) { if (mounted) _scheduleBlink(); });
+      });
+    });
+  }
+
+  @override void dispose() { _blink.dispose(); super.dispose(); }
+
+  @override Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _blink,
+    builder: (_, __) {
+      final scaleY = 1.0 - _blink.value * 0.90; // squish vertically → eye closes
+      return Transform.scale(
+        scaleY: scaleY,
+        child: Container(width: 16, height: 16,
+          decoration: BoxDecoration(shape: BoxShape.circle,
+            color: widget.c.withOpacity(widget.glow),
+            boxShadow: [BoxShadow(color: widget.c.withOpacity(widget.glow * 0.8), blurRadius: 8)]),
+          child: Stack(children: [
+            Center(child: Container(width: 6, height: 6,
+              decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.black))),
+            Positioned(top: 3, left: 4, child: Container(width: 3, height: 3,
+              decoration: BoxDecoration(shape: BoxShape.circle,
+                color: Colors.white.withOpacity(0.85)))),
+          ])));
+    },
+  );
 }
 
 class _TentP extends CustomPainter {
-  final Offset start, end; final Color color; final double thickness, glow;
-  const _TentP({required this.start, required this.end, required this.color, required this.thickness, required this.glow});
+  final Offset start, end, ctrl;
+  final Color color;
+  final double thickness, glow;
+  const _TentP({
+    required this.start,
+    required this.end,
+    this.ctrl = Offset.zero,
+    required this.color,
+    required this.thickness,
+    required this.glow,
+  });
 
   Offset _qBez(Offset p0, Offset p1, Offset p2, double t) {
     final mt = 1 - t;
@@ -484,27 +762,71 @@ class _TentP extends CustomPainter {
   }
 
   @override void paint(Canvas canvas, Size size) {
-    final mid = Offset((start.dx+end.dx)/2+(end.dy-start.dy)*0.28,
-                       (start.dy+end.dy)/2+(start.dx-end.dx)*0.28);
-    final path = Path()..moveTo(start.dx,start.dy)..quadraticBezierTo(mid.dx,mid.dy,end.dx,end.dy);
-    // Wide outer glow
+    // Control point — shifted by ctrl for per-tentacle independent curves
+    final mid = Offset(
+      (start.dx + end.dx) / 2 + (end.dy - start.dy) * 0.28 + ctrl.dx,
+      (start.dy + end.dy) / 2 + (start.dx - end.dx) * 0.28 + ctrl.dy,
+    );
+
+    // ── Outer bloom glow (wide, blurred) ──
+    final path = Path()..moveTo(start.dx, start.dy)..quadraticBezierTo(mid.dx, mid.dy, end.dx, end.dy);
     canvas.drawPath(path, Paint()
-      ..color = color.withOpacity(0.38*glow)..strokeWidth = thickness+10..strokeCap = StrokeCap.round
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7)..style = PaintingStyle.stroke);
-    // Mid glow layer
-    canvas.drawPath(path, Paint()
-      ..color = color.withOpacity(0.55*glow)..strokeWidth = thickness+4..strokeCap = StrokeCap.round
+      ..color = color.withOpacity(0.45 * glow)
+      ..strokeWidth = thickness + 16
+      ..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12)
       ..style = PaintingStyle.stroke);
-    // Solid tentacle body
+
+    // ── Mid glow halo ──
     canvas.drawPath(path, Paint()
-      ..color = color.withOpacity(0.92)..strokeWidth = thickness..strokeCap = StrokeCap.round..style = PaintingStyle.stroke);
-    // Sucker dots evenly along the tentacle
-    final suckerCount = (thickness / 3).round().clamp(2, 5);
+      ..color = color.withOpacity(0.60 * glow)
+      ..strokeWidth = thickness + 6
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke);
+
+    // ── Tapered body: draw segments that get thinner toward the tip ──
+    const segments = 10;
+    for (int s = 0; s < segments; s++) {
+      final t0 = s / segments;
+      final t1 = (s + 1) / segments;
+      final p0 = _qBez(start, mid, end, t0);
+      final p1 = _qBez(start, mid, end, t1);
+      // Taper: full thickness at base → 20 % at tip
+      final segThick = thickness * (1.0 - t0 * 0.80);
+      canvas.drawLine(p0, p1, Paint()
+        ..color = color.withOpacity(0.94)
+        ..strokeWidth = segThick.clamp(1.5, thickness)
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke);
+    }
+
+    // ── Bright highlight streak along the dorsal edge ──
+    canvas.drawPath(path, Paint()
+      ..color = Colors.white.withOpacity(0.18 * glow)
+      ..strokeWidth = (thickness * 0.25).clamp(1.0, 3.0)
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke);
+
+    // ── Sucker discs evenly along the tentacle ──
+    final suckerCount = (thickness / 1.8).round().clamp(5, 9);
     for (int s = 1; s <= suckerCount; s++) {
-      final t = s / (suckerCount + 1);
+      final t  = s / (suckerCount + 1);
       final sp = _qBez(start, mid, end, t);
-      canvas.drawCircle(sp, thickness * 0.42, Paint()..color = Colors.black.withOpacity(0.65)..style = PaintingStyle.fill);
-      canvas.drawCircle(sp, thickness * 0.28, Paint()..color = color.withOpacity(0.75)..style = PaintingStyle.fill);
+      // Sucker radius tapers with the tentacle
+      final r  = (thickness * (1.0 - t * 0.75) * 0.46).clamp(1.5, 6.5);
+
+      // Outer rim — glows in tentacle colour
+      canvas.drawCircle(sp, r, Paint()
+        ..color = color.withOpacity(0.55 * glow)
+        ..style = PaintingStyle.fill);
+      // Dark sucker cup centre
+      canvas.drawCircle(sp, r * 0.62, Paint()
+        ..color = Colors.black.withOpacity(0.80)
+        ..style = PaintingStyle.fill);
+      // Tiny specular dot so each sucker reads as concave/wet
+      canvas.drawCircle(
+        Offset(sp.dx - r * 0.28, sp.dy - r * 0.28), r * 0.28,
+        Paint()..color = Colors.white.withOpacity(0.60)..style = PaintingStyle.fill);
     }
   }
   @override bool shouldRepaint(_TentP o) => true;
@@ -532,15 +854,61 @@ class _RulesCard extends StatelessWidget {
           style: TextStyle(color: Color(0xFF00FF88), fontSize: 10, fontWeight: FontWeight.w900),
           textAlign: TextAlign.center)),
       const SizedBox(height: 8),
-      _r('🐙', 'Every 5s: tentacles strike 4-5 cells → items destroyed!'),
-      _r('🛡️', 'Shield appears every ~20s for 6s — merges BLOCKED while shielded'),
-      _r('✅', 'When shield drops: merge items freely → each merge = 1 progress'),
-      _r('📊', 'Tentacle hits do NOT count as merges — keep merging to win!'),
+      _r('🐙', 'Every 7s: tentacles telegraph 3-4 cells → merge them before impact!'),
+      _r('⚡', 'Every 5 merges: EARN A POWER that blocks the creature for 5s!'),
+      _r('✅', 'Every merge always counts — keep merging to build your power'),
+      _r('📊', 'Merge 30 total to win — use your power windows to catch up!'),
       _r('💰', 'Defeat = +50 COINS BONUS!'),
     ]));
   Widget _r(String i, String t) => Padding(padding: const EdgeInsets.symmetric(vertical: 2),
     child: Row(children: [Text(i, style: const TextStyle(fontSize: 14)), const SizedBox(width: 6),
       Expanded(child: Text(t, style: const TextStyle(color: Colors.white70, fontSize: 10, height: 1.4)))]));
+}
+
+// ── Coach-voice hint banner — same structural feel as Level 35's _HintBanner ──
+// Positioned just below the HP bar so it reads as a game HUD element, NOT as
+// something the creature is saying.  Uses an AnimatedSwitcher fade+slide so
+// each rotation feels deliberate.
+class _OctHintBanner extends StatelessWidget {
+  final String icon, text;
+  final Color accent;
+  final Key hintKey;
+  const _OctHintBanner({required this.icon, required this.text, required this.accent, required this.hintKey});
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 340),
+      transitionBuilder: (child, anim) => FadeTransition(
+        opacity: anim,
+        child: SlideTransition(
+          position: Tween<Offset>(begin: const Offset(0, 0.18), end: Offset.zero).animate(anim),
+          child: child)),
+      child: Container(
+        key: hintKey,
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [const Color(0xFF001A0A).withOpacity(0.94), const Color(0xFF001208).withOpacity(0.94)],
+            begin: Alignment.topLeft, end: Alignment.bottomRight),
+          borderRadius: BorderRadius.circular(11),
+          border: Border.all(color: accent.withOpacity(0.72), width: 1.3),
+          boxShadow: [BoxShadow(color: accent.withOpacity(0.28), blurRadius: 12, spreadRadius: 1)]),
+        child: Row(children: [
+          Container(width: 22, height: 22,
+            decoration: BoxDecoration(shape: BoxShape.circle,
+              color: accent.withOpacity(0.20),
+              border: Border.all(color: accent.withOpacity(0.60), width: 1)),
+            alignment: Alignment.center,
+            child: Text(icon, style: const TextStyle(fontSize: 11))),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text,
+            style: const TextStyle(color: Colors.white, fontSize: 10,
+              fontWeight: FontWeight.w800, height: 1.28, letterSpacing: 0.2))),
+        ]),
+      ),
+    );
+  }
 }
 
 // ── Shared ─────────────────────────────────────────────────────────────────────

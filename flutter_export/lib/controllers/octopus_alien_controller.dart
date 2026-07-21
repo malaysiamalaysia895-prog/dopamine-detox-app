@@ -45,9 +45,15 @@ class OctopusAlienController extends ChangeNotifier {
   bool entryComplete        = false;
 
   String? dialogueText;
+  // isShielded now means "creature is suppressed and cannot strike" — a
+  // PLAYER-EARNED power (was previously the reverse: an anti-player shield
+  // that blocked the player's own merges from counting).
   bool    isShielded   = false;
   bool    isSlowMo     = false;
   bool    isLowHp      = false;
+  int     _mergesSincePower = 0;
+  static const int _mergesPerPower = 5;
+  int     mergesUntilPower = _mergesPerPower;
 
   List<TentacleStrike> activeTentacleStrikes = [];
 
@@ -66,7 +72,6 @@ class OctopusAlienController extends ChangeNotifier {
   Timer? _strikeTimer;
   Timer? _vibTimer;
   Timer? _dialogueTimer;
-  Timer? _shieldCycleTimer;
   Timer? _shieldOffTimer;
   Timer? _slowMoTimer;
 
@@ -96,6 +101,8 @@ class OctopusAlienController extends ChangeNotifier {
     isLowHp               = false;
     dialogueText          = null;
     activeTentacleStrikes = [];
+    _mergesSincePower     = 0;
+    mergesUntilPower      = _mergesPerPower;
     _gridCols             = gridCols;
     _gridRows             = gridRows;
     onCellDestroyed       = onCellDestroy;
@@ -105,7 +112,7 @@ class OctopusAlienController extends ChangeNotifier {
 
     _winTriggered = false;
     _hapticBurst();
-    AudioManager.instance.playAlienBgm('assets/audio/bgm_alien.mp3').catchError((_) {});
+    AudioManager.instance.playAlienBgm('assets/audio/bgm_alien_boss.mp3').catchError((_) {});
 
     phase = OctopusAlienPhase.alienEntry;
     notifyListeners();
@@ -119,7 +126,6 @@ class OctopusAlienController extends ChangeNotifier {
         entryComplete = true;
         phase = OctopusAlienPhase.active;
         _startStrikeCycle();
-        _startShieldCycle();
         _startVibPulse();
         _startDialogueCycle();
         notifyListeners();
@@ -129,16 +135,18 @@ class OctopusAlienController extends ChangeNotifier {
 
   void onItemMerged() {
     if (phase != OctopusAlienPhase.active) return;
-    if (isShielded) {
-      dialogueText = 'SHIELD BLOCKS YOU! 🛡️';
-      notifyListeners();
-      Timer(const Duration(seconds: 2), () {
-        if (!_disposed) { dialogueText = null; notifyListeners(); }
-      });
-      return;
-    }
+    // Merges always count now — the old build blocked the player's own
+    // merges during "shield" windows, which felt punishing. Instead, merging
+    // is what EARNS the player a power (see below).
     mergesDone++;
     _updateLowHp();
+    _mergesSincePower++;
+    mergesUntilPower = (_mergesPerPower - _mergesSincePower).clamp(0, _mergesPerPower);
+    if (_mergesSincePower >= _mergesPerPower && !isShielded) {
+      _mergesSincePower = 0;
+      mergesUntilPower  = _mergesPerPower;
+      _activatePlayerPower();
+    }
     notifyListeners();
     if (mergesDone >= mergesNeeded) _handleWin();
   }
@@ -155,32 +163,29 @@ class OctopusAlienController extends ChangeNotifier {
   }
 
   void _startStrikeCycle() {
-    _strikeTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+    // Rebalanced (was every 5s with only a 1.2s warning before impact —
+    // not enough time to notice and merge the targeted items). Now strikes
+    // are slower and telegraph longer, so a player who's paying attention
+    // has a real chance to save the targeted cells by merging them.
+    _strikeTimer = Timer.periodic(const Duration(seconds: 7), (_) {
       if (phase != OctopusAlienPhase.active || _disposed) return;
       _doTentacleStrike();
     });
   }
 
-  void _startShieldCycle() {
-    Timer(const Duration(seconds: 15), () {
-      if (phase == OctopusAlienPhase.active && !_disposed) _activateShield();
-    });
-    _shieldCycleTimer = Timer.periodic(const Duration(seconds: 20), (_) {
-      if (phase != OctopusAlienPhase.active || _disposed) return;
-      _activateShield();
-    });
-  }
-
-  void _activateShield() {
+  /// PLAYER-EARNED power: every [_mergesPerPower] merges, the creature is
+  /// suppressed (cannot strike) for 5 seconds — a reward for good play,
+  /// replacing the old anti-player "shield blocks your merges" mechanic.
+  void _activatePlayerPower() {
     isShielded   = true;
-    dialogueText = 'SHIELD ACTIVATED! 🛡️ MERGES BLOCKED!';
+    dialogueText = 'POWER UP! 🛡️ CREATURE BLOCKED!';
     _safeVibrate(pattern: [0, 100, 30, 100]);
     notifyListeners();
     _shieldOffTimer?.cancel();
-    _shieldOffTimer = Timer(const Duration(seconds: 6), () {
+    _shieldOffTimer = Timer(const Duration(seconds: 5), () {
       if (_disposed) return;
       isShielded   = false;
-      dialogueText = 'SHIELD DOWN... FOR NOW! 😤';
+      dialogueText = 'IT BREAKS FREE! 😤';
       notifyListeners();
       Timer(const Duration(seconds: 2), () {
         if (!_disposed) { dialogueText = null; notifyListeners(); }
@@ -201,8 +206,9 @@ class OctopusAlienController extends ChangeNotifier {
     }
     if (candidates.isEmpty) return;
     candidates.shuffle(_rng);
-    // Strike 4-5 items simultaneously (was previously only ever 1 target).
-    final targetCount = min(candidates.length, 4 + _rng.nextInt(2));
+    // Strike 3-4 items simultaneously (was 4-5 — slightly fewer targets so
+    // the wider warning window below stays fair to keep up with).
+    final targetCount = min(candidates.length, 3 + _rng.nextInt(2));
     final strikes = <TentacleStrike>[];
     for (int i = 0; i < targetCount; i++) {
       _idCounter += 1;
@@ -212,17 +218,24 @@ class OctopusAlienController extends ChangeNotifier {
     _safeVibrate(pattern: [0, 60, 20, 100, 20, 100]);
     notifyListeners();
 
-    Timer(const Duration(milliseconds: 1200), () {
+    // Was 1200ms — far too short to notice the tentacle telegraph and merge
+    // the targeted items in time. Widened to 2400ms so a player who reacts
+    // right away has a real shot at saving the cells.
+    Timer(const Duration(milliseconds: 2400), () {
       if (_disposed || _winTriggered || phase != OctopusAlienPhase.active) return;
+      int destroyed = 0;
       for (final s in strikes) {
         // Re-verify the item is still there right before impact (it may have
-        // been merged away in the meantime) to avoid destroying empty cells.
+        // been merged away in the meantime) — no destruction + no penalty if
+        // the player already merged the targeted item.
         final stillThere = isCellOccupied?.call(s.col, s.row) ?? true;
-        if (stillThere) onCellDestroyed?.call(s.col, s.row);
+        if (stillThere) { onCellDestroyed?.call(s.col, s.row); destroyed++; }
       }
       activeTentacleStrikes =
           activeTentacleStrikes.where((s) => !strikes.contains(s)).toList();
-      onPlayerDamage?.call(10);
+      // Only charge the energy penalty when at least one item was actually
+      // destroyed.  If the player merged all targeted items in time, no penalty.
+      if (destroyed > 0) onPlayerDamage?.call(10);
       _updateLowHp();
       notifyListeners();
     });
@@ -299,6 +312,8 @@ class OctopusAlienController extends ChangeNotifier {
     isLowHp              = false;
     dialogueText         = null;
     activeTentacleStrikes = [];
+    _mergesSincePower    = 0;
+    mergesUntilPower     = _mergesPerPower;
     _winTriggered        = false;
     notifyListeners();
   }
@@ -309,11 +324,10 @@ class OctopusAlienController extends ChangeNotifier {
     _strikeTimer?.cancel();
     _vibTimer?.cancel();
     _dialogueTimer?.cancel();
-    _shieldCycleTimer?.cancel();
     _shieldOffTimer?.cancel();
     _slowMoTimer?.cancel();
     _entryTimer = _tentacleJoinTimer = _strikeTimer = _vibTimer =
-        _dialogueTimer = _shieldCycleTimer = _shieldOffTimer = _slowMoTimer = null;
+        _dialogueTimer = _shieldOffTimer = _slowMoTimer = null;
   }
 
   Future<void> _safeVibrate({List<int>? pattern, int duration = 200}) async {

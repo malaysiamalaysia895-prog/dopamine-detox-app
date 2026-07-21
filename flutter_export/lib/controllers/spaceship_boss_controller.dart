@@ -73,6 +73,7 @@ class SpaceshipBossController extends ChangeNotifier {
   void Function(int coins)?            onCoinReward;
   void Function(int col, int row)?     onCellBlocked;
   void Function(int col, int row)?     onCellUnblocked;
+  bool  Function(int col, int row)?    isCellOccupied;
 
   bool _disposed = false;
   final Random _rng       = Random();
@@ -104,6 +105,7 @@ class SpaceshipBossController extends ChangeNotifier {
     void Function(int coins)? onCoins,
     void Function(int col, int row)? onBlock,
     void Function(int col, int row)? onUnblock,
+    bool Function(int col, int row)? isCellOccupied,
   }) {
     if (!kSpaceshipBossLevels.containsKey(level)) { _goIdle(); return; }
 
@@ -125,6 +127,7 @@ class SpaceshipBossController extends ChangeNotifier {
     onCoinReward    = onCoins;
     onCellBlocked   = onBlock;
     onCellUnblocked = onUnblock;
+    this.isCellOccupied = isCellOccupied;
 
     _hapticBurst();
     AudioManager.instance.playAlienBgm('assets/audio/bgm_alien.mp3').catchError((_) {});
@@ -132,7 +135,11 @@ class SpaceshipBossController extends ChangeNotifier {
     phase = SpaceshipBossPhase.entry;
     notifyListeners();
 
-    _entryTimer = Timer(const Duration(milliseconds: 5500), () {
+    // Safety-net only: the overlay normally calls skipEntry() itself once the
+    // cinematic (~3000ms) + rules screen (~2000ms) finish, landing gameplay
+    // start at ~5s after the level begins. This timer just guards against the
+    // overlay never firing for some reason.
+    _entryTimer = Timer(const Duration(milliseconds: 6000), () {
       if (_disposed) return;
       entryComplete = true;
       phase = SpaceshipBossPhase.active;
@@ -169,6 +176,22 @@ class SpaceshipBossController extends ChangeNotifier {
   bool isCellBlocked(int col, int row) =>
       blockedCells.any((b) => b.col == col && b.row == row);
 
+  /// Called when player taps Skip on the rules screen — starts game immediately.
+  void skipEntry() {
+    if (phase != SpaceshipBossPhase.entry || _disposed) return;
+    _entryTimer?.cancel();
+    _entryTimer = null;
+    Timer(Duration.zero, () {
+      if (_disposed) return;
+      entryComplete = true;
+      phase = SpaceshipBossPhase.active;
+      _startWaveCycle();
+      _startVibPulse();
+      _startDialogueCycle();
+      notifyListeners();
+    });
+  }
+
   void onLevelComplete() {
     if (phase == SpaceshipBossPhase.idle || phase == SpaceshipBossPhase.winBlast) return;
     _handleWin();
@@ -183,6 +206,12 @@ class SpaceshipBossController extends ChangeNotifier {
   }
 
   void _startWaveCycle() {
+    // Fire the first wave quickly so the player sees the mechanic right away,
+    // instead of waiting a full 10s of dead time after the ship lands.
+    Timer(const Duration(milliseconds: 1200), () {
+      if (phase != SpaceshipBossPhase.active || _disposed) return;
+      _throwWave();
+    });
     _waveTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       if (phase != SpaceshipBossPhase.active || _disposed) return;
       _throwWave();
@@ -200,13 +229,16 @@ class SpaceshipBossController extends ChangeNotifier {
   }
 
   void _throwWave() {
-    final occupied = { for (final t in activeThrows) (t.col, t.row) };
-    final blocked  = { for (final b in blockedCells) (b.col, b.row) };
+    final thrown  = { for (final t in activeThrows) (t.col, t.row) };
+    final blocked = { for (final b in blockedCells) (b.col, b.row) };
     final candidates = <(int, int)>[];
     for (int c = 0; c < _gridCols; c++) {
       for (int r = 1; r < _gridRows; r++) {
-        if (!occupied.contains((c, r)) && !blocked.contains((c, r)))
-          candidates.add((c, r));
+        if (thrown.contains((c, r)) || blocked.contains((c, r))) continue;
+        // Only target cells that actually have an item — never land on an
+        // empty cell (that would be an unavoidable penalty for the player).
+        final hasItem = isCellOccupied?.call(c, r) ?? true;
+        if (hasItem) candidates.add((c, r));
       }
     }
     candidates.shuffle(_rng);

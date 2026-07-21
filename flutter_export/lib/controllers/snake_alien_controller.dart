@@ -1,5 +1,5 @@
 // snake_alien_controller.dart — Snake-Alien Hybrid Boss
-// Level 37: 35 merges | Level 38: 40 merges
+// Level 38: 40 merges (Level 37 now uses its own AntiGravityController)
 // Polish: Dialogue bubbles, Snake Jr. blocker, L38 final dialogue, death slow-mo
 
 import 'dart:async';
@@ -33,7 +33,7 @@ class SnakeJrCell {
   const SnakeJrCell(this.col, this.row, this.id);
 }
 
-const Map<int, int> kSnakeAlienLevels = { 37: 35, 38: 40 };
+const Map<int, int> kSnakeAlienLevels = { 38: 40 };
 
 const _kSnakeDialogues = [
   'SSSLITHERING DOOM! 🐍',
@@ -126,7 +126,7 @@ class SnakeAlienController extends ChangeNotifier {
     onCellUnblocked = onUnblock;
 
     _hapticBurst();
-    AudioManager.instance.playAlienBgm('assets/audio/bgm_alien.mp3').catchError((_) {});
+    AudioManager.instance.playAlienBgm('assets/audio/bgm_alien_boss.mp3').catchError((_) {});
 
     phase = SnakeAlienPhase.entry;
     notifyListeners();
@@ -182,7 +182,7 @@ class SnakeAlienController extends ChangeNotifier {
   }
 
   void _startDropCycle() {
-    _dropWaveTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+    _dropWaveTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (phase != SnakeAlienPhase.active || _disposed) return;
       _dropWave();
     });
