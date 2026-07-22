@@ -52,7 +52,7 @@ class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final levelDef = ref.watch(gameProvider).currentLevel;
+    final levelDef = ref.watch(gameProvider.select((s) => s.currentLevel));
     final theme    = themeOf(levelDef.phase);
 
     return PopScope(
