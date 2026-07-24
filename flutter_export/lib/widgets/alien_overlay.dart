@@ -46,20 +46,26 @@ class AlienOverlay extends StatelessWidget {
 
             // ── Ship Entry Animation ───────────────────────────────────────
             if (phase == AlienPhase.shipEntry)
-              _ShipEntryAnimation(controller: controller, getCellRect: getCellRect),
+              IgnorePointer(
+                child: _ShipEntryAnimation(controller: controller, getCellRect: getCellRect),
+              ),
 
             // ── Active Alien + Meteors + Laser ────────────────────────────
             if (phase == AlienPhase.active ||
                 phase == AlienPhase.laserHit)
-              _AlienActiveWidget(
-                controller: controller,
-                getCellRect: getCellRect,
-                getSpawnerCenter: getSpawnerCenter,
+              IgnorePointer(
+                child: _AlienActiveWidget(
+                  controller: controller,
+                  getCellRect: getCellRect,
+                  getSpawnerCenter: getSpawnerCenter,
+                ),
               ),
 
             // ── Win Blast ─────────────────────────────────────────────────
             if (phase == AlienPhase.winBlast)
-              _AlienWinBlast(controller: controller),
+              IgnorePointer(
+                child: _AlienWinBlast(controller: controller),
+              ),
           ],
         );
       },
