@@ -46,20 +46,26 @@ class AlienOverlay extends StatelessWidget {
 
             // ── Ship Entry Animation ───────────────────────────────────────
             if (phase == AlienPhase.shipEntry)
-              _ShipEntryAnimation(controller: controller, getCellRect: getCellRect),
+              IgnorePointer(
+                child: _ShipEntryAnimation(controller: controller, getCellRect: getCellRect),
+              ),
 
             // ── Active Alien + Meteors + Laser ────────────────────────────
             if (phase == AlienPhase.active ||
                 phase == AlienPhase.laserHit)
-              _AlienActiveWidget(
-                controller: controller,
-                getCellRect: getCellRect,
-                getSpawnerCenter: getSpawnerCenter,
+              IgnorePointer(
+                child: _AlienActiveWidget(
+                  controller: controller,
+                  getCellRect: getCellRect,
+                  getSpawnerCenter: getSpawnerCenter,
+                ),
               ),
 
             // ── Win Blast ─────────────────────────────────────────────────
             if (phase == AlienPhase.winBlast)
-              _AlienWinBlast(controller: controller),
+              IgnorePointer(
+                child: _AlienWinBlast(controller: controller),
+              ),
           ],
         );
       },
@@ -1089,11 +1095,9 @@ class _AlienActiveWidgetState extends State<_AlienActiveWidget>
               // cy - 68 is alien body top; minus 26 for bar above head
               top: cy - 94 + bobY,
               left: 8, right: 8,
-              child: IgnorePointer(
-                child: _AlienHealthBar(
-                  health: widget.controller.alienHealth,
-                  mergesDone: widget.controller.mergesDone,
-                ),
+              child: _AlienHealthBar(
+                health: widget.controller.alienHealth,
+                mergesDone: widget.controller.mergesDone,
               ),
             ),
 
@@ -1101,17 +1105,15 @@ class _AlienActiveWidgetState extends State<_AlienActiveWidget>
             Positioned(
               top: cy - 130 + bobY,
               left: 0, right: 0,
-              child: IgnorePointer(
-                child: SizedBox(
-                  height: 220,
-                  child: AnimatedBuilder(
-                    animation: _particleCtrl,
-                    builder: (_, __) => CustomPaint(
-                      painter: _AlienParticlePainter(
-                        progress: _particleCtrl.value,
-                        alienHealth: widget.controller.alienHealth,
-                        isHurt: isHurt,
-                      ),
+              child: SizedBox(
+                height: 220,
+                child: AnimatedBuilder(
+                  animation: _particleCtrl,
+                  builder: (_, __) => CustomPaint(
+                    painter: _AlienParticlePainter(
+                      progress: _particleCtrl.value,
+                      alienHealth: widget.controller.alienHealth,
+                      isHurt: isHurt,
                     ),
                   ),
                 ),
@@ -1122,18 +1124,16 @@ class _AlienActiveWidgetState extends State<_AlienActiveWidget>
             Positioned(
               top: cy - 68 + bobY + (isHurt ? hurtT * 3 : 0),
               left: 0, right: 0,
-              child: IgnorePointer(
-                child: Center(
-                  child: CustomPaint(
-                    size: const Size(150, 140),
-                    painter: _AlienBodyPainter(
-                      alienType: widget.controller.alienType,
-                      isThrowing: _isThrowing,
-                      throwDirection: _throwDir,
-                      isHurt: isHurt,
-                      eyeBlinkValue: _eyeBlink.value,
-                      armSwingValue: swing,
-                    ),
+              child: Center(
+                child: CustomPaint(
+                  size: const Size(150, 140),
+                  painter: _AlienBodyPainter(
+                    alienType: widget.controller.alienType,
+                    isThrowing: _isThrowing,
+                    throwDirection: _throwDir,
+                    isHurt: isHurt,
+                    eyeBlinkValue: _eyeBlink.value,
+                    armSwingValue: swing,
                   ),
                 ),
               ),
@@ -1145,32 +1145,28 @@ class _AlienActiveWidgetState extends State<_AlienActiveWidget>
               if (anim == null) return const SizedBox.shrink();
               final cellRect = widget.getCellRect(meteor.col, meteor.row);
               if (cellRect == null) return const SizedBox.shrink();
-              return IgnorePointer(
-                child: _MeteorProjectile(
-                  startX: size.width / 2,
-                  startY: cy + 40, // from alien arm tip
-                  targetRect: cellRect,
-                  progress: anim,
-                ),
+              return _MeteorProjectile(
+                startX: size.width / 2,
+                startY: cy + 40, // from alien arm tip
+                targetRect: cellRect,
+                progress: anim,
               );
             }),
 
             // ── Laser missile (spawner → alien) — only on merge hit ────
             if (_laserAnim != null && _currentLaserHit != null)
-              IgnorePointer(
-                child: AnimatedBuilder(
-                  animation: _laserAnim!,
-                  builder: (_, __) {
-                    final spawnerCenter = widget.getSpawnerCenter();
-                    if (spawnerCenter == null) return const SizedBox.shrink();
-                    return _LaserMissile(
-                      startOffset: spawnerCenter,
-                      endOffset: Offset(size.width / 2, cy),
-                      progress: _laserAnim!.value,
-                      damage: _currentLaserHit!.damage,
-                    );
-                  },
-                ),
+              AnimatedBuilder(
+                animation: _laserAnim!,
+                builder: (_, __) {
+                  final spawnerCenter = widget.getSpawnerCenter();
+                  if (spawnerCenter == null) return const SizedBox.shrink();
+                  return _LaserMissile(
+                    startOffset: spawnerCenter,
+                    endOffset: Offset(size.width / 2, cy),
+                    progress: _laserAnim!.value,
+                    damage: _currentLaserHit!.damage,
+                  );
+                },
               ),
           ],
         );
