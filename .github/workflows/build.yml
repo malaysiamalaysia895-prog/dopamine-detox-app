@@ -8,9 +8,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .
 
     steps:
       - name: Checkout Code
@@ -19,56 +16,40 @@ jobs:
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
+          cache: gradle
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.0'
-          channel: 'stable'
-
-      - name: Master Override (Force Kotlin 1.9.24 on all plugins)
-        run: |
-          rm -rf android
-          flutter create --platforms android --project-name dopamine_detox .
-
-          # Step 1: Root level par naya Kotlin set karna
-          sed -i -E 's/id "org.jetbrains.kotlin.android" version "[^"]+"/id "org.jetbrains.kotlin.android" version "1.9.24"/g' android/settings.gradle || true
-          
-          # Step 2: Sabhi purane packages (jaise pedometer) ko force karna
-          cat <<'EOF' >> android/build.gradle
-          
-          subprojects {
-              buildscript {
-                  configurations.all {
-                      resolutionStrategy.eachDependency { DependencyResolveDetails details ->
-                          if (details.requested.group == 'org.jetbrains.kotlin' && details.requested.name.contains('kotlin-gradle-plugin')) {
-                              details.useVersion "1.9.24"
-                          }
-                      }
-                  }
-              }
-          }
-          EOF
+          flutter-version: '3.27.4'
+          channel: stable
+          cache: true
 
       - name: Install Packages
+        working-directory: flutter_export
         run: flutter pub get
 
       - name: Build APK
+        working-directory: flutter_export
         run: flutter build apk --release
 
       - name: Build AAB
+        working-directory: flutter_export
         run: flutter build appbundle --release
 
-      - name: Upload APK File
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: dopamine-detox-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: TechTycoonMerge-apk-${{ github.run_number }}
+          path: flutter_export/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
 
-      - name: Upload AAB File
+      - name: Upload AAB
         uses: actions/upload-artifact@v4
         with:
-          name: dopamine-detox-aab
-          path: build/app/outputs/bundle/release/app-release.aab
+          name: TechTycoonMerge-aab-${{ github.run_number }}
+          path: flutter_export/build/app/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
