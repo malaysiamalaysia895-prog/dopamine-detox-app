@@ -762,6 +762,8 @@ class GameNotifier extends StateNotifier<GameState> {
         onDamage: _onBossDamage,
         onBlock: _onCellBlocked,
         onUnblock: _onCellUnblocked,
+        // FIX bug1: so boss only targets cells that have items
+        itemIdAt: (col, row) => state.grid[col][row].itemId,
       );
     } else {
       snakeAlienController.reset();
@@ -1195,13 +1197,18 @@ class GameNotifier extends StateNotifier<GameState> {
     if (cell.itemId == null || cell.isBlocked) return;
     final newGrid = _cloneGrid();
     newGrid[col][row] = newGrid[col][row].clearItem();
-    // Fire a hazardHit flash so the destruction is visually distinct — without
-    // this, the item simply disappears with no feedback.
+    // Fire a hazardHit flash so the destruction is visually distinct
     final anims = [
       ...state.pendingAnimations,
       PendingAnimation(col, row, AnimType.hazardHit),
     ];
-    state = state.copyWith(grid: newGrid, pendingAnimations: anims);
+    // FIX bug2: apply 15 energy penalty when snake alien (L38) destroys an item
+    int newEnergy = state.energy;
+    if (snakeAlienController.phase == SnakeAlienPhase.active) {
+      newEnergy = (state.energy - 15).clamp(0, state.maxEnergy);
+      AudioManager.instance.playErrorBuzz();
+    }
+    state = state.copyWith(grid: newGrid, pendingAnimations: anims, energy: newEnergy);
     HapticFeedback.heavyImpact();
   }
 
