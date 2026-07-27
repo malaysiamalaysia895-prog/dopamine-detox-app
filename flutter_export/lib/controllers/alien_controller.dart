@@ -299,11 +299,16 @@ class AlienController extends ChangeNotifier with WidgetsBindingObserver {
     // Meteor lands after 1.2 seconds → destroy cell
     for (final meteor in targets) {
       Timer(const Duration(milliseconds: 1200), () {
-        if (_disposed || phase != AlienPhase.active) return;
+        if (_disposed) return;
+        // FIX: ALWAYS remove meteor — old code returned early when phase==laserHit
+        // (800ms window), leaving meteor in activeMeteors FOREVER → ghost
+        // animation recreated on every notifyListeners() → infinite setState loop.
         activeMeteors = activeMeteors
             .where((m) => m.id != meteor.id)
             .toList();
-        onCellDestroyed?.call(meteor.col, meteor.row);
+        if (phase == AlienPhase.active) {
+          onCellDestroyed?.call(meteor.col, meteor.row);
+        }
         notifyListeners();
       });
     }
