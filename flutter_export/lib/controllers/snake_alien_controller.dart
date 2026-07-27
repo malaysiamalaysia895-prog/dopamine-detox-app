@@ -73,6 +73,7 @@ class SnakeAlienController extends ChangeNotifier {
   void Function(int damage)?          onPlayerDamage;
   void Function(int col, int row)?    onCellBlocked;
   void Function(int col, int row)?    onCellUnblocked;
+  int? Function(int col, int row)?   _itemIdAt; // FIX: know which cells have items
 
   bool _disposed = false;
   final Random _rng       = Random();
@@ -103,6 +104,7 @@ class SnakeAlienController extends ChangeNotifier {
     required void Function(int damage) onDamage,
     void Function(int col, int row)? onBlock,
     void Function(int col, int row)? onUnblock,
+    int? Function(int col, int row)? itemIdAt,
   }) {
     if (!kSnakeAlienLevels.containsKey(level)) { _goIdle(); return; }
 
@@ -124,6 +126,7 @@ class SnakeAlienController extends ChangeNotifier {
     onPlayerDamage  = onDamage;
     onCellBlocked   = onBlock;
     onCellUnblocked = onUnblock;
+    _itemIdAt       = itemIdAt;
 
     _hapticBurst();
     AudioManager.instance.playAlienBgm('assets/audio/bgm_alien_boss.mp3').catchError((_) {});
@@ -234,10 +237,17 @@ class SnakeAlienController extends ChangeNotifier {
     final candidates = <(int, int)>[];
     for (int c = 0; c < _gridCols; c++) {
       for (int r = 1; r < _gridRows; r++) {
-        if (!occupied.contains((c, r))) candidates.add((c, r));
+        if (!occupied.contains((c, r))) {
+          // FIX bug1: only attack cells that HAVE items on the grid
+          final hasItem = _itemIdAt == null || _itemIdAt!(c, r) != null;
+          if (hasItem) candidates.add((c, r));
+        }
       }
     }
+    // FIX: if no items on grid, skip this wave entirely
+    if (candidates.isEmpty) return;
     candidates.shuffle(_rng);
+    // FIX bug3: max 5, but never more than available item-cells
     final count = min(5, candidates.length);
     final newDrops = <MiniAlienDrop>[];
     for (int i = 0; i < count; i++) {
