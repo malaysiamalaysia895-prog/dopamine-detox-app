@@ -986,7 +986,13 @@ class _AlienActiveWidgetState extends State<_AlienActiveWidget>
 
     // Handle hurt flash when laser hits
     if (widget.controller.phase == AlienPhase.laserHit) {
-      _hurtFlash.forward(from: 0.0);
+      // FIX: reverse after forward so hurtT goes back to 0.0 — if we only call
+      // forward(), value stays at 1.0 permanently, meaning the hurt overlay is
+      // always in the Stack. On the next forward(from:0) it jumps to 0.0 for one
+      // frame → widget vanishes → all Stack children shift index → Flutter chaos.
+      _hurtFlash.forward(from: 0.0).then((_) {
+        if (mounted) _hurtFlash.reverse();
+      });
     }
 
     setState(() {});
@@ -1079,16 +1085,18 @@ class _AlienActiveWidgetState extends State<_AlienActiveWidget>
 
         return Stack(
           children: [
-            // ── Hurt flash — subtle green tint ONLY inside game board ──
-            if (hurtT > 0)
-              Positioned(
-                top: gridTop, left: 0, right: 0, bottom: 0,
-                child: IgnorePointer(
-                  child: Container(
-                    color: const Color(0xFF00FFCC).withOpacity(hurtT * 0.18),
-                  ),
+            // ── Hurt flash — always idx-0 in Stack; opacity=0 when idle ──
+            // FIX: was conditional → on 2nd laser forward(from:0) reset value
+            // to 0.0 for 1 frame → widget removed → all other Stack children
+            // shifted index → Flutter recreated HP bar/particles/body (chaos).
+            Positioned(
+              top: gridTop, left: 0, right: 0, bottom: 0,
+              child: IgnorePointer(
+                child: Container(
+                  color: const Color(0xFF00FFCC).withOpacity(hurtT * 0.18),
                 ),
               ),
+            ),
 
             // ── HP bar — ABOVE alien head (so it's not covered by body) ───
             Positioned(
