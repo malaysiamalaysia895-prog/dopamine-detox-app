@@ -123,6 +123,7 @@ class WarpSentinelController extends ChangeNotifier {
     required int  gridCols,
     required int  gridRows,
     required int  spawnerItemId,
+    required List<(int, int)> blackHolePositions, // actual cells from level config
   }) {
     if (level != kWarpSentinelLevel) { _goIdle(); return; }
     _cancelTimers();
@@ -157,7 +158,10 @@ class WarpSentinelController extends ChangeNotifier {
       if (_disposed) return;
       glitchActive  = false;
       phase         = WarpSentinelPhase.entry;
-      blackHoles    = _pickBlackHolePositions();
+      // Use actual grid black hole positions (no random picking)
+      blackHoles    = List.of(blackHolePositions);
+      if (blackHoles.isEmpty) blackHoles = [(gridCols ~/ 2, 1)]; // fallback
+      bossHoleIndex = blackHoles.length > 1 ? _rng.nextInt(2) : 0;
       notifyListeners();
 
       // Phase 2: entry animation 3.2s
@@ -577,3 +581,4 @@ class WarpSentinelController extends ChangeNotifier {
     super.dispose();
   }
 }
+
