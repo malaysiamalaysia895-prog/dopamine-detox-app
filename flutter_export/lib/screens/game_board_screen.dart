@@ -27,6 +27,7 @@ import '../widgets/spaceship_boss_overlay.dart';
 import '../widgets/octopus_alien_overlay.dart';
 import '../widgets/snake_alien_overlay.dart';
 import '../widgets/antigravity_overlay.dart';
+import '../widgets/nexus_core_overlay.dart';
 import '../controllers/robot_controller.dart';
 import '../controllers/creature_controller.dart';
 import '../controllers/alien_controller.dart';
@@ -337,6 +338,25 @@ class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
                   // Anti-Gravity Boss (L37) — liquid-metal jellyfish/cyborg hybrid
                   AntiGravityOverlay(
                     controller: ref.read(gameProvider.notifier).antiGravityController,
+                    isDialogActive: ref.watch(dialogProvider) != ActiveDialog.none,
+                    getCellRect: (col, row) {
+                      final box      = _gridKey.currentContext?.findRenderObject() as RenderBox?;
+                      final stackBox = _boardStackKey.currentContext?.findRenderObject() as RenderBox?;
+                      if (box == null || stackBox == null || _lastCellSize == 0) return null;
+                      const gap = 5.0;
+                      final cs     = _lastCellSize;
+                      final totalW = levelDef.gridCols * (cs + gap) - gap;
+                      final totalH = levelDef.gridRows * (cs + gap) - gap;
+                      final gridLocal = box.localToGlobal(Offset.zero, ancestor: stackBox);
+                      final dx = gridLocal.dx + (box.size.width  - totalW) / 2 + col * (cs + gap);
+                      final dy = gridLocal.dy + (box.size.height - totalH) / 2 + row * (cs + gap);
+                      return Rect.fromLTWH(dx, dy, cs, cs);
+                    },
+                  ),
+
+                  // NEXUS CORE Boss (L40) — dark-metal mechanical squid above the grid
+                  NexusCoreOverlay(
+                    controller: ref.read(gameProvider.notifier).nexusCoreController,
                     isDialogActive: ref.watch(dialogProvider) != ActiveDialog.none,
                     getCellRect: (col, row) {
                       final box      = _gridKey.currentContext?.findRenderObject() as RenderBox?;
