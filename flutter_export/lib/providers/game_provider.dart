@@ -800,12 +800,11 @@ class GameNotifier extends StateNotifier<GameState> {
     if (cfg.number == kWarpSentinelLevel) {
       warpSentinelController.triggerForLevel(
         cfg.number,
-        gridCols: cfg.gridCols,
-        gridRows: cfg.gridRows,
-        onLocked:   _onCellBlocked,
-        onUnlocked: _onCellUnblocked,
+        gridCols:      cfg.gridCols,
+        gridRows:      cfg.gridRows,
+        spawnerItemId: cfg.spawnerItemId,
         onSiphoned: (col, row) {
-          // Item sucked into the black hole — remove it silently
+          // Item proximity-pulled into black hole — remove it
           final cfg2 = state.currentLevel;
           if (col < 0 || col >= cfg2.gridCols || row < 0 || row >= cfg2.gridRows) return;
           final newGrid = _cloneGrid();
@@ -827,7 +826,6 @@ class GameNotifier extends StateNotifier<GameState> {
           HapticFeedback.heavyImpact();
         },
         isOccupied: (c, r) => state.grid[c][r].itemId != null && !state.grid[c][r].isBlocked,
-        isBlocked:  (c, r) => state.grid[c][r].isBlocked,
       );
     } else {
       warpSentinelController.reset();
@@ -942,6 +940,24 @@ class GameNotifier extends StateNotifier<GameState> {
       return;
     }
 
+    // ── WARP SENTINEL: sacrifice item into black hole (L41) ─────────────────
+    if (to.obstacle == ObstacleType.blackHole &&
+        warpSentinelController.phase != WarpSentinelPhase.idle) {
+      final itemId = from.itemId!;
+      warpSentinelController.onItemSacrificed(itemId);
+      // Remove the sacrificed item from the board
+      final newGrid = _cloneGrid();
+      newGrid[fromCol][fromRow] = newGrid[fromCol][fromRow].clearItem();
+      state = state.copyWith(
+        grid: newGrid,
+        pendingAnimations: [
+          ...state.pendingAnimations,
+          PendingAnimation(fromCol, fromRow, AnimType.hazardHit),
+        ],
+      );
+      return;
+    }
+
     if (to.isBlocked) {
       // BUG FIX: drag onto hazardTrap fires -20⚡, glitchedDecoy fires -30⚡.
       if (to.isHazard)       tapHazard(toCol, toRow);
@@ -970,6 +986,13 @@ class GameNotifier extends StateNotifier<GameState> {
     nexusCoreController.onCellMoved(fc, fr, tc, tr);
     // WARP SENTINEL: siphon state follows the moved item
     warpSentinelController.onCellMoved(fc, fr, tc, tr);
+    // WARP SENTINEL: gravitational drag — moving heavy items from pull zone costs energy
+    final dragCost = warpSentinelController.getDragEnergyCost(fc, fr, id);
+    if (dragCost > 0) {
+      final newE = (state.energy - dragCost).clamp(0, state.maxEnergy);
+      state = state.copyWith(energy: newE);
+      AudioManager.instance.playErrorBuzz();
+    }
   }
 
   void _swapCells(int fc, int fr, int tc, int tr) {
