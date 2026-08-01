@@ -161,6 +161,33 @@ class NexusCoreController extends ChangeNotifier {
     if (hackedCells.remove((col, row))) notifyListeners();
   }
 
+  /// Called by _moveCell — hacked state + targeting follow the item.
+  void onCellMoved(int fc, int fr, int tc, int tr) {
+    bool changed = false;
+    if (hackedCells.contains((fc, fr))) {
+      hackedCells.remove((fc, fr));
+      hackedCells.add((tc, tr));
+      changed = true;
+    }
+    if (targetedCell == (fc, fr)) {
+      targetedCell = (tc, tr);
+      changed = true;
+    }
+    if (changed) notifyListeners();
+  }
+
+  /// Called by _swapCells — hacked state swaps with items.
+  void onCellsSwapped(int fc, int fr, int tc, int tr) {
+    final fromHacked = hackedCells.contains((fc, fr));
+    final toHacked   = hackedCells.contains((tc, tr));
+    if (fromHacked) { hackedCells.remove((fc, fr)); hackedCells.add((tc, tr)); }
+    if (toHacked)   { hackedCells.remove((tc, tr)); hackedCells.add((fc, fr)); }
+    final targeted = targetedCell;
+    if (targeted == (fc, fr))      targetedCell = (tc, tr);
+    else if (targeted == (tc, tr)) targetedCell = (fc, fr);
+    if (fromHacked || toHacked || targeted != null) notifyListeners();
+  }
+
   /// Space Station delivered → Blue EMP stun for 20 s.
   void onSatelliteDelivered() {
     if (phase != NexusCorePhase.active && phase != NexusCorePhase.stunned) return;
