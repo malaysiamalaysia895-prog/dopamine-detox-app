@@ -798,11 +798,21 @@ class GameNotifier extends StateNotifier<GameState> {
 
     // ── WARP SENTINEL trigger (L41) ───────────────────────────────────────────
     if (cfg.number == kWarpSentinelLevel) {
+      // Collect actual black hole positions from the already-built grid
+      final bhPositions = <(int, int)>[];
+      for (int c = 0; c < cfg.gridCols; c++) {
+        for (int r = 0; r < cfg.gridRows; r++) {
+          if (state.grid[c][r].obstacle == ObstacleType.blackHole) {
+            bhPositions.add((c, r));
+          }
+        }
+      }
       warpSentinelController.triggerForLevel(
         cfg.number,
-        gridCols:      cfg.gridCols,
-        gridRows:      cfg.gridRows,
-        spawnerItemId: cfg.spawnerItemId,
+        gridCols:           cfg.gridCols,
+        gridRows:           cfg.gridRows,
+        spawnerItemId:      cfg.spawnerItemId,
+        blackHolePositions: bhPositions,
         onSiphoned: (col, row) {
           // Item proximity-pulled into black hole — remove it
           final cfg2 = state.currentLevel;
