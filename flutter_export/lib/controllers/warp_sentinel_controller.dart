@@ -561,8 +561,6 @@ class WarpSentinelController extends ChangeNotifier {
         _hintTimer = _dialogueTimer = _teleportTimer = null;
   }
 
-  Timer? _hintTimer;
-
   Future<void> _safeVibrate({List<int>? pattern, int duration = 300}) async {
     try {
       final has = await Vibration.hasVibrator() ?? false;
