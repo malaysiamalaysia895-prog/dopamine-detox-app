@@ -356,22 +356,25 @@ class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
                   ),
 
                   // WARP SENTINEL Boss (L41) — armored sentinel hovering above grid
-                  WarpSentinelOverlay(
-                    controller: ref.read(gameProvider.notifier).warpSentinelController,
-                    isDialogActive: ref.watch(dialogProvider) != ActiveDialog.none,
-                    getCellRect: (col, row) {
-                      final box      = _gridKey.currentContext?.findRenderObject() as RenderBox?;
-                      final stackBox = _boardStackKey.currentContext?.findRenderObject() as RenderBox?;
-                      if (box == null || stackBox == null || _lastCellSize == 0) return null;
-                      const gap = 5.0;
-                      final cs     = _lastCellSize;
-                      final totalW = levelDef.gridCols * (cs + gap) - gap;
-                      final totalH = levelDef.gridRows * (cs + gap) - gap;
-                      final gridLocal = box.localToGlobal(Offset.zero, ancestor: stackBox);
-                      final dx = gridLocal.dx + (box.size.width  - totalW) / 2 + col * (cs + gap);
-                      final dy = gridLocal.dy + (box.size.height - totalH) / 2 + row * (cs + gap);
-                      return Rect.fromLTWH(dx, dy, cs, cs);
-                    },
+                  // IgnorePointer so the CustomPaint overlay never swallows touches
+                  IgnorePointer(
+                    child: WarpSentinelOverlay(
+                      controller: ref.read(gameProvider.notifier).warpSentinelController,
+                      isDialogActive: ref.watch(dialogProvider) != ActiveDialog.none,
+                      getCellRect: (col, row) {
+                        final box      = _gridKey.currentContext?.findRenderObject() as RenderBox?;
+                        final stackBox = _boardStackKey.currentContext?.findRenderObject() as RenderBox?;
+                        if (box == null || stackBox == null || _lastCellSize == 0) return null;
+                        const gap = 5.0;
+                        final cs     = _lastCellSize;
+                        final totalW = levelDef.gridCols * (cs + gap) - gap;
+                        final totalH = levelDef.gridRows * (cs + gap) - gap;
+                        final gridLocal = box.localToGlobal(Offset.zero, ancestor: stackBox);
+                        final dx = gridLocal.dx + (box.size.width  - totalW) / 2 + col * (cs + gap);
+                        final dy = gridLocal.dy + (box.size.height - totalH) / 2 + row * (cs + gap);
+                        return Rect.fromLTWH(dx, dy, cs, cs);
+                      },
+                    ),
                   ),
 
                   // NEXUS CORE Boss (L40) — dark-metal mechanical squid above the grid
@@ -3701,3 +3704,4 @@ class _AmbientParticleLayerState extends State<_AmbientParticleLayer>
     );
   }
 }
+
