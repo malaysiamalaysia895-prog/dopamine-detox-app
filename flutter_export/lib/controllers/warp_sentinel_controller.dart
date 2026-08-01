@@ -1,8 +1,8 @@
-// warp_sentinel_controller.dart — WARP SENTINEL Boss (Level 41)
-// Warp Siphon: black hole sucks nearby items — merge to escape.
-// Time Lock: laser freezes a 2×2 grid area.
-// Stun: deliver Warp Engine (id 42) → 20s freeze.
-// Portal Hopping: boss teleports between 2 black holes.
+// warp_sentinel_controller.dart — WARP SENTINEL Boss (Level 41) v2
+// Full attack cycle: cooldown → warning(3s,3x3 glow) → pull(5s,proximity)
+// Teleport: arm→wireframe→suck→exit→solidify
+// Sacrifice: drag high-level item onto black hole to overload it
+// Gravitational drag: energy cost to move heavy items out of pull zone
 
 import 'dart:async';
 import 'dart:math';
@@ -11,137 +11,144 @@ import 'package:flutter/services.dart';
 import 'package:vibration/vibration.dart';
 import '../services/audio_manager.dart';
 
-enum WarpSentinelPhase { idle, glitch, entry, active, stunned, winBlast }
-enum WarpAttackType   { warpSiphon, timeLock }
+enum WarpSentinelPhase  { idle, glitch, entry, active, stunned, winBlast }
+enum WarpSiphonPhase    { inactive, warning, pull }
+enum WarpTeleportPhase  { idle, arming, dissolving, materializing }
 
-const int kWarpSentinelLevel      = 41;
-const int _kWarpEngineId          = 42;   // Warp Engine → triggers stun
-const int _kSiphonWarningSec      = 3;    // seconds player has to merge before siphon hits
-const int _kTimeLockWarningSec    = 3;    // warning glow before Time Lock activates
-const int _kTimeLockDurationSec   = 12;   // locked tiles duration
-const int _kStunDurationSec       = 20;
-const int _kTeleportIntervalSec   = 15;   // boss jumps between black holes
-const int _kAttackIntervalMin     = 15;
-const int _kAttackIntervalMax     = 20;
-const int _kFirstAttackDelaySec   = 6;
-const int _kGlitchDurationMs      = 2000;
-const int _kEntryDurationMs       = 3200;
+const int kWarpSentinelLevel     = 41;
+const int _kWarpEngineId         = 42;   // Warp Engine → stun
+const int _kCooldownMin          = 15;
+const int _kCooldownMax          = 20;
+const int _kWarningSec           = 3;    // warning glow before pull
+const int _kPullSec              = 5;    // active pull phase
+const int _kPullTickMs           = 1500; // proximity pull every 1.5s
+const int _kStunDurationSec      = 20;
+const int _kTeleportIntervalSec  = 15;
+const int _kFirstAttackDelaySec  = 6;
+const int _kGlitchDurationMs     = 2000;
+const int _kEntryDurationMs      = 3200;
+// Sacrifice: item must be this many tiers above spawner to satisfy the hole
+const int _kSacrificeMinOffset   = 2;
+// Gravitational drag: item this many tiers above spawner costs extra energy
+const int _kDragMinOffset        = 2;
+const int _kDragEnergyCost       = 4;   // energy deducted per heavy item move
 
 const List<String> kWarpHints = [
-  'Merge siphoned items before they vanish into the void! 🌀',
-  'Block the siphon with cheap items near the black holes!',
+  'Drag a high-tier item onto the black hole to overload it! 🌀',
+  'Only Level 3+ items satisfy the black hole — cheap items feed it! ⚡',
   'Deliver Warp Engines to stun the Sentinel for 20s! 🚀',
-  'Time Lock zones glow purple before locking — move fast! ⏱️',
+  'Heavy items cost energy to drag from the pull zone — plan ahead! 🏋️',
 ];
 
 const List<String> _kDialogues = [
-  'WARP SIPHON CHARGING... YOUR ITEMS ARE MINE! 🌀',
-  'TIME LOCK DEPLOYED. ESCAPE IS FUTILE. ⏱️',
+  'WARP SIPHON INITIATED. YOUR ITEMS ARE MINE! 🌀',
+  'GRAVITATIONAL PULL ENGAGED! ⚡',
   'REALITY BENDS TO MY WILL! ⚡',
   'YOU CANNOT OUTRUN A WARP SENTINEL! 🚀',
-  'TELEPORTING... YOUR DEFENSES ARE MEANINGLESS. 🔮',
-  'PORTAL DESTABILISED. PHASE TWO INITIATED. 💀',
+  'MASS ACQUIRED. CHARGING FOR NEXT BREACH. 💀',
+  'PORTAL DESTABILISED. PHASE TWO INITIATED. 🔮',
 ];
 
 class WarpSentinelController extends ChangeNotifier {
-  WarpSentinelPhase phase = WarpSentinelPhase.idle;
-  bool  entryComplete    = false;
-  bool  glitchActive     = false;
-  bool  isTeleporting    = false;
+  // ── Top-level phase ────────────────────────────────────────────────────────
+  WarpSentinelPhase  phase         = WarpSentinelPhase.idle;
+  bool               entryComplete = false;
+  bool               glitchActive  = false;
 
-  // Black hole grid positions (set during entry)
+  // ── Siphon sub-phase ───────────────────────────────────────────────────────
+  WarpSiphonPhase siphonPhase    = WarpSiphonPhase.inactive;
+  Set<(int, int)> pullZoneCells  = {};   // 3×3 around boss hole during attack
+  int             warningSecsLeft = _kWarningSec;
+  int             pullSecsLeft    = _kPullSec;
+  bool get isWarning => siphonPhase == WarpSiphonPhase.warning;
+  bool get isPulling => siphonPhase == WarpSiphonPhase.pull;
+
+  // ── Teleport phase ─────────────────────────────────────────────────────────
+  WarpTeleportPhase teleportPhase = WarpTeleportPhase.idle;
+  int               fromHoleIndex = 0;
+  int               toHoleIndex   = 1;
+  bool get isTeleporting => teleportPhase != WarpTeleportPhase.idle;
+
+  // ── Black holes ────────────────────────────────────────────────────────────
   List<(int, int)> blackHoles   = [];
-  int              bossHoleIndex = 0;   // which hole the boss is currently "at"
+  int              bossHoleIndex = 0;
 
-  // Current attack
-  WarpAttackType?  currentAttack;
-  bool get isAttacking => currentAttack != null;
+  // ── Attack pose (boss raises arms before attack) ───────────────────────────
+  bool isAttackPoseActive = false;
 
-  // Siphon state
-  Set<(int, int)> siphonedCells  = {};
-  int             siphonSecsLeft = _kSiphonWarningSec;
+  // ── Stun ───────────────────────────────────────────────────────────────────
+  bool isStunned    = false;
+  int  stunSecsLeft = 0;
 
-  // Time Lock state
-  Set<(int, int)> timeLockCells  = {};
-
-  // Pre-attack warning glow (shared by both attacks)
-  Set<(int, int)> warningCells   = {};
-
-  // Stun
-  bool isStunned      = false;
-  int  stunSecsLeft   = 0;
-
-  // HUD
-  int     hintIndex         = 0;
+  // ── HUD ────────────────────────────────────────────────────────────────────
+  int     hintIndex      = 0;
   String? dialogueText;
-  int     attackSecsLeft    = _kAttackIntervalMin;
-  bool    winFlashReady     = false;
+  int     cooldownSecsLeft = _kCooldownMin;
+  bool    winFlashReady    = false;
 
-  // Callbacks
-  void Function(int col, int row)? onCellLocked;
-  void Function(int col, int row)? onCellUnlocked;
-  void Function(int col, int row)? onCellSiphoned;   // item consumed
+  // ── Overload flash (black hole was fed) ───────────────────────────────────
+  bool overloadFlash = false;
+
+  // ── Callbacks ──────────────────────────────────────────────────────────────
+  void Function(int col, int row)? onCellSiphoned;
   void Function(int energy)?       onPlayerPenalty;
   bool Function(int col, int row)? isCellOccupied;
-  bool Function(int col, int row)? isCellBlocked;
 
-  bool         _disposed = false;
-  final Random _rng      = Random();
-  int          _gridCols = 6;
-  int          _gridRows = 5;
+  bool         _disposed    = false;
+  final Random _rng         = Random();
+  int          _gridCols    = 6;
+  int          _gridRows    = 5;
+  int          _spawnerItemId = 39; // updated at triggerForLevel
 
   Timer? _glitchTimer;
   Timer? _entryTimer;
-  Timer? _attackLoopTimer;
-  Timer? _attackCountdownTimer;
-  Timer? _warningTimer;
-  Timer? _siphonCountdownTimer;
-  Timer? _timeLockUnlockTimer;
+  Timer? _cooldownLoopTimer;
+  Timer? _cooldownTickTimer;
+  Timer? _warningCountdownTimer;
+  Timer? _pullCountdownTimer;
+  Timer? _pullTickTimer;
   Timer? _stunCountdownTimer;
   Timer? _hintTimer;
   Timer? _dialogueTimer;
   Timer? _teleportTimer;
+  Timer? _attackPoseTimer;
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
   void triggerForLevel(
     int level, {
-    required void Function(int col, int row) onLocked,
-    required void Function(int col, int row) onUnlocked,
     required void Function(int col, int row) onSiphoned,
     required void Function(int energy)       onPenalty,
     required bool Function(int col, int row) isOccupied,
-    required bool Function(int col, int row) isBlocked,
     required int  gridCols,
     required int  gridRows,
+    required int  spawnerItemId,
   }) {
     if (level != kWarpSentinelLevel) { _goIdle(); return; }
     _cancelTimers();
 
-    phase           = WarpSentinelPhase.glitch;
-    entryComplete   = false;
-    glitchActive    = true;
-    isTeleporting   = false;
-    blackHoles      = [];
-    bossHoleIndex   = 0;
-    siphonedCells.clear();
-    timeLockCells.clear();
-    warningCells.clear();
-    currentAttack   = null;
-    isStunned       = false;
-    stunSecsLeft    = 0;
-    dialogueText    = null;
-    hintIndex       = 0;
-    winFlashReady   = false;
-    attackSecsLeft  = _kFirstAttackDelaySec;
-    _gridCols       = gridCols;
-    _gridRows       = gridRows;
-    onCellLocked    = onLocked;
-    onCellUnlocked  = onUnlocked;
-    onCellSiphoned  = onSiphoned;
-    onPlayerPenalty = onPenalty;
-    isCellOccupied  = isOccupied;
-    isCellBlocked   = isBlocked;
+    phase            = WarpSentinelPhase.glitch;
+    entryComplete    = false;
+    glitchActive     = true;
+    siphonPhase      = WarpSiphonPhase.inactive;
+    teleportPhase    = WarpTeleportPhase.idle;
+    isAttackPoseActive = false;
+    blackHoles       = [];
+    bossHoleIndex    = 0;
+    pullZoneCells.clear();
+    isStunned        = false;
+    stunSecsLeft     = 0;
+    dialogueText     = null;
+    hintIndex        = 0;
+    winFlashReady    = false;
+    overloadFlash    = false;
+    cooldownSecsLeft = _kFirstAttackDelaySec;
+    _gridCols        = gridCols;
+    _gridRows        = gridRows;
+    _spawnerItemId   = spawnerItemId;
+    onCellSiphoned   = onSiphoned;
+    onPlayerPenalty  = onPenalty;
+    isCellOccupied   = isOccupied;
 
     notifyListeners();
 
@@ -153,7 +160,7 @@ class WarpSentinelController extends ChangeNotifier {
       blackHoles    = _pickBlackHolePositions();
       notifyListeners();
 
-      // Phase 2: black holes expand, boss emerges (3.2s)
+      // Phase 2: entry animation 3.2s
       _entryTimer = Timer(const Duration(milliseconds: _kEntryDurationMs), () {
         if (_disposed) return;
         entryComplete = true;
@@ -161,56 +168,91 @@ class WarpSentinelController extends ChangeNotifier {
         notifyListeners();
         _setDialogue('WARP SENTINEL ONLINE. REALITY DISTORTION ACTIVE. ⚡');
         _startHints();
-        _scheduleAttack(delay: const Duration(seconds: _kFirstAttackDelaySec));
+        _scheduleCooldown(delay: const Duration(seconds: _kFirstAttackDelaySec));
         _scheduleTeleport();
       });
     });
   }
 
-  /// Merge event: cancels siphon if merged cell is one of the siphoned cells.
+  // ── Merge: cancel siphon if merged item was in pull zone ──────────────────
+
   void onItemMerged(int fc, int fr, int tc, int tr) {
-    if (siphonedCells.contains((fc, fr)) || siphonedCells.contains((tc, tr))) {
-      _siphonCountdownTimer?.cancel();
-      siphonedCells.clear();
-      warningCells.clear();
-      currentAttack = null;
-      _setDialogue('SIPHON ESCAPED! RECALIBRATING WARP FIELD... 😤');
-      try { HapticFeedback.lightImpact(); } catch (_) {}
-      notifyListeners();
-      _scheduleAttack();
+    if (siphonPhase == WarpSiphonPhase.warning || siphonPhase == WarpSiphonPhase.pull) {
+      if (pullZoneCells.contains((fc, fr)) || pullZoneCells.contains((tc, tr))) {
+        _setDialogue('MASS ESCAPED THE FIELD! RECALIBRATING... 😤');
+        try { HapticFeedback.lightImpact(); } catch (_) {}
+      }
     }
-    siphonedCells.remove((fc, fr));
-    siphonedCells.remove((tc, tr));
     notifyListeners();
   }
 
   void onCellCleared(int col, int row) {
-    bool changed = false;
-    if (siphonedCells.remove((col, row))) changed = true;
-    if (warningCells.remove((col, row)))  changed = true;
-    if (changed) notifyListeners();
+    pullZoneCells.remove((col, row));
+    notifyListeners();
   }
 
   void onCellMoved(int fc, int fr, int tc, int tr) {
-    bool changed = false;
-    if (siphonedCells.contains((fc, fr))) {
-      siphonedCells.remove((fc, fr)); siphonedCells.add((tc, tr)); changed = true;
+    // Pull zone follows items only during warning — during pull the zone is fixed
+    if (siphonPhase == WarpSiphonPhase.warning) {
+      if (pullZoneCells.contains((fc, fr))) {
+        pullZoneCells.remove((fc, fr));
+        pullZoneCells.add((tc, tr));
+        notifyListeners();
+      }
     }
-    if (warningCells.contains((fc, fr))) {
-      warningCells.remove((fc, fr)); warningCells.add((tc, tr)); changed = true;
-    }
-    if (changed) notifyListeners();
   }
 
   void onCellsSwapped(int fc, int fr, int tc, int tr) {
-    final fs = siphonedCells.contains((fc, fr));
-    final ts = siphonedCells.contains((tc, tr));
-    if (fs) { siphonedCells.remove((fc, fr)); siphonedCells.add((tc, tr)); }
-    if (ts) { siphonedCells.remove((tc, tr)); siphonedCells.add((fc, fr)); }
-    if (fs || ts) notifyListeners();
+    if (siphonPhase == WarpSiphonPhase.warning) {
+      final fa = pullZoneCells.contains((fc, fr));
+      final ta = pullZoneCells.contains((tc, tr));
+      if (fa) { pullZoneCells.remove((fc, fr)); pullZoneCells.add((tc, tr)); }
+      if (ta) { pullZoneCells.remove((tc, tr)); pullZoneCells.add((fc, fr)); }
+      if (fa || ta) notifyListeners();
+    }
   }
 
-  /// Warp Engine (id 42) delivered → stun boss.
+  /// Player drags item onto a black hole cell — sacrifice / feed mechanic.
+  /// Returns true if the item was accepted (regardless of overload).
+  bool onItemSacrificed(int itemId) {
+    // Cheap items just get consumed — black hole is not satisfied
+    if (itemId < _spawnerItemId + _kSacrificeMinOffset) {
+      _setDialogue('BLACK HOLE HUNGERS FOR MORE... CHEAP ITEMS INSUFFICIENT! 🌀');
+      AudioManager.instance.playErrorBuzz();
+      notifyListeners();
+      return true; // item is consumed but no overload
+    }
+    // High-level item → overload!
+    _cancelAttackPhase();
+    overloadFlash    = true;
+    siphonPhase      = WarpSiphonPhase.inactive;
+    pullZoneCells.clear();
+    isAttackPoseActive = false;
+    _setDialogue('BLACK HOLE OVERLOADED! VORTEX COLLAPSING! 💥');
+    try { HapticFeedback.heavyImpact(); } catch (_) {}
+    _safeVibrate(pattern: [0, 80, 60, 150, 60, 300]);
+    notifyListeners();
+
+    // Clear overload flash after 800ms, then schedule next cooldown
+    Timer(const Duration(milliseconds: 800), () {
+      if (_disposed) return;
+      overloadFlash = false;
+      notifyListeners();
+      _scheduleCooldown();
+    });
+    return true;
+  }
+
+  /// Returns energy cost for moving an item from (col,row).
+  /// Heavy items (≥ spawnerItemId + _kDragMinOffset) in the pull zone cost energy.
+  int getDragEnergyCost(int col, int row, int itemId) {
+    if (siphonPhase != WarpSiphonPhase.pull) return 0;
+    if (!pullZoneCells.contains((col, row))) return 0;
+    if (itemId < _spawnerItemId + _kDragMinOffset) return 0;
+    return _kDragEnergyCost;
+  }
+
+  /// Warp Engine (id 42) delivered → stun.
   void onWarpEngineDelivered() {
     if (phase != WarpSentinelPhase.active && phase != WarpSentinelPhase.stunned) return;
     _stun();
@@ -218,162 +260,146 @@ class WarpSentinelController extends ChangeNotifier {
 
   void onLevelComplete() {
     _cancelTimers();
-    siphonedCells.clear();
-    timeLockCells.clear();
-    warningCells.clear();
-    currentAttack = null;
-    isStunned     = false;
-    winFlashReady = true;
-    phase         = WarpSentinelPhase.winBlast;
+    pullZoneCells.clear();
+    siphonPhase      = WarpSiphonPhase.inactive;
+    isAttackPoseActive = false;
+    isStunned        = false;
+    winFlashReady    = true;
+    phase            = WarpSentinelPhase.winBlast;
     notifyListeners();
   }
 
   void reset() => _goIdle();
 
-  // ── Attack Logic ────────────────────────────────────────────────────────────
+  // ── Attack cycle ────────────────────────────────────────────────────────────
 
-  void _scheduleAttack({Duration? delay}) {
-    _attackLoopTimer?.cancel();
-    _attackCountdownTimer?.cancel();
+  void _scheduleCooldown({Duration? delay}) {
+    _cancelAttackPhase();
     final sec = delay?.inSeconds ??
-        (_kAttackIntervalMin + _rng.nextInt(_kAttackIntervalMax - _kAttackIntervalMin + 1));
-    attackSecsLeft = sec;
+        (_kCooldownMin + _rng.nextInt(_kCooldownMax - _kCooldownMin + 1));
+    cooldownSecsLeft = sec;
 
-    _attackCountdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    _cooldownTickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_disposed || isStunned) return;
-      attackSecsLeft = (attackSecsLeft - 1).clamp(0, 999);
+      cooldownSecsLeft = (cooldownSecsLeft - 1).clamp(0, 999);
       notifyListeners();
     });
 
-    _attackLoopTimer = Timer(Duration(seconds: sec), () {
+    _cooldownLoopTimer = Timer(Duration(seconds: sec), () {
       if (_disposed || isStunned || phase != WarpSentinelPhase.active) return;
-      _attackCountdownTimer?.cancel();
-      _fireAttack();
+      _cooldownTickTimer?.cancel();
+      _startAttackPose();
     });
   }
 
-  void _fireAttack() {
+  // Step 1: Boss raises arms (0.5s), then transitions to warning
+  void _startAttackPose() {
     if (_disposed || phase != WarpSentinelPhase.active) return;
-    // Alternate: prefer siphon slightly more (60/40)
-    if (_rng.nextInt(10) < 6) {
-      _fireWarpSiphon();
-    } else {
-      _fireTimeLock();
-    }
-  }
-
-  void _fireWarpSiphon() {
-    final hole = blackHoles.isNotEmpty ? blackHoles[bossHoleIndex] : null;
-    if (hole == null) { _scheduleAttack(); return; }
-
-    // Collect occupied cells near the boss's black hole (radius 2 manhattan)
-    final candidates = <(int, int)>[];
-    for (int c = 0; c < _gridCols; c++) {
-      for (int r = 0; r < _gridRows; r++) {
-        if (isCellOccupied?.call(c, r) ?? false) {
-          final dist = (c - hole.$1).abs() + (r - hole.$2).abs();
-          if (dist <= 2) candidates.add((c, r));
-        }
-      }
-    }
-    // Fallback: whole grid
-    if (candidates.isEmpty) {
-      for (int c = 0; c < _gridCols; c++) {
-        for (int r = 0; r < _gridRows; r++) {
-          if (isCellOccupied?.call(c, r) ?? false) candidates.add((c, r));
-        }
-      }
-    }
-    if (candidates.isEmpty) { _scheduleAttack(); return; }
-
-    candidates.shuffle(_rng);
-    final count = candidates.length >= 2 ? 1 + _rng.nextInt(2) : 1;
-    siphonedCells  = candidates.take(count).toSet();
-    warningCells   = Set.from(siphonedCells);
-    siphonSecsLeft = _kSiphonWarningSec;
-    currentAttack  = WarpAttackType.warpSiphon;
-
-    _setDialogue('WARP SIPHON ACTIVATED! MERGE NOW TO ESCAPE! 🌀');
-    try { HapticFeedback.mediumImpact(); } catch (_) {}
+    isAttackPoseActive = true;
     notifyListeners();
 
-    _siphonCountdownTimer?.cancel();
-    _siphonCountdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+    _attackPoseTimer = Timer(const Duration(milliseconds: 600), () {
       if (_disposed) return;
-      siphonSecsLeft = (siphonSecsLeft - 1).clamp(0, _kSiphonWarningSec);
-      notifyListeners();
-      if (siphonSecsLeft <= 0) {
-        t.cancel();
-        _siphonLand();
-      }
+      _startWarningPhase();
     });
   }
 
-  void _siphonLand() {
-    final toRemove = List<(int, int)>.from(siphonedCells);
-    siphonedCells.clear();
-    warningCells.clear();
-    currentAttack = null;
-    notifyListeners();
+  // Step 2: 3×3 warning glow for 3 seconds
+  void _startWarningPhase() {
+    if (_disposed || phase != WarpSentinelPhase.active) return;
+    final hole = blackHoles.isNotEmpty ? blackHoles[bossHoleIndex] : null;
+    if (hole == null) { _scheduleCooldown(); return; }
 
-    for (final cell in toRemove) {
-      if (isCellOccupied?.call(cell.$1, cell.$2) ?? false) {
-        onCellSiphoned?.call(cell.$1, cell.$2);
-        try { HapticFeedback.heavyImpact(); } catch (_) {}
-      }
-    }
-    _scheduleAttack();
-  }
+    siphonPhase      = WarpSiphonPhase.warning;
+    pullZoneCells    = _compute3x3(hole.$1, hole.$2);
+    warningSecsLeft  = _kWarningSec;
 
-  void _fireTimeLock() {
-    // 3-second warning, then lock a 2×2 area
-    final origins = <(int, int)>[];
-    for (int c = 0; c <= _gridCols - 2; c++) {
-      for (int r = 0; r <= _gridRows - 2; r++) {
-        origins.add((c, r));
-      }
-    }
-    if (origins.isEmpty) { _scheduleAttack(); return; }
-
-    final origin = origins[_rng.nextInt(origins.length)];
-    final lockSet = <(int, int)>{
-      origin,
-      (origin.$1 + 1, origin.$2),
-      (origin.$1,     origin.$2 + 1),
-      (origin.$1 + 1, origin.$2 + 1),
-    };
-
-    warningCells  = Set.from(lockSet);
-    currentAttack = WarpAttackType.timeLock;
-    _setDialogue('TIME LOCK INCOMING! CLEAR THE ZONE! ⏱️');
+    _setDialogue('WARP SIPHON CHARGING... EVACUATE THE ZONE! 🌀');
     try { HapticFeedback.mediumImpact(); } catch (_) {}
     notifyListeners();
 
-    _warningTimer?.cancel();
-    _warningTimer = Timer(const Duration(seconds: _kTimeLockWarningSec), () {
-      if (_disposed || phase != WarpSentinelPhase.active) return;
-      warningCells.clear();
-      timeLockCells = lockSet;
+    _warningCountdownTimer?.cancel();
+    _warningCountdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (_disposed) return;
+      warningSecsLeft = (warningSecsLeft - 1).clamp(0, _kWarningSec);
       notifyListeners();
-
-      for (final cell in lockSet) {
-        onCellLocked?.call(cell.$1, cell.$2);
+      if (warningSecsLeft <= 0) {
+        t.cancel();
+        _startPullPhase();
       }
-      try { HapticFeedback.heavyImpact(); } catch (_) {}
-
-      _timeLockUnlockTimer?.cancel();
-      _timeLockUnlockTimer = Timer(
-          const Duration(seconds: _kTimeLockDurationSec), () {
-        if (_disposed) return;
-        for (final cell in timeLockCells) {
-          onCellUnlocked?.call(cell.$1, cell.$2);
-        }
-        timeLockCells.clear();
-        currentAttack = null;
-        notifyListeners();
-        _scheduleAttack();
-      });
     });
+  }
+
+  // Step 3: 5-second pull phase — proximity siphon every 1.5s
+  void _startPullPhase() {
+    if (_disposed || phase != WarpSentinelPhase.active) return;
+    siphonPhase  = WarpSiphonPhase.pull;
+    pullSecsLeft = _kPullSec;
+    notifyListeners();
+
+    // Screen shake + whirring sound cue
+    try { HapticFeedback.heavyImpact(); } catch (_) {}
+    AudioManager.instance.playTimeWarning(); // closest available 'whirring' SFX
+
+    _pullTickTimer = Timer.periodic(
+        const Duration(milliseconds: _kPullTickMs), (_) {
+      if (_disposed) return;
+      _pullNearestItem();
+    });
+
+    _pullCountdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (_disposed) return;
+      pullSecsLeft = (pullSecsLeft - 1).clamp(0, _kPullSec);
+      notifyListeners();
+      if (pullSecsLeft <= 0) {
+        t.cancel();
+        _endPullPhase();
+      }
+    });
+  }
+
+  // Siphon the item closest to the black hole center in the pull zone
+  void _pullNearestItem() {
+    if (blackHoles.isEmpty) return;
+    final hole = blackHoles[bossHoleIndex];
+    final hx = hole.$1.toDouble();
+    final hy = hole.$2.toDouble();
+
+    // Collect occupied pull zone cells, sort by distance to hole
+    final candidates = pullZoneCells
+        .where((cell) => isCellOccupied?.call(cell.$1, cell.$2) ?? false)
+        .toList()
+      ..sort((a, b) {
+        final da = pow(a.$1 - hx, 2) + pow(a.$2 - hy, 2);
+        final db = pow(b.$1 - hx, 2) + pow(b.$2 - hy, 2);
+        return da.compareTo(db);
+      });
+
+    if (candidates.isEmpty) return;
+    final target = candidates.first;
+    onCellSiphoned?.call(target.$1, target.$2);
+    pullZoneCells.remove(target);
+    try { HapticFeedback.mediumImpact(); } catch (_) {}
+    notifyListeners();
+  }
+
+  void _endPullPhase() {
+    siphonPhase      = WarpSiphonPhase.inactive;
+    isAttackPoseActive = false;
+    pullZoneCells.clear();
+    notifyListeners();
+    _scheduleCooldown();
+  }
+
+  void _cancelAttackPhase() {
+    _cooldownLoopTimer?.cancel();
+    _cooldownTickTimer?.cancel();
+    _warningCountdownTimer?.cancel();
+    _pullCountdownTimer?.cancel();
+    _pullTickTimer?.cancel();
+    _attackPoseTimer?.cancel();
+    _cooldownLoopTimer = _cooldownTickTimer = _warningCountdownTimer =
+        _pullCountdownTimer = _pullTickTimer = _attackPoseTimer = null;
   }
 
   // ── Teleport ────────────────────────────────────────────────────────────────
@@ -382,34 +408,56 @@ class WarpSentinelController extends ChangeNotifier {
     _teleportTimer?.cancel();
     _teleportTimer = Timer(const Duration(seconds: _kTeleportIntervalSec), () {
       if (_disposed || phase != WarpSentinelPhase.active || isStunned) return;
+      // Only teleport if not mid-attack
+      if (siphonPhase != WarpSiphonPhase.inactive) {
+        _scheduleTeleport(); // retry after next interval
+        return;
+      }
       _doTeleport();
     });
   }
 
   void _doTeleport() {
     if (blackHoles.length < 2) return;
-    isTeleporting = true;
+    fromHoleIndex = bossHoleIndex;
+    toHoleIndex   = 1 - bossHoleIndex;
+
+    // Phase: arm extend
+    teleportPhase = WarpTeleportPhase.arming;
     notifyListeners();
-    Timer(const Duration(milliseconds: 700), () {
+
+    Timer(const Duration(milliseconds: 450), () {
       if (_disposed) return;
-      bossHoleIndex = 1 - bossHoleIndex;
-      isTeleporting = false;
+      // Phase: dissolve → suck into hole
+      teleportPhase = WarpTeleportPhase.dissolving;
       notifyListeners();
-      _scheduleTeleport();
+
+      Timer(const Duration(milliseconds: 550), () {
+        if (_disposed) return;
+        // Switch hole
+        bossHoleIndex = toHoleIndex;
+        // Phase: materialise from other hole
+        teleportPhase = WarpTeleportPhase.materializing;
+        notifyListeners();
+
+        Timer(const Duration(milliseconds: 500), () {
+          if (_disposed) return;
+          teleportPhase = WarpTeleportPhase.idle;
+          notifyListeners();
+          _scheduleTeleport();
+        });
+      });
     });
   }
 
   // ── Stun ────────────────────────────────────────────────────────────────────
 
   void _stun() {
-    _attackLoopTimer?.cancel();
-    _attackCountdownTimer?.cancel();
-    _siphonCountdownTimer?.cancel();
-    _warningTimer?.cancel();
+    _cancelAttackPhase();
     _teleportTimer?.cancel();
-    siphonedCells.clear();
-    warningCells.clear();
-    currentAttack = null;
+    pullZoneCells.clear();
+    siphonPhase      = WarpSiphonPhase.inactive;
+    isAttackPoseActive = false;
 
     isStunned    = true;
     stunSecsLeft = _kStunDurationSec;
@@ -437,19 +485,31 @@ class WarpSentinelController extends ChangeNotifier {
     phase     = WarpSentinelPhase.active;
     _setDialogue('WARP FIELD RESTORED. ANNIHILATION SEQUENCE RESUMED! ⚡');
     notifyListeners();
-    _scheduleAttack();
+    _scheduleCooldown();
     _scheduleTeleport();
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
+  Set<(int, int)> _compute3x3(int cx, int cy) {
+    final cells = <(int, int)>{};
+    for (int dc = -1; dc <= 1; dc++) {
+      for (int dr = -1; dr <= 1; dr++) {
+        final c = (cx + dc).clamp(0, _gridCols - 1);
+        final r = (cy + dr).clamp(0, _gridRows - 1);
+        cells.add((c, r));
+      }
+    }
+    return cells;
+  }
+
   List<(int, int)> _pickBlackHolePositions() {
-    // Place 2 holes spread apart (left half + right half)
-    final halfCol = _gridCols ~/ 2;
-    final col0 = _rng.nextInt(halfCol.clamp(1, _gridCols));
+    final half = _gridCols ~/ 2;
+    final col0 = _rng.nextInt(half.clamp(1, _gridCols));
     final row0 = 1 + _rng.nextInt((_gridRows - 2).clamp(1, _gridRows - 1));
-    final col1 = halfCol + _rng.nextInt((_gridCols - halfCol).clamp(1, _gridCols - halfCol));
+    final col1 = half + _rng.nextInt((_gridCols - half).clamp(1, _gridCols - half));
     final row1 = 1 + _rng.nextInt((_gridRows - 2).clamp(1, _gridRows - 1));
+    bossHoleIndex = _rng.nextInt(2);
     return [(col0, row0), (col1.clamp(0, _gridCols - 1), row1)];
   }
 
@@ -474,37 +534,34 @@ class WarpSentinelController extends ChangeNotifier {
 
   void _goIdle() {
     _cancelTimers();
-    phase         = WarpSentinelPhase.idle;
-    entryComplete = false;
-    glitchActive  = false;
-    isTeleporting = false;
-    blackHoles    = [];
-    siphonedCells.clear();
-    timeLockCells.clear();
-    warningCells.clear();
-    currentAttack = null;
-    isStunned     = false;
-    dialogueText  = null;
-    winFlashReady = false;
+    phase            = WarpSentinelPhase.idle;
+    entryComplete    = false;
+    glitchActive     = false;
+    siphonPhase      = WarpSiphonPhase.inactive;
+    teleportPhase    = WarpTeleportPhase.idle;
+    isAttackPoseActive = false;
+    blackHoles       = [];
+    pullZoneCells.clear();
+    isStunned        = false;
+    dialogueText     = null;
+    winFlashReady    = false;
+    overloadFlash    = false;
     notifyListeners();
   }
 
   void _cancelTimers() {
+    _cancelAttackPhase();
     _glitchTimer?.cancel();
     _entryTimer?.cancel();
-    _attackLoopTimer?.cancel();
-    _attackCountdownTimer?.cancel();
-    _warningTimer?.cancel();
-    _siphonCountdownTimer?.cancel();
-    _timeLockUnlockTimer?.cancel();
     _stunCountdownTimer?.cancel();
     _hintTimer?.cancel();
     _dialogueTimer?.cancel();
     _teleportTimer?.cancel();
-    _glitchTimer = _entryTimer = _attackLoopTimer = _attackCountdownTimer =
-        _warningTimer = _siphonCountdownTimer = _timeLockUnlockTimer =
-        _stunCountdownTimer = _hintTimer = _dialogueTimer = _teleportTimer = null;
+    _glitchTimer = _entryTimer = _stunCountdownTimer =
+        _hintTimer = _dialogueTimer = _teleportTimer = null;
   }
+
+  Timer? _hintTimer;
 
   Future<void> _safeVibrate({List<int>? pattern, int duration = 300}) async {
     try {
