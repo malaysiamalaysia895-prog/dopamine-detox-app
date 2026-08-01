@@ -1,7 +1,9 @@
-// warp_sentinel_overlay.dart — WARP SENTINEL Visual Overlay (Level 41)
-// Boss: Futuristic armored sentinel hovering above grid.
-// Black holes: pulsing purple vortexes on grid tiles.
-// Glitch intro, teleport dissolve, siphon tendrils, time-lock laser.
+// warp_sentinel_overlay.dart — WARP SENTINEL Visual Overlay (Level 41) v2
+// Teleport: arm extend → liquid wireframe dissolve → suck into hole → exit → solidify
+// Attack pose: both arms raised toward black hole
+// 3×3 vortex spiral around black hole during attack
+// Item shake during warning, screen-edge shake during pull
+// Sacrifice overload flash, win blast
 
 import 'dart:math';
 import 'dart:ui' as ui;
@@ -26,40 +28,30 @@ class WarpSentinelOverlay extends StatefulWidget {
 
 class _WarpSentinelOverlayState extends State<WarpSentinelOverlay>
     with TickerProviderStateMixin {
-  // Bob / hover
-  late final AnimationController _bob;
-  // Black hole spin
-  late final AnimationController _holeSpin;
-  // Eye / core pulse
-  late final AnimationController _corePulse;
-  // Teleport dissolve
-  late final AnimationController _teleport;
-  // Siphon tendrils
-  late final AnimationController _siphon;
-  // Warning glow pulse
-  late final AnimationController _warn;
-  // Time-lock laser
-  late final AnimationController _laser;
-  // Glitch effect
-  late final AnimationController _glitch;
-  // Win explosion
-  late final AnimationController _win;
-  // Entry drop
-  late final AnimationController _entry;
+  late final AnimationController _bob;        // hover bob
+  late final AnimationController _holeSpin;   // black hole accretion spin
+  late final AnimationController _corePulse;  // energy core pulse
+  late final AnimationController _vortex;     // attack vortex spiral
+  late final AnimationController _warnPulse;  // warning glow pulse
+  late final AnimationController _shake;      // fast shake tick (pull phase)
+  late final AnimationController _glitch;     // intro glitch
+  late final AnimationController _entry;      // entry drop animation
+  late final AnimationController _teleport;   // full teleport sequence 0→1
+  late final AnimationController _win;        // win explosion
 
   @override
   void initState() {
     super.initState();
-    _bob      = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400))..repeat(reverse: true);
-    _holeSpin = AnimationController(vsync: this, duration: const Duration(milliseconds: 3000))..repeat();
-    _corePulse= AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..repeat(reverse: true);
-    _teleport = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
-    _siphon   = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))..repeat();
-    _warn     = AnimationController(vsync: this, duration: const Duration(milliseconds: 500))..repeat(reverse: true);
-    _laser    = AnimationController(vsync: this, duration: const Duration(milliseconds: 600))..repeat(reverse: true);
-    _glitch   = AnimationController(vsync: this, duration: const Duration(milliseconds: 80))..repeat();
-    _win      = AnimationController(vsync: this, duration: const Duration(milliseconds: 2000));
-    _entry    = AnimationController(vsync: this, duration: const Duration(milliseconds: 3200));
+    _bob       = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400))..repeat(reverse: true);
+    _holeSpin  = AnimationController(vsync: this, duration: const Duration(milliseconds: 2800))..repeat();
+    _corePulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..repeat(reverse: true);
+    _vortex    = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600))..repeat();
+    _warnPulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 420))..repeat(reverse: true);
+    _shake     = AnimationController(vsync: this, duration: const Duration(milliseconds: 60))..repeat();
+    _glitch    = AnimationController(vsync: this, duration: const Duration(milliseconds: 80))..repeat();
+    _entry     = AnimationController(vsync: this, duration: const Duration(milliseconds: 3200));
+    _teleport  = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
+    _win       = AnimationController(vsync: this, duration: const Duration(milliseconds: 2200));
 
     widget.controller.addListener(_onControllerChanged);
   }
@@ -77,17 +69,14 @@ class _WarpSentinelOverlayState extends State<WarpSentinelOverlay>
     if (!mounted) return;
     final c = widget.controller;
 
-    // Trigger entry animation
     if (c.phase == WarpSentinelPhase.entry && !c.entryComplete) {
       _entry.forward(from: 0);
     }
-
-    // Teleport animation
     if (c.isTeleporting && _teleport.status != AnimationStatus.forward) {
-      _teleport.forward(from: 0).then((_) => _teleport.reverse());
+      _teleport.forward(from: 0);
+    } else if (!c.isTeleporting && _teleport.isCompleted) {
+      _teleport.reset();
     }
-
-    // Win
     if (c.phase == WarpSentinelPhase.winBlast && !_win.isAnimating) {
       _win.forward(from: 0);
     }
@@ -98,9 +87,10 @@ class _WarpSentinelOverlayState extends State<WarpSentinelOverlay>
   @override
   void dispose() {
     widget.controller.removeListener(_onControllerChanged);
-    _bob.dispose(); _holeSpin.dispose(); _corePulse.dispose();
-    _teleport.dispose(); _siphon.dispose(); _warn.dispose();
-    _laser.dispose(); _glitch.dispose(); _win.dispose(); _entry.dispose();
+    for (final c in [_bob, _holeSpin, _corePulse, _vortex, _warnPulse,
+                     _shake, _glitch, _entry, _teleport, _win]) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -108,67 +98,71 @@ class _WarpSentinelOverlayState extends State<WarpSentinelOverlay>
   Widget build(BuildContext context) {
     final c = widget.controller;
     if (c.phase == WarpSentinelPhase.idle) return const SizedBox.shrink();
-    if (widget.isDialogActive && c.phase == WarpSentinelPhase.idle) return const SizedBox.shrink();
 
     return AnimatedBuilder(
       animation: Listenable.merge([
-        _bob, _holeSpin, _corePulse, _teleport,
-        _siphon, _warn, _laser, _glitch, _win, _entry,
+        _bob, _holeSpin, _corePulse, _vortex, _warnPulse,
+        _shake, _glitch, _entry, _teleport, _win,
       ]),
-      builder: (context, _) {
-        return CustomPaint(
-          painter: _WarpScenePainter(
-            controller:  c,
-            getCellRect: widget.getCellRect,
-            bobT:        _bob.value,
-            holeSpinT:   _holeSpin.value,
-            corePulseT:  _corePulse.value,
-            teleportT:   _teleport.value,
-            siphonT:     _siphon.value,
-            warnT:       _warn.value,
-            laserT:      _laser.value,
-            glitchT:     _glitch.value,
-            winT:        _win.value,
-            entryT:      _entry.value,
-          ),
-          child: _buildHUD(c),
-        );
-      },
+      builder: (context, _) => _buildScene(context, c),
     );
   }
 
-  Widget _buildHUD(WarpSentinelController c) {
-    if (c.phase == WarpSentinelPhase.idle) return const SizedBox.shrink();
+  Widget _buildScene(BuildContext context, WarpSentinelController c) {
+    // Screen-edge shake during pull phase
+    final shakeOffset = c.isPulling
+        ? Offset(
+            (Random(_shake.value.hashCode ^ 1).nextDouble() - 0.5) * 5,
+            (Random(_shake.value.hashCode ^ 2).nextDouble() - 0.5) * 5,
+          )
+        : Offset.zero;
 
+    Widget scene = CustomPaint(
+      painter: _WarpScenePainter(
+        controller:   c,
+        getCellRect:  widget.getCellRect,
+        bobT:         _bob.value,
+        holeSpinT:    _holeSpin.value,
+        corePulseT:   _corePulse.value,
+        vortexT:      _vortex.value,
+        warnPulseT:   _warnPulse.value,
+        shakeT:       _shake.value,
+        glitchT:      _glitch.value,
+        entryT:       _entry.value,
+        teleportT:    _teleport.value,
+        winT:         _win.value,
+      ),
+      child: _buildHUD(c),
+    );
+
+    if (shakeOffset != Offset.zero) {
+      scene = Transform.translate(offset: shakeOffset, child: scene);
+    }
+    return scene;
+  }
+
+  Widget _buildHUD(WarpSentinelController c) {
     return Stack(
       children: [
-        // Dialogue bubble at top
         if (c.dialogueText != null)
-          Positioned(
-            top: 8, left: 12, right: 12,
-            child: _DialogueBubble(text: c.dialogueText!),
-          ),
+          Positioned(top: 8, left: 12, right: 12,
+              child: _DialogueBubble(text: c.dialogueText!)),
 
-        // Stun bar
         if (c.isStunned)
-          Positioned(
-            bottom: 80, left: 24, right: 24,
-            child: _StunBar(secsLeft: c.stunSecsLeft),
-          ),
+          Positioned(bottom: 80, left: 24, right: 24,
+              child: _StunBar(secsLeft: c.stunSecsLeft)),
 
-        // Hint strip at bottom
-        if (c.phase == WarpSentinelPhase.active)
-          Positioned(
-            bottom: 8, left: 12, right: 12,
-            child: _HintStrip(hint: kWarpHints[c.hintIndex]),
-          ),
+        if (c.isWarning)
+          Positioned(top: 60, right: 16,
+              child: _CountdownRing(secsLeft: c.warningSecsLeft, color: const Color(0xFFAA00FF), label: 'WARN')),
 
-        // Siphon countdown
-        if (c.currentAttack == WarpAttackType.warpSiphon && !c.siphonedCells.isEmpty)
-          Positioned(
-            top: 60, right: 16,
-            child: _SiphonCountdown(secsLeft: c.siphonSecsLeft),
-          ),
+        if (c.isPulling)
+          Positioned(top: 60, right: 16,
+              child: _CountdownRing(secsLeft: c.pullSecsLeft, color: const Color(0xFFFF2222), label: 'PULL')),
+
+        if (c.phase == WarpSentinelPhase.active && !c.isWarning && !c.isPulling)
+          Positioned(bottom: 8, left: 12, right: 12,
+              child: _HintStrip(hint: kWarpHints[c.hintIndex])),
       ],
     );
   }
@@ -179,164 +173,163 @@ class _WarpSentinelOverlayState extends State<WarpSentinelOverlay>
 class _WarpScenePainter extends CustomPainter {
   final WarpSentinelController controller;
   final Rect? Function(int col, int row) getCellRect;
-  final double bobT, holeSpinT, corePulseT, teleportT;
-  final double siphonT, warnT, laserT, glitchT, winT, entryT;
+  final double bobT, holeSpinT, corePulseT, vortexT, warnPulseT;
+  final double shakeT, glitchT, entryT, teleportT, winT;
 
   const _WarpScenePainter({
     required this.controller,
     required this.getCellRect,
-    required this.bobT,
-    required this.holeSpinT,
-    required this.corePulseT,
-    required this.teleportT,
-    required this.siphonT,
-    required this.warnT,
-    required this.laserT,
-    required this.glitchT,
+    required this.bobT, required this.holeSpinT, required this.corePulseT,
+    required this.vortexT, required this.warnPulseT, required this.shakeT,
+    required this.glitchT, required this.entryT, required this.teleportT,
     required this.winT,
-    required this.entryT,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     final c = controller;
-    final rng = Random(42); // deterministic seed for glitch noise
 
-    // ── 1. Glitch intro overlay ───────────────────────────────────────────────
+    // ── 1. Glitch intro (replaces all else during first 2s) ───────────────────
     if (c.glitchActive) {
-      _paintGlitch(canvas, size, rng);
-      return; // glitch replaces everything during intro
+      _paintGlitch(canvas, size);
+      return;
     }
 
-    // ── 2. Warning glow on tiles ──────────────────────────────────────────────
-    for (final cell in c.warningCells) {
-      final rect = getCellRect(cell.$1, cell.$2);
-      if (rect == null) continue;
-      _paintWarningGlow(canvas, rect, warnT,
-          isTimeLock: c.currentAttack == WarpAttackType.timeLock);
+    // ── 2. 3×3 Warning glow on tiles ─────────────────────────────────────────
+    if (c.isWarning || c.isPulling) {
+      for (final cell in c.pullZoneCells) {
+        final rect = getCellRect(cell.$1, cell.$2);
+        if (rect == null) continue;
+        final isPull = c.isPulling;
+        _paintZoneTile(canvas, rect, warnPulseT, isPull, shakeT);
+      }
     }
 
-    // ── 3. Time-locked tiles ──────────────────────────────────────────────────
-    for (final cell in c.timeLockCells) {
-      final rect = getCellRect(cell.$1, cell.$2);
-      if (rect == null) continue;
-      _paintTimeLockOverlay(canvas, rect, laserT);
-    }
-
-    // ── 4. Siphoned cells: pulsing purple pull ────────────────────────────────
-    for (final cell in c.siphonedCells) {
-      final rect = getCellRect(cell.$1, cell.$2);
-      if (rect == null) continue;
-      _paintSiphonGlow(canvas, rect, siphonT);
-    }
-
-    // ── 5. Black holes on grid ────────────────────────────────────────────────
+    // ── 3. Black holes ────────────────────────────────────────────────────────
     for (int i = 0; i < c.blackHoles.length; i++) {
       final hole = c.blackHoles[i];
       final rect = getCellRect(hole.$1, hole.$2);
       if (rect == null) continue;
-      final isActive = i == c.bossHoleIndex;
-      _paintBlackHole(canvas, rect, holeSpinT, isActive,
-          entryT: c.phase == WarpSentinelPhase.entry ? entryT : 1.0);
+      final isActive  = (i == c.bossHoleIndex);
+      final isFrom    = c.isTeleporting && i == c.fromHoleIndex;
+      final isTo      = c.isTeleporting && i == c.toHoleIndex;
+      final entryScale = c.phase == WarpSentinelPhase.entry ? entryT : 1.0;
+      _paintBlackHole(canvas, rect, holeSpinT, isActive, entryScale, isFrom, isTo);
     }
 
-    // ── 6. Siphon tendrils from boss hole to siphoned cells ───────────────────
-    if (c.currentAttack == WarpAttackType.warpSiphon && c.blackHoles.isNotEmpty) {
+    // ── 4. Attack vortex (warning + pull phase) ───────────────────────────────
+    if ((c.isWarning || c.isPulling) && c.blackHoles.isNotEmpty) {
       final hole = c.blackHoles[c.bossHoleIndex];
-      final holeRect = getCellRect(hole.$1, hole.$2);
-      if (holeRect != null) {
-        for (final sc in c.siphonedCells) {
-          final cellRect = getCellRect(sc.$1, sc.$2);
-          if (cellRect != null) {
-            _paintSiphonTendril(canvas, holeRect.center, cellRect.center, siphonT);
-          }
-        }
+      final hRect = getCellRect(hole.$1, hole.$2);
+      if (hRect != null) {
+        _paintAttackVortex(canvas, hRect.center, vortexT, c.isPulling);
       }
     }
 
-    // ── 7. Time-lock laser from boss to locked zone ───────────────────────────
-    if (c.currentAttack == WarpAttackType.timeLock && c.blackHoles.isNotEmpty) {
-      final boss = _getBossPosition(size);
-      if (boss != null && c.timeLockCells.isNotEmpty) {
-        final firstCell = c.timeLockCells.first;
-        final lastCell  = c.timeLockCells.last;
-        final r1 = getCellRect(firstCell.$1, firstCell.$2);
-        final r2 = getCellRect(lastCell.$1, lastCell.$2);
-        if (r1 != null && r2 != null) {
-          final zoneCenter = Rect.fromPoints(r1.topLeft, r2.bottomRight).center;
-          _paintTimeLockLaser(canvas, boss, zoneCenter, laserT);
-        }
-      }
+    // ── 5. Overload flash ─────────────────────────────────────────────────────
+    if (c.overloadFlash) {
+      final paint = Paint()
+        ..color = const Color(0x88FFFFFF)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 30);
+      canvas.drawRect(Offset.zero & const Size(9999, 9999), paint);
     }
 
-    // ── 8. Boss figure ────────────────────────────────────────────────────────
-    final bossPos = _getBossPosition(size);
-    if (bossPos != null) {
-      final dissolveT = teleportT; // 0→1 = dissolving, 1→0 = re-materialising
-      final opacity   = c.isStunned ? 0.55 : 1.0 - (sin(dissolveT * pi) * 0.9);
-      _paintBoss(canvas, bossPos, bobT, corePulseT, opacity, c.isStunned, c.phase == WarpSentinelPhase.winBlast);
-    }
+    // ── 6. Boss figure ────────────────────────────────────────────────────────
+    _paintBossAtCurrentPosition(canvas, size, c);
 
-    // ── 9. Win explosion ──────────────────────────────────────────────────────
+    // ── 7. Win blast ──────────────────────────────────────────────────────────
     if (c.phase == WarpSentinelPhase.winBlast && winT > 0) {
       _paintWinBlast(canvas, size, winT);
     }
   }
 
-  // ── Boss position ───────────────────────────────────────────────────────────
+  // ── Boss position + dispatch ────────────────────────────────────────────────
 
-  Offset? _getBossPosition(Size size) {
-    if (controller.blackHoles.isEmpty) return null;
-    final hole = controller.blackHoles[controller.bossHoleIndex];
-    final rect = getCellRect(hole.$1, hole.$2);
-    if (rect == null) return null;
-    // Boss hovers above and slightly left of its black hole
-    final bobOffset = sin(bobT * pi) * 10;
-    return Offset(rect.center.dx, rect.top - 80 + bobOffset);
+  void _paintBossAtCurrentPosition(Canvas canvas, Size size, WarpSentinelController c) {
+    if (c.blackHoles.isEmpty) return;
+
+    final tp = c.teleportPhase;
+
+    if (tp == WarpTeleportPhase.idle || tp == WarpTeleportPhase.arming) {
+      // Normal / arm-raising pose
+      final hole = c.blackHoles[c.bossHoleIndex];
+      final rect = getCellRect(hole.$1, hole.$2);
+      if (rect == null) return;
+      final bob = sin(bobT * pi) * 10;
+      final center = Offset(rect.center.dx, rect.top - 80 + bob);
+      _paintBoss(canvas, center, corePulseT,
+          opacity: 1.0,
+          isStunned: c.isStunned,
+          armPose: tp == WarpTeleportPhase.arming ? _ArmPose.teleportArm :
+                   c.isAttackPoseActive          ? _ArmPose.attackBoth  : _ArmPose.idle,
+          holeDir: _holeDirFromBoss(c.blackHoles[c.bossHoleIndex], c.blackHoles[c.bossHoleIndex]));
+    } else if (tp == WarpTeleportPhase.dissolving) {
+      // Boss dissolves into the FROM hole
+      final fromHole = c.blackHoles[c.fromHoleIndex];
+      final rect = getCellRect(fromHole.$1, fromHole.$2);
+      if (rect == null) return;
+      // teleportT goes from 0→1 over 1500ms; dissolving starts ~0.3
+      final dissolveProgress = ((teleportT - 0.3) / 0.37).clamp(0.0, 1.0);
+      final bob = sin(bobT * pi) * 10;
+      // Boss shrinks and moves toward hole center as it dissolves
+      final bossStart = Offset(rect.center.dx, rect.top - 80 + bob);
+      final center = Offset.lerp(bossStart, rect.center, dissolveProgress)!;
+      _paintBossWireframe(canvas, center, corePulseT, dissolveProgress, c.isStunned);
+    } else if (tp == WarpTeleportPhase.materializing) {
+      // Boss materializes from the TO hole
+      final toHole = c.blackHoles[c.toHoleIndex];
+      final rect = getCellRect(toHole.$1, toHole.$2);
+      if (rect == null) return;
+      // teleportT continues; materializing starts ~0.67
+      final materProgress = ((teleportT - 0.67) / 0.33).clamp(0.0, 1.0);
+      final bob = sin(bobT * pi) * 10;
+      final bossEnd = Offset(rect.center.dx, rect.top - 80 + bob);
+      final center = Offset.lerp(rect.center, bossEnd, materProgress)!;
+      _paintBossWireframe(canvas, center, corePulseT, 1.0 - materProgress, c.isStunned);
+    }
+  }
+
+  Offset _holeDirFromBoss((int, int) bossHole, (int, int) targetHole) {
+    // Direction vector from boss hole toward the other hole (simplified)
+    return const Offset(0, 1);
   }
 
   // ── Glitch ─────────────────────────────────────────────────────────────────
 
-  void _paintGlitch(Canvas canvas, Size size, Random rng) {
+  void _paintGlitch(Canvas canvas, Size size) {
+    final rng = Random(DateTime.now().millisecondsSinceEpoch ~/ 80);
     final paint = Paint();
-    // Dark base tint
-    paint.color = const Color(0x66000000);
+
+    paint.color = const Color(0xBB000000);
     canvas.drawRect(Offset.zero & size, paint);
 
-    // Horizontal noise bars
-    final barCount = 6 + rng.nextInt(8);
-    for (int i = 0; i < barCount; i++) {
+    for (int i = 0; i < 8 + rng.nextInt(6); i++) {
       final y = rng.nextDouble() * size.height;
-      final h = 2.0 + rng.nextDouble() * 18;
-      final col = [
+      final h = 2.0 + rng.nextDouble() * 22;
+      paint.color = [
         const Color(0xAA9B30FF),
         const Color(0xAA00FFEE),
-        const Color(0xAAFF003C),
+        const Color(0xAAFF2266),
       ][rng.nextInt(3)];
-      paint.color = col;
       canvas.drawRect(Rect.fromLTWH(0, y, size.width, h), paint);
     }
-
-    // Vertical chromatic shift strips
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
       final x = rng.nextDouble() * size.width;
-      final w = 4.0 + rng.nextDouble() * 20;
-      paint.color = Color.fromARGB(
-          80 + rng.nextInt(100),
+      final w = 3.0 + rng.nextDouble() * 18;
+      paint.color = Color.fromARGB(70 + rng.nextInt(80),
           rng.nextInt(255), rng.nextInt(255), rng.nextInt(255));
       canvas.drawRect(Rect.fromLTWH(x, 0, w, size.height), paint);
     }
 
-    // Center WARP SENTINEL text
     final tp = TextPainter(
       text: const TextSpan(
-        text: 'WARP SENTINEL',
+        text: '⚡ WARP SENTINEL ⚡',
         style: TextStyle(
           color: Color(0xFFCE93FF),
-          fontSize: 28,
+          fontSize: 26,
           fontWeight: FontWeight.w900,
-          letterSpacing: 6,
-          shadows: [Shadow(color: Color(0xCC9B30FF), blurRadius: 20)],
+          letterSpacing: 5,
+          shadows: [Shadow(color: Color(0xCC9B30FF), blurRadius: 24)],
         ),
       ),
       textDirection: TextDirection.ltr,
@@ -347,424 +340,463 @@ class _WarpScenePainter extends CustomPainter {
 
   // ── Black Hole ──────────────────────────────────────────────────────────────
 
-  void _paintBlackHole(Canvas canvas, Rect rect, double spinT, bool isActive,
-      {required double entryT}) {
+  void _paintBlackHole(Canvas canvas, Rect rect, double spinT,
+      bool isActive, double entryScale, bool isFrom, bool isDest) {
     final center = rect.center;
-    final scale  = isActive ? (0.85 + entryT * 0.15) : 0.75;
+    final scale  = entryScale * (isActive ? 1.0 : 0.75);
     final radius = rect.width * 0.44 * scale;
 
     canvas.save();
     canvas.translate(center.dx, center.dy);
-    canvas.rotate(spinT * 2 * pi * (isActive ? 1.0 : -0.6));
+
+    // Suction distortion during dissolving (boss being pulled in)
+    if (isFrom) {
+      final suck = ((teleportT - 0.3) / 0.37).clamp(0.0, 1.0);
+      canvas.scale(1.0 + suck * 0.3, 1.0 + suck * 0.3);
+    }
+    // Emission burst during materializing
+    if (isDest) {
+      final emit = ((teleportT - 0.67) / 0.33).clamp(0.0, 1.0);
+      canvas.scale(1.0 + (1.0 - emit) * 0.25, 1.0 + (1.0 - emit) * 0.25);
+    }
+
+    canvas.rotate(spinT * 2 * pi * (isActive ? 1.0 : -0.5));
 
     // Outer glow rings
     for (int r = 3; r >= 0; r--) {
-      final ringR = radius + r * 8.0;
-      final alpha = (0.15 - r * 0.03).clamp(0.0, 1.0);
+      final ringR = radius + r * 9.0;
+      final alpha = (0.14 - r * 0.025).clamp(0.0, 1.0);
       final paint = Paint()
         ..color = Color.fromARGB((alpha * 255).toInt(), 155, 48, 255)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.5
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7);
       canvas.drawCircle(Offset.zero, ringR, paint);
     }
 
-    // Dark core (the actual black hole)
+    // Dark void core
     final corePaint = Paint()
       ..shader = ui.Gradient.radial(
-        Offset.zero,
-        radius,
+        Offset.zero, radius,
         [const Color(0xFF000000), const Color(0xFF0D0020), const Color(0xFF1A0033)],
-        [0.0, 0.6, 1.0],
+        [0.0, 0.55, 1.0],
       );
     canvas.drawCircle(Offset.zero, radius, corePaint);
 
-    // Swirling accretion rings
-    final ringPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
-    for (int i = 0; i < 4; i++) {
-      final t = (spinT + i * 0.25) % 1.0;
-      final ringR = radius * (0.5 + t * 0.55);
-      final alpha = (1.0 - t) * 0.8;
+    // Accretion disk rings
+    final ringPaint = Paint()..style = PaintingStyle.stroke..strokeWidth = 1.4;
+    for (int i = 0; i < 5; i++) {
+      final t = (spinT + i * 0.2) % 1.0;
+      final ringR = radius * (0.45 + t * 0.6);
       ringPaint.color = Color.fromARGB(
-          (alpha * 200).toInt(),
-          155 + (t * 60).toInt(),
-          48,
-          255);
-      canvas.drawOval(Rect.fromCenter(
-          center: Offset.zero,
-          width: ringR * 2,
-          height: ringR * 0.7), ringPaint);
+          ((1.0 - t) * 200).toInt(),
+          150 + (t * 80).toInt(), 48, 255);
+      canvas.drawOval(
+          Rect.fromCenter(center: Offset.zero, width: ringR * 2, height: ringR * 0.65),
+          ringPaint);
     }
 
-    // Active indicator glow
     if (isActive) {
-      final glowPaint = Paint()
-        ..color = const Color(0x559B30FF)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18);
-      canvas.drawCircle(Offset.zero, radius * 1.4, glowPaint);
+      final glow = Paint()
+        ..color = const Color(0x449B30FF)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 20);
+      canvas.drawCircle(Offset.zero, radius * 1.5, glow);
     }
 
     canvas.restore();
   }
 
-  // ── Boss Body ───────────────────────────────────────────────────────────────
+  // ── Attack Vortex (3×3 spiral around boss hole) ────────────────────────────
 
-  void _paintBoss(Canvas canvas, Offset center, double bobT, double corePulseT,
-      double opacity, bool isStunned, bool isWin) {
-    if (opacity <= 0.01) return;
-    canvas.save();
-    canvas.translate(center.dx, center.dy);
-
-    final paint = Paint();
-    final o = (opacity * 255).toInt().clamp(0, 255);
-
-    // Outer atmospheric glow
-    paint
-      ..color = isStunned
-          ? Color.fromARGB((o * 0.25).toInt(), 100, 200, 255)
-          : Color.fromARGB((o * 0.20).toInt(), 155, 48, 255)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 30);
-    canvas.drawCircle(Offset.zero, 55, paint);
-    paint.maskFilter = null;
-
-    // ── Cloak / energy mantle (flowing triangular shape) ─────────────────────
-    final cloakColor = isStunned ? const Color(0xFF4488FF) : const Color(0xFF7B20EE);
-    final cloakPath = Path();
-    const cw = 52.0;
-    const ch = 75.0;
-    final cloakFlare = sin(bobT * pi) * 5;
-    cloakPath.moveTo(0, -ch * 0.3);
-    cloakPath.cubicTo(-cw, -ch * 0.1, -cw - cloakFlare, ch * 0.6, -18, ch + 5);
-    cloakPath.lineTo(18, ch + 5);
-    cloakPath.cubicTo(cw + cloakFlare, ch * 0.6, cw, -ch * 0.1, 0, -ch * 0.3);
-    cloakPath.close();
-
-    paint.color = Color.fromARGB(o, cloakColor.red, cloakColor.green, cloakColor.blue);
-    paint.style = PaintingStyle.fill;
-    canvas.drawPath(cloakPath, paint);
-
-    // Cloak inner gradient overlay
-    final cloakShader = ui.Gradient.linear(
-      const Offset(0, -50),
-      const Offset(0, 60),
-      [
-        Color.fromARGB((o * 0.7).toInt(), 30, 0, 80),
-        Color.fromARGB((o * 0.0).toInt(), 30, 0, 80),
-      ],
-    );
-    paint.shader = cloakShader;
-    canvas.drawPath(cloakPath, paint);
-    paint.shader = null;
-
-    // ── Armored torso ─────────────────────────────────────────────────────────
-    final torsoRect = Rect.fromCenter(center: const Offset(0, 0), width: 38, height: 50);
-    final torsoRR   = RRect.fromRectAndRadius(torsoRect, const Radius.circular(8));
-    paint
-      ..color = Color.fromARGB(o, 18, 12, 38)
-      ..style = PaintingStyle.fill;
-    canvas.drawRRect(torsoRR, paint);
-
-    // Torso panel lines
-    paint
-      ..color = Color.fromARGB((o * 0.5).toInt(), 155, 48, 255)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0;
-    canvas.drawLine(const Offset(-8, -18), const Offset(-8, 18), paint);
-    canvas.drawLine(const Offset(8, -18), const Offset(8, 18), paint);
-    canvas.drawLine(const Offset(-16, 0), const Offset(16, 0), paint);
-    paint.style = PaintingStyle.fill;
-
-    // ── Energy core (chest) ──────────────────────────────────────────────────
-    final coreGlow = 0.4 + corePulseT * 0.6;
-    final coreColor = isStunned
-        ? Color.fromARGB(o, 100, 200, 255)
-        : Color.fromARGB(o, 180 + (corePulseT * 75).toInt(), 48, 255);
-
-    paint
-      ..color = coreColor.withOpacity(coreGlow * 0.35)
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 14 + corePulseT * 8);
-    canvas.drawCircle(Offset.zero, 16, paint);
-    paint.maskFilter = null;
-
-    paint
-      ..color = Color.fromARGB(o, 30, 0, 70)
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset.zero, 9, paint);
-
-    paint.color = coreColor;
-    canvas.drawCircle(Offset.zero, 5 + corePulseT * 2, paint);
-
-    // Core sparkle cross
-    paint
-      ..color = Color.fromARGB((o * coreGlow).toInt(), 255, 220, 255)
-      ..strokeWidth = 1.5
-      ..style = PaintingStyle.stroke;
-    final cs = 6.0 + corePulseT * 3;
-    canvas.drawLine(Offset(0, -cs), Offset(0, cs), paint);
-    canvas.drawLine(Offset(-cs, 0), Offset(cs, 0), paint);
-    paint.style = PaintingStyle.fill;
-
-    // ── Head / visor ─────────────────────────────────────────────────────────
-    const headY = -34.0;
-    final headRect = Rect.fromCenter(center: const Offset(0, headY), width: 28, height: 24);
-    final headRR   = RRect.fromRectAndRadius(headRect, const Radius.circular(6));
-    paint.color = Color.fromARGB(o, 18, 12, 38);
-    canvas.drawRRect(headRR, paint);
-
-    // Visor bar
-    final visorRect = Rect.fromCenter(
-        center: Offset(0, headY), width: 22, height: 8);
-    paint.shader = ui.Gradient.linear(
-      Offset(-11, headY), Offset(11, headY),
-      [
-        const Color(0xFF9B30FF),
-        const Color(0xFFDD88FF),
-        const Color(0xFF9B30FF),
-      ],
-    );
-    canvas.drawRRect(
-        RRect.fromRectAndRadius(visorRect, const Radius.circular(3)), paint);
-    paint.shader = null;
-
-    // Visor glow
-    paint
-      ..color = Color.fromARGB(
-          (o * 0.5 * (0.6 + corePulseT * 0.4)).toInt(), 200, 120, 255)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
-    canvas.drawRRect(
-        RRect.fromRectAndRadius(visorRect, const Radius.circular(3)), paint);
-    paint.maskFilter = null;
-
-    // ── Shoulder plates ───────────────────────────────────────────────────────
-    for (final side in [-1, 1]) {
-      final sx = side * 22.0;
-      final shoulderRect = Rect.fromCenter(
-          center: Offset(sx, -18), width: 10, height: 22);
-      paint
-        ..color = Color.fromARGB(o, 25, 10, 55)
-        ..style = PaintingStyle.fill;
-      canvas.drawRRect(
-          RRect.fromRectAndRadius(shoulderRect, const Radius.circular(4)), paint);
-      // Shoulder edge glow
-      paint
-        ..color = Color.fromARGB((o * 0.4).toInt(), 155, 48, 255)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0;
-      canvas.drawRRect(
-          RRect.fromRectAndRadius(shoulderRect, const Radius.circular(4)), paint);
-      paint.style = PaintingStyle.fill;
-    }
-
-    // ── Stun sparks ───────────────────────────────────────────────────────────
-    if (isStunned) {
-      final r = Random(DateTime.now().millisecondsSinceEpoch ~/ 100);
-      paint
-        ..color = Color.fromARGB(o, 100, 220, 255)
-        ..strokeWidth = 1.5
-        ..style = PaintingStyle.stroke;
-      for (int i = 0; i < 6; i++) {
-        final angle = r.nextDouble() * 2 * pi;
-        final dist  = 20 + r.nextDouble() * 30;
-        final len   = 6 + r.nextDouble() * 10;
-        final sx    = cos(angle) * dist;
-        final sy    = sin(angle) * dist;
-        canvas.drawLine(
-          Offset(sx, sy),
-          Offset(sx + cos(angle + pi * 0.3) * len,
-                 sy + sin(angle + pi * 0.3) * len),
-          paint,
-        );
-      }
-      paint.style = PaintingStyle.fill;
-    }
-
-    canvas.restore();
-  }
-
-  // ── Warning Glow ────────────────────────────────────────────────────────────
-
-  void _paintWarningGlow(Canvas canvas, Rect rect, double warnT,
-      {required bool isTimeLock}) {
-    final pulse  = 0.5 + warnT * 0.5;
-    final color  = isTimeLock ? const Color(0xFF00AAFF) : const Color(0xFFAA00FF);
-    final paint  = Paint()
-      ..color = color.withOpacity(pulse * 0.55)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
-    canvas.drawRect(rect.inflate(4), paint);
-
-    paint
-      ..color = color.withOpacity(pulse * 0.9)
-      ..maskFilter = null
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5;
-    canvas.drawRect(rect.inflate(2), paint);
-    paint.style = PaintingStyle.fill;
-  }
-
-  // ── Time-Lock overlay on a locked cell ──────────────────────────────────────
-
-  void _paintTimeLockOverlay(Canvas canvas, Rect rect, double laserT) {
-    // Cyan freeze tint
-    final paint = Paint()
-      ..color = Color.fromARGB((50 + laserT * 40).toInt(), 0, 200, 255)
-      ..style = PaintingStyle.fill;
-    canvas.drawRect(rect, paint);
-
-    // Ice crystal grid lines
-    paint
-      ..color = const Color(0x8800EEFF)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0;
-    const lines = 3;
-    for (int i = 1; i < lines; i++) {
-      final x = rect.left + (rect.width / lines) * i;
-      final y = rect.top  + (rect.height / lines) * i;
-      canvas.drawLine(Offset(x, rect.top), Offset(x, rect.bottom), paint);
-      canvas.drawLine(Offset(rect.left, y), Offset(rect.right, y), paint);
-    }
-    // Diagonals
-    canvas.drawLine(rect.topLeft, rect.bottomRight, paint);
-    canvas.drawLine(rect.topRight, rect.bottomLeft, paint);
-    paint.style = PaintingStyle.fill;
-  }
-
-  // ── Siphon Glow on a targeted cell ──────────────────────────────────────────
-
-  void _paintSiphonGlow(Canvas canvas, Rect rect, double siphonT) {
-    final pull   = (siphonT * 2 * pi);
-    final scale  = 1.0 + sin(pull) * 0.08;
-    final center = rect.center;
-
-    canvas.save();
-    canvas.translate(center.dx, center.dy);
-    canvas.scale(scale, scale);
-
-    final paint = Paint()
-      ..color = const Color(0x88AA00FF)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14);
-    canvas.drawCircle(Offset.zero, rect.width * 0.6, paint);
-    paint
-      ..color = const Color(0xAACC44FF)
-      ..maskFilter = null
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
-    canvas.drawCircle(Offset.zero, rect.width * 0.42, paint);
-    paint.style = PaintingStyle.fill;
-
-    canvas.restore();
-  }
-
-  // ── Siphon Tendril ───────────────────────────────────────────────────────────
-
-  void _paintSiphonTendril(
-      Canvas canvas, Offset from, Offset to, double siphonT) {
+  void _paintAttackVortex(Canvas canvas, Offset center, double vortexT, bool isPull) {
     final paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
-    // Animated dash along the path
-    final dir    = to - from;
-    final length = dir.distance;
-    final norm   = dir / length;
-    final perp   = Offset(-norm.dy, norm.dx);
+    // Outer vortex halo
+    final halopaint = Paint()
+      ..color = isPull
+          ? const Color(0x66FF2222)
+          : const Color(0x66AA00FF)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 28);
+    canvas.drawCircle(center, 80, halopaint);
 
-    // Draw 3 tendril strands
-    for (int s = 0; s < 3; s++) {
-      final phase = siphonT + s * 0.33;
-      final waveAmp = 6.0 - s * 1.5;
+    // Spiral arms (4 arms, rotating)
+    for (int arm = 0; arm < 4; arm++) {
       final path = Path();
-      path.moveTo(from.dx, from.dy);
-      const steps = 20;
-      for (int i = 0; i <= steps; i++) {
-        final t = i / steps;
-        final wave = sin((t * 4 + phase) * 2 * pi) * waveAmp * (1 - t * 0.6);
-        final p = from + dir * t + perp * wave;
-        if (i == 0) path.moveTo(p.dx, p.dy); else path.lineTo(p.dx, p.dy);
+      final armOffset = arm * pi / 2;
+      bool first = true;
+      for (int i = 0; i <= 60; i++) {
+        final t = i / 60.0;
+        final angle = armOffset + vortexT * 2 * pi + t * 3 * pi;
+        final r = 10 + t * 75;
+        final x = center.dx + cos(angle) * r;
+        final y = center.dy + sin(angle) * r;
+        if (first) { path.moveTo(x, y); first = false; } else { path.lineTo(x, y); }
       }
-      final alpha = (0.5 + (1 - s * 0.15) * 0.5);
+      final alpha = isPull ? 0.85 : 0.6;
       paint
-        ..color = Color.fromARGB(
-            (alpha * 200).toInt(), 180 + s * 20, 48, 255)
-        ..strokeWidth = 2.5 - s * 0.5
-        ..maskFilter = s == 0
-            ? const MaskFilter.blur(BlurStyle.normal, 4)
+        ..color = isPull
+            ? Color.fromARGB((alpha * 220).toInt(), 255, 40, 40)
+            : Color.fromARGB((alpha * 180).toInt(), 170, 0, 255)
+        ..strokeWidth = isPull ? 2.0 : 1.5
+        ..maskFilter = arm == 0
+            ? const MaskFilter.blur(BlurStyle.normal, 3)
             : null;
       canvas.drawPath(path, paint);
     }
 
-    // Particles flowing toward target
-    for (int p = 0; p < 5; p++) {
-      final t = (siphonT + p * 0.2) % 1.0;
-      final pt = from + dir * t;
-      final wave = sin((t * 4 + siphonT) * 2 * pi) * 5;
-      final pp = pt + perp * wave;
-      final paintP = Paint()
-        ..color = Color.fromARGB((255 * (1 - t) * 0.8).toInt(), 220, 120, 255)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
-      canvas.drawCircle(pp, 2.5, paintP);
+    // Center burst circle
+    paint
+      ..color = isPull
+          ? const Color(0xAAFF3333)
+          : const Color(0xAACC44FF)
+      ..style = PaintingStyle.fill
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+    canvas.drawCircle(center, 14 + sin(vortexT * 2 * pi) * 4, paint);
+    paint.maskFilter = null;
+  }
+
+  // ── Zone Tile (warning + pull) ──────────────────────────────────────────────
+
+  void _paintZoneTile(Canvas canvas, Rect rect, double warnT,
+      bool isPull, double shakeT) {
+    // Item shake (random offset based on tile position hash)
+    final shakeAmt = isPull ? 3.5 : 1.5;
+    final rng = Random(rect.center.dx.toInt() ^ rect.center.dy.toInt() ^
+        (shakeT * 1000).toInt());
+    final dx = (rng.nextDouble() - 0.5) * shakeAmt;
+    final dy = (rng.nextDouble() - 0.5) * shakeAmt;
+    final shiftedRect = rect.translate(dx, dy);
+
+    final pulse = 0.5 + warnT * 0.5;
+    final color  = isPull ? const Color(0xFFFF2222) : const Color(0xFFAA00FF);
+    final paint  = Paint()
+      ..color = color.withOpacity(pulse * 0.5)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14);
+    canvas.drawRect(shiftedRect.inflate(5), paint);
+
+    paint
+      ..color = color.withOpacity(pulse * 0.85)
+      ..maskFilter = null
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+    canvas.drawRect(shiftedRect.inflate(2), paint);
+    paint.style = PaintingStyle.fill;
+
+    // Corner brackets
+    const bl = 8.0;
+    paint
+      ..color = color.withOpacity(0.9)
+      ..strokeWidth = 1.8
+      ..style = PaintingStyle.stroke;
+    final r = shiftedRect;
+    for (final corner in [r.topLeft, r.topRight, r.bottomLeft, r.bottomRight]) {
+      final signX = (corner.dx == r.left) ? 1.0 : -1.0;
+      final signY = (corner.dy == r.top)  ? 1.0 : -1.0;
+      canvas.drawLine(corner, Offset(corner.dx + signX * bl, corner.dy), paint);
+      canvas.drawLine(corner, Offset(corner.dx, corner.dy + signY * bl), paint);
+    }
+    paint.style = PaintingStyle.fill;
+  }
+
+  // ── Boss — Solid body ───────────────────────────────────────────────────────
+
+  void _paintBoss(Canvas canvas, Offset center, double corePulseT, {
+    required double opacity,
+    required bool isStunned,
+    required _ArmPose armPose,
+    required Offset holeDir,
+  }) {
+    if (opacity <= 0.01) return;
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    final o = (opacity * 255).toInt().clamp(0, 255);
+    final paint = Paint();
+
+    // Atmospheric glow
+    paint
+      ..color = isStunned
+          ? Color.fromARGB((o * 0.22).toInt(), 100, 200, 255)
+          : Color.fromARGB((o * 0.18).toInt(), 155, 48, 255)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 32);
+    canvas.drawCircle(Offset.zero, 60, paint);
+    paint.maskFilter = null;
+
+    // Energy cloak
+    final cloakColor = isStunned ? const Color(0xFF3388FF) : const Color(0xFF7B20EE);
+    final cloakPath  = Path();
+    const cw = 50.0; const ch = 72.0;
+    cloakPath.moveTo(0, -ch * 0.28);
+    cloakPath.cubicTo(-cw, -ch * 0.08, -cw - 5, ch * 0.58, -16, ch + 4);
+    cloakPath.lineTo(16, ch + 4);
+    cloakPath.cubicTo(cw + 5, ch * 0.58, cw, -ch * 0.08, 0, -ch * 0.28);
+    cloakPath.close();
+
+    paint
+      ..color = Color.fromARGB(o, cloakColor.red, cloakColor.green, cloakColor.blue)
+      ..style = PaintingStyle.fill;
+    canvas.drawPath(cloakPath, paint);
+
+    // Inner cloak gradient
+    paint.shader = ui.Gradient.linear(const Offset(0, -50), const Offset(0, 60), [
+      Color.fromARGB((o * 0.65).toInt(), 25, 0, 70),
+      Color.fromARGB(0, 25, 0, 70),
+    ]);
+    canvas.drawPath(cloakPath, paint);
+    paint.shader = null;
+
+    // Torso
+    final torsoRR = RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset.zero, width: 36, height: 48),
+        const Radius.circular(8));
+    paint
+      ..color = Color.fromARGB(o, 18, 10, 36)
+      ..style = PaintingStyle.fill;
+    canvas.drawRRect(torsoRR, paint);
+
+    // Panel lines
+    paint
+      ..color = Color.fromARGB((o * 0.45).toInt(), 155, 48, 255)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.9;
+    canvas.drawLine(const Offset(-7, -16), const Offset(-7, 16), paint);
+    canvas.drawLine(const Offset(7, -16), const Offset(7, 16), paint);
+    canvas.drawLine(const Offset(-15, 0), const Offset(15, 0), paint);
+    paint.style = PaintingStyle.fill;
+
+    // Energy core
+    final cGlow = 0.4 + corePulseT * 0.6;
+    final cColor = isStunned
+        ? Color.fromARGB(o, 80, 200, 255)
+        : Color.fromARGB(o, 170 + (corePulseT * 85).toInt(), 44, 255);
+
+    paint
+      ..color = cColor.withOpacity(cGlow * 0.3)
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 14 + corePulseT * 8);
+    canvas.drawCircle(Offset.zero, 16, paint);
+    paint.maskFilter = null;
+
+    paint.color = Color.fromARGB(o, 25, 0, 65);
+    canvas.drawCircle(Offset.zero, 9, paint);
+    paint.color = cColor;
+    canvas.drawCircle(Offset.zero, 4.5 + corePulseT * 2, paint);
+
+    // Core cross
+    paint
+      ..color = Color.fromARGB((o * cGlow).toInt(), 255, 220, 255)
+      ..strokeWidth = 1.4
+      ..style = PaintingStyle.stroke;
+    final cs = 5.5 + corePulseT * 2.5;
+    canvas.drawLine(Offset(0, -cs), Offset(0, cs), paint);
+    canvas.drawLine(Offset(-cs, 0), Offset(cs, 0), paint);
+    paint.style = PaintingStyle.fill;
+
+    // Head
+    const headY = -33.0;
+    paint.color = Color.fromARGB(o, 18, 10, 36);
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(
+            Rect.fromCenter(center: const Offset(0, headY), width: 27, height: 23),
+            const Radius.circular(6)),
+        paint);
+
+    // Visor
+    paint.shader = ui.Gradient.linear(
+      const Offset(-10, -33), const Offset(10, -33),
+      [const Color(0xFF9B30FF), const Color(0xFFDD88FF), const Color(0xFF9B30FF)]);
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(
+            Rect.fromCenter(center: const Offset(0, headY), width: 21, height: 7),
+            const Radius.circular(3)),
+        paint);
+    paint.shader = null;
+
+    // Visor glow
+    paint
+      ..color = Color.fromARGB((o * 0.45 * (0.6 + corePulseT * 0.4)).toInt(), 200, 120, 255)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(
+            Rect.fromCenter(center: const Offset(0, headY), width: 21, height: 7),
+            const Radius.circular(3)),
+        paint);
+    paint.maskFilter = null;
+
+    // Shoulders
+    for (final side in [-1, 1]) {
+      paint.color = Color.fromARGB(o, 22, 8, 52);
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              Rect.fromCenter(center: Offset(side * 22.0, -17), width: 9, height: 21),
+              const Radius.circular(4)),
+          paint);
+    }
+
+    // Arms based on pose
+    _paintArms(canvas, paint, armPose, o, corePulseT, isStunned);
+
+    // Stun sparks
+    if (isStunned) {
+      final r = Random(DateTime.now().millisecondsSinceEpoch ~/ 100);
+      paint
+        ..color = Color.fromARGB(o, 80, 210, 255)
+        ..strokeWidth = 1.5
+        ..style = PaintingStyle.stroke;
+      for (int i = 0; i < 7; i++) {
+        final angle = r.nextDouble() * 2 * pi;
+        final dist  = 18 + r.nextDouble() * 32;
+        final len   = 5 + r.nextDouble() * 12;
+        final sx = cos(angle) * dist;
+        final sy = sin(angle) * dist;
+        canvas.drawLine(Offset(sx, sy),
+            Offset(sx + cos(angle + pi * 0.35) * len, sy + sin(angle + pi * 0.35) * len),
+            paint);
+      }
+      paint.style = PaintingStyle.fill;
+    }
+
+    canvas.restore();
+  }
+
+  void _paintArms(Canvas canvas, Paint paint, _ArmPose pose, int o,
+      double corePulseT, bool isStunned) {
+    final armColor = isStunned ? Color.fromARGB(o, 22, 8, 52) : Color.fromARGB(o, 22, 8, 52);
+    paint
+      ..color = armColor
+      ..style = PaintingStyle.fill;
+
+    switch (pose) {
+      case _ArmPose.idle:
+        // Arms hang at sides
+        for (final s in [-1, 1]) {
+          canvas.drawRRect(
+              RRect.fromRectAndRadius(
+                  Rect.fromCenter(center: Offset(s * 26.0, 8), width: 8, height: 24),
+                  const Radius.circular(3)),
+              paint);
+        }
+
+      case _ArmPose.attackBoth:
+        // Both arms raised forward, pointing toward black hole below
+        for (final s in [-1, 1]) {
+          canvas.save();
+          canvas.translate(s * 22.0, -8);
+          canvas.rotate(s * -0.5); // angled outward-up
+          canvas.drawRRect(
+              RRect.fromRectAndRadius(
+                  Rect.fromCenter(center: const Offset(0, 14), width: 7, height: 26),
+                  const Radius.circular(3)),
+              paint);
+          // Energy at hand tip
+          paint
+            ..color = Color.fromARGB((o * 0.8 * (0.5 + corePulseT * 0.5)).toInt(), 200, 80, 255)
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+          canvas.drawCircle(const Offset(0, 27), 5, paint);
+          paint.maskFilter = null;
+          paint.color = armColor;
+          canvas.restore();
+        }
+
+      case _ArmPose.teleportArm:
+        // One arm extends forward dramatically
+        for (final s in [-1, 1]) {
+          canvas.save();
+          canvas.translate(s * 22.0, -4);
+          canvas.rotate(s == -1 ? 0.8 : -0.8); // one arm forward
+          canvas.drawRRect(
+              RRect.fromRectAndRadius(
+                  Rect.fromCenter(center: const Offset(0, 16), width: 7, height: 30),
+                  const Radius.circular(3)),
+              paint);
+          canvas.restore();
+        }
     }
   }
 
-  // ── Time-Lock Laser ──────────────────────────────────────────────────────────
+  // ── Boss — Wireframe dissolve ────────────────────────────────────────────────
 
-  void _paintTimeLockLaser(
-      Canvas canvas, Offset from, Offset to, double laserT) {
+  void _paintBossWireframe(Canvas canvas, Offset center, double corePulseT,
+      double dissolveT, bool isStunned) {
+    // dissolveT: 0=fully solid wireframe, 1=fully dissolved (invisible)
+    if (dissolveT >= 0.98) return;
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+
+    final opacity = (1.0 - dissolveT).clamp(0.0, 1.0);
+    final color = isStunned ? const Color(0xFF00AAFF) : const Color(0xFF9B30FF);
     final paint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
+      ..strokeWidth = 1.2
+      ..color = color.withOpacity(opacity);
 
-    // Outer glow
-    paint
-      ..color = Color.fromARGB((80 + laserT * 60).toInt(), 0, 200, 255)
-      ..strokeWidth = 16
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
-    canvas.drawLine(from, to, paint);
+    // Scale toward hole (shrink as it dissolves)
+    final scale = 1.0 - dissolveT * 0.7;
+    canvas.scale(scale, scale);
 
-    // Mid beam
-    paint
-      ..color = Color.fromARGB((160 + laserT * 80).toInt(), 0, 220, 255)
-      ..strokeWidth = 5
-      ..maskFilter = null;
-    canvas.drawLine(from, to, paint);
+    // Draw wireframe body outline as connected dots
+    final rng = Random(42);
+    final bodyPoints = _generateBodyPoints();
+    for (int i = 0; i < bodyPoints.length - 1; i++) {
+      // Glitch: randomly skip some segments more as dissolveT increases
+      if (rng.nextDouble() < dissolveT * 0.7) continue;
+      paint.color = color.withOpacity(opacity * (0.6 + rng.nextDouble() * 0.4));
+      canvas.drawLine(bodyPoints[i], bodyPoints[i + 1], paint);
+    }
 
-    // White core
-    paint
-      ..color = Color.fromARGB((200 + laserT * 55).toInt(), 200, 255, 255)
-      ..strokeWidth = 2;
-    canvas.drawLine(from, to, paint);
+    // Pixel scatter: dots flying outward as boss dissolves
+    final dotPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
+    for (int d = 0; d < 20; d++) {
+      final angle = rng.nextDouble() * 2 * pi;
+      final dist  = dissolveT * (20 + rng.nextDouble() * 50);
+      final dx    = cos(angle) * dist + (rng.nextDouble() - 0.5) * dissolveT * 20;
+      final dy    = sin(angle) * dist + (rng.nextDouble() - 0.5) * dissolveT * 20;
+      final sz    = 1.5 + rng.nextDouble() * 3;
+      dotPaint.color = color.withOpacity(opacity * (1.0 - dissolveT * 0.7));
+      canvas.drawCircle(Offset(dx, dy), sz, dotPaint);
+    }
 
-    // Impact circle at target
-    final impPaint = Paint()
-      ..color = Color.fromARGB((120 + laserT * 120).toInt(), 0, 255, 255)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 16);
-    canvas.drawCircle(to, 20 + laserT * 8, impPaint);
+    canvas.restore();
   }
 
-  // ── Win Explosion ────────────────────────────────────────────────────────────
+  List<Offset> _generateBodyPoints() => [
+    const Offset(0, -50),  // head top
+    const Offset(-13, -40), const Offset(13, -40), // head sides
+    const Offset(-13, -27), const Offset(13, -27), // head bottom
+    const Offset(-25, -22), const Offset(25, -22), // shoulders
+    const Offset(-25, -5),  const Offset(25, -5),  // upper arm
+    const Offset(-18, 24),  const Offset(18, 24),  // waist
+    const Offset(-8, 60),   const Offset(8, 60),   // cloak bottom
+    const Offset(0, -50),   // back to top
+    const Offset(0, 0),     // core
+    const Offset(-18, 0),   const Offset(18, 0),   // core sides
+    const Offset(0, -22),   const Offset(0, 22),   // core vertical
+  ];
+
+  // ── Win Blast ────────────────────────────────────────────────────────────────
 
   void _paintWinBlast(Canvas canvas, Size size, double t) {
     final center = Offset(size.width / 2, size.height / 2);
     final paint  = Paint()
-      ..color = Color.fromARGB(
-          (sin(t * pi) * 180).toInt().clamp(0, 255), 180, 80, 255)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 40);
-    canvas.drawCircle(center, size.width * t * 0.8, paint);
+      ..color = Color.fromARGB((sin(t * pi) * 180).toInt().clamp(0, 255), 180, 80, 255)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 45);
+    canvas.drawCircle(center, size.width * t * 0.85, paint);
 
-    // Ring
     paint
-      ..color = Color.fromARGB(
-          (sin(t * pi) * 220).toInt().clamp(0, 255), 255, 200, 255)
+      ..color = Color.fromARGB((sin(t * pi) * 220).toInt().clamp(0, 255), 255, 200, 255)
       ..maskFilter = null
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 6;
-    canvas.drawCircle(center, size.width * t * 0.7, paint);
+      ..strokeWidth = 7;
+    canvas.drawCircle(center, size.width * t * 0.72, paint);
   }
 
   @override
   bool shouldRepaint(_WarpScenePainter old) => true;
 }
+
+enum _ArmPose { idle, attackBoth, teleportArm }
 
 // ─── HUD Widgets ─────────────────────────────────────────────────────────────
 
@@ -781,16 +813,10 @@ class _DialogueBubble extends StatelessWidget {
           borderRadius: BorderRadius.circular(10),
           boxShadow: const [BoxShadow(color: Color(0x669B30FF), blurRadius: 16)],
         ),
-        child: Text(
-          text,
-          style: const TextStyle(
-            color: Color(0xFFDD99FF),
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.5,
-          ),
-          textAlign: TextAlign.center,
-        ),
+        child: Text(text,
+            style: const TextStyle(color: Color(0xFFDD99FF), fontSize: 12,
+                fontWeight: FontWeight.w700, letterSpacing: 0.4),
+            textAlign: TextAlign.center),
       );
 }
 
@@ -807,13 +833,35 @@ class _StunBar extends StatelessWidget {
           borderRadius: BorderRadius.circular(8),
           boxShadow: const [BoxShadow(color: Color(0x4400BBFF), blurRadius: 14)],
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Text('⚡ STUNNED ', style: TextStyle(color: Color(0xFF00DDFF), fontWeight: FontWeight.w800, fontSize: 11)),
-            Text('${secsLeft}s', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13)),
-          ],
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          const Text('⚡ STUNNED ', style: TextStyle(color: Color(0xFF00DDFF),
+              fontWeight: FontWeight.w800, fontSize: 11)),
+          Text('${secsLeft}s', style: const TextStyle(color: Colors.white,
+              fontWeight: FontWeight.w900, fontSize: 13)),
+        ]),
+      );
+}
+
+class _CountdownRing extends StatelessWidget {
+  final int secsLeft;
+  final Color color;
+  final String label;
+  const _CountdownRing({required this.secsLeft, required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 54, height: 54,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: const Color(0xDD0A0018),
+          border: Border.all(color: color, width: 2.5),
+          boxShadow: [BoxShadow(color: color.withOpacity(0.5), blurRadius: 12)],
         ),
+        child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('$secsLeft', style: TextStyle(color: color, fontSize: 20,
+              fontWeight: FontWeight.w900)),
+          Text(label, style: const TextStyle(color: Color(0xFFAA88CC), fontSize: 8)),
+        ])),
       );
 }
 
@@ -829,39 +877,9 @@ class _HintStrip extends StatelessWidget {
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: const Color(0xFF6622AA), width: 1),
         ),
-        child: Text(
-          hint,
-          style: const TextStyle(color: Color(0xFFBB88EE), fontSize: 10, fontWeight: FontWeight.w600),
-          textAlign: TextAlign.center,
-        ),
-      );
-}
-
-class _SiphonCountdown extends StatelessWidget {
-  final int secsLeft;
-  const _SiphonCountdown({required this.secsLeft});
-
-  @override
-  Widget build(BuildContext context) => Container(
-        width: 52,
-        height: 52,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: const Color(0xDD1A003A),
-          border: Border.all(color: const Color(0xFFAA00FF), width: 2.5),
-          boxShadow: const [BoxShadow(color: Color(0x88AA00FF), blurRadius: 12)],
-        ),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('$secsLeft', style: const TextStyle(
-                  color: Color(0xFFFF66FF),
-                  fontSize: 20,
-                  fontWeight: FontWeight.w900)),
-              const Text('s', style: TextStyle(color: Color(0xFFAA88CC), fontSize: 9)),
-            ],
-          ),
-        ),
+        child: Text(hint,
+            style: const TextStyle(color: Color(0xFFBB88EE), fontSize: 10,
+                fontWeight: FontWeight.w600),
+            textAlign: TextAlign.center),
       );
 }
