@@ -22,6 +22,7 @@ import '../controllers/octopus_alien_controller.dart';
 import '../controllers/snake_alien_controller.dart';
 import '../controllers/antigravity_controller.dart';
 import '../controllers/nexus_core_controller.dart';
+import '../controllers/warp_sentinel_controller.dart';
 
 // ─── Persistence Keys ─────────────────────────────────────────────────────────
 
@@ -242,6 +243,7 @@ class GameNotifier extends StateNotifier<GameState> {
   final snakeAlienController    = SnakeAlienController();
   final antiGravityController   = AntiGravityController();
   final nexusCoreController     = NexusCoreController();
+  final warpSentinelController  = WarpSentinelController();
   Timer? _creatureThrowCdTimer;
 
   /// True if the player voluntarily watched the Rewarded Ad (3× coins) on the
@@ -794,6 +796,43 @@ class GameNotifier extends StateNotifier<GameState> {
       nexusCoreController.reset();
     }
 
+    // ── WARP SENTINEL trigger (L41) ───────────────────────────────────────────
+    if (cfg.number == kWarpSentinelLevel) {
+      warpSentinelController.triggerForLevel(
+        cfg.number,
+        gridCols: cfg.gridCols,
+        gridRows: cfg.gridRows,
+        onLocked:   _onCellBlocked,
+        onUnlocked: _onCellUnblocked,
+        onSiphoned: (col, row) {
+          // Item sucked into the black hole — remove it silently
+          final cfg2 = state.currentLevel;
+          if (col < 0 || col >= cfg2.gridCols || row < 0 || row >= cfg2.gridRows) return;
+          final newGrid = _cloneGrid();
+          newGrid[col][row] = newGrid[col][row].clearItem();
+          state = state.copyWith(
+            grid: newGrid,
+            pendingAnimations: [
+              ...state.pendingAnimations,
+              PendingAnimation(col, row, AnimType.hazardHit),
+            ],
+          );
+          AudioManager.instance.playErrorBuzz();
+          HapticFeedback.heavyImpact();
+        },
+        onPenalty: (e) {
+          final newE = (state.energy - e).clamp(0, state.maxEnergy);
+          state = state.copyWith(energy: newE);
+          AudioManager.instance.playErrorBuzz();
+          HapticFeedback.heavyImpact();
+        },
+        isOccupied: (c, r) => state.grid[c][r].itemId != null && !state.grid[c][r].isBlocked,
+        isBlocked:  (c, r) => state.grid[c][r].isBlocked,
+      );
+    } else {
+      warpSentinelController.reset();
+    }
+
     // ── Anti-Gravity trigger (L37) ────────────────────────────────────────────
     if (cfg.number == 37) {
       antiGravityController.triggerForLevel(
@@ -929,6 +968,8 @@ class GameNotifier extends StateNotifier<GameState> {
     _cancelCreatureThrowAt(fc, fr);
     // NEXUS CORE: hacked state + targeting follow the moved item
     nexusCoreController.onCellMoved(fc, fr, tc, tr);
+    // WARP SENTINEL: siphon state follows the moved item
+    warpSentinelController.onCellMoved(fc, fr, tc, tr);
   }
 
   void _swapCells(int fc, int fr, int tc, int tr) {
@@ -943,6 +984,8 @@ class GameNotifier extends StateNotifier<GameState> {
     _cancelCreatureThrowAt(tc, tr);
     // NEXUS CORE: swap hacked states with items
     nexusCoreController.onCellsSwapped(fc, fr, tc, tr);
+    // WARP SENTINEL: swap siphon states with items
+    warpSentinelController.onCellsSwapped(fc, fr, tc, tr);
   }
 
   void _mergeItems(int fc, int fr, int tc, int tr) {
@@ -970,6 +1013,11 @@ class GameNotifier extends StateNotifier<GameState> {
       }
       // Normal merge on un-hacked cells → notify controller (may cancel targeting)
       nexusCoreController.onItemMerged(fc, fr, tc, tr);
+    }
+
+    // ── WARP SENTINEL: siphon escape on merge (L41) ───────────────────────────
+    if (warpSentinelController.phase != WarpSentinelPhase.idle) {
+      warpSentinelController.onItemMerged(fc, fr, tc, tr);
     }
 
     final id   = state.grid[fc][fr].itemId!;
@@ -1217,6 +1265,11 @@ class GameNotifier extends StateNotifier<GameState> {
       nexusCoreController.onSatelliteDelivered();
     }
 
+    // ── WARP SENTINEL: Warp Engine delivery → stun (L41) ─────────────────────
+    if (warpSentinelController.phase != WarpSentinelPhase.idle && itemId == 42) {
+      warpSentinelController.onWarpEngineDelivered();
+    }
+
     if (state.isLevelComplete) {
       _onLevelComplete();
     }
@@ -1317,6 +1370,7 @@ class GameNotifier extends StateNotifier<GameState> {
     snakeAlienController.onLevelComplete();    // ← Snake alien (L38)
     antiGravityController.onLevelComplete();   // ← Anti-Gravity boss (L37)
     nexusCoreController.onLevelComplete();     // ← NEXUS CORE (L40)
+    warpSentinelController.onLevelComplete();  // ← WARP SENTINEL (L41)
     _timer?.cancel();
     AudioManager.instance.pauseBgm();
     AudioManager.instance.playVictory();
@@ -1647,6 +1701,7 @@ class GameNotifier extends StateNotifier<GameState> {
     snakeAlienController.dispose();
     antiGravityController.dispose();
     nexusCoreController.dispose();
+    warpSentinelController.dispose();
     super.dispose();
   }
 }
