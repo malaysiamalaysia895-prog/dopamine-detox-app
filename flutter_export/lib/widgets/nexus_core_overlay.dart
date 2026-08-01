@@ -1,7 +1,7 @@
-// nexus_core_overlay.dart — NEXUS CORE Boss UI (Level 40: The Orbital Station)
-// Dark-metal mechanical squid with glowing red eye, 8 thin tentacles floating
-// in the background. Boss sits ABOVE the grid, never blocking playable cells.
-// Entry → Active (hacking laser / crosshair / hacked sparks) → Stunned → WinBlast.
+// nexus_core_overlay.dart — NEXUS CORE Boss UI (Level 40)
+// Complete rewrite: proper dark-metal mechanical squid body, animated waving
+// tentacles, organic professional eye blink, red laser beam from eye to
+// targeted cell, hacked-cell sparks that follow item moves.
 
 import 'dart:math';
 import 'dart:math' as math;
@@ -9,25 +9,28 @@ import 'package:flutter/material.dart';
 import '../controllers/nexus_core_controller.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
-const _kMetal     = Color(0xFF1C2233);
-const _kMetalMid  = Color(0xFF2D3A52);
-const _kEyeRed    = Color(0xFFFF1C1C);
-const _kEyeGlow   = Color(0xFFFF6060);
-const _kGold      = Color(0xFFFFD700);
-const _kEMP       = Color(0xFF44AAFF);
-const _kHackSpark = Color(0xFFFF3A3A);
-const _kCrossRed  = Color(0xFFFF2020);
+const _kBodyDark   = Color(0xFF0D1520);
+const _kBodyMid    = Color(0xFF1A2540);
+const _kBodyEdge   = Color(0xFF2E4060);
+const _kPanelLine  = Color(0xFF3A5070);
+const _kEyeRed     = Color(0xFFFF1800);
+const _kEyeOrange  = Color(0xFFFF7000);
+const _kTentBase   = Color(0xFF1E3050);
+const _kTentTip    = Color(0xFF0A1525);
+const _kGold       = Color(0xFFFFD700);
+const _kEMP        = Color(0xFF44AAFF);
+const _kHack       = Color(0xFFFF2020);
 
-/// Boss resting Y position inside the overlay Stack (fraction of screen height).
-/// Placed between quota panel and grid — roughly top 22% of screen.
-double _bossRestY(Size sz) => sz.height * 0.205;
+/// Y-offset of boss body center from top of screen (fraction of height).
+double _bossCY(Size sz) => sz.height * 0.225;
 
-// ── Public Widget ─────────────────────────────────────────────────────────────
+// ── Root widget ───────────────────────────────────────────────────────────────
 
 class NexusCoreOverlay extends StatelessWidget {
   final NexusCoreController controller;
   final Rect? Function(int col, int row) getCellRect;
   final bool isDialogActive;
+
   const NexusCoreOverlay({
     super.key,
     required this.controller,
@@ -42,756 +45,838 @@ class NexusCoreOverlay extends StatelessWidget {
       builder: (context, _) {
         final p = controller.phase;
         if (p == NexusCorePhase.idle) return const SizedBox.shrink();
-        if (isDialogActive) return const SizedBox.shrink();
-        return Stack(children: [
-          // Boss body (entry / active / stunned / winBlast)
-          if (p == NexusCorePhase.entry)   _EntryBoss(controller: controller),
-          if (p == NexusCorePhase.active)  _ActiveBoss(controller: controller),
-          if (p == NexusCorePhase.stunned) _StunnedBoss(controller: controller),
-          if (p == NexusCorePhase.winBlast) _WinBlast(controller: controller),
-
-          // Cell-level effects (active only)
-          if (p == NexusCorePhase.active) ...[
-            _CrosshairEffect(controller: controller, getCellRect: getCellRect),
-            _HackedCellEffects(controller: controller, getCellRect: getCellRect),
-          ],
-
-          // Hint ticker (active + stunned)
-          if (p == NexusCorePhase.active || p == NexusCorePhase.stunned)
-            _HintTicker(controller: controller),
-
-          // Dialogue bubble (active)
-          if (p == NexusCorePhase.active && controller.dialogueText != null)
-            _DialogueBubble(text: controller.dialogueText!),
-        ]);
+        if (isDialogActive)           return const SizedBox.shrink();
+        return _NexusScene(controller: controller, getCellRect: getCellRect);
       },
     );
   }
 }
 
-// ── Entry Animation ───────────────────────────────────────────────────────────
+// ── Main animated scene ───────────────────────────────────────────────────────
 
-class _EntryBoss extends StatefulWidget {
+class _NexusScene extends StatefulWidget {
   final NexusCoreController controller;
-  const _EntryBoss({required this.controller});
-  @override State<_EntryBoss> createState() => _EntryBossState();
+  final Rect? Function(int col, int row) getCellRect;
+  const _NexusScene({required this.controller, required this.getCellRect});
+  @override State<_NexusScene> createState() => _NexusSceneState();
 }
-class _EntryBossState extends State<_EntryBoss> with TickerProviderStateMixin {
-  late final AnimationController _drop;
-  late final AnimationController _glitch;
-  late final AnimationController _eyeFlash;
-  late final Animation<double> _dropAnim;
-  late final Animation<double> _glitchAnim;
-  late final Animation<double> _eyeAnim;
+
+class _NexusSceneState extends State<_NexusScene> with TickerProviderStateMixin {
+  // ── Animation controllers ──────────────────────────────────────────────────
+  late final AnimationController _bob;      // continuous bob 0→1 cycle
+  late final AnimationController _tentWave; // tentacle wave 0→1 cycle
+  late final AnimationController _eyePulse; // eye glow pulse 0→1 cycle
+  late final AnimationController _blinkCtrl;// eye blink sequence
+  late final AnimationController _laserPulse;// laser flicker
+  late final AnimationController _entryDrop; // entry drop-in (0→1 once)
+  late final AnimationController _empRing;   // EMP ring on stun
+  late final AnimationController _winLaser;  // win blast laser
+  late final AnimationController _winExplode;
+
+  double _bobVal    = 0;
+  double _tentVal   = 0;
+  double _eyeVal    = 0;
+  double _blinkVal  = 0; // 0=open, 1=fully closed
+  double _laserVal  = 0;
+  double _entryVal  = 0;
+  double _empVal    = 0;
+  double _winLVal   = 0;
+  double _winEVal   = 0;
+
+  // Blink scheduling
+  bool _blinkScheduled = false;
 
   @override
   void initState() {
     super.initState();
-    _drop = AnimationController(vsync: this, duration: const Duration(milliseconds: 2200));
-    _glitch = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000))
-      ..repeat(reverse: true);
-    _eyeFlash = AnimationController(vsync: this, duration: const Duration(milliseconds: 600))
-      ..repeat(reverse: true);
+    _bob       = AnimationController(vsync: this, duration: const Duration(milliseconds: 2600))..repeat(reverse: true);
+    _tentWave  = AnimationController(vsync: this, duration: const Duration(milliseconds: 2200))..repeat();
+    _eyePulse  = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..repeat(reverse: true);
+    _blinkCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 380));
+    _laserPulse= AnimationController(vsync: this, duration: const Duration(milliseconds: 220))..repeat(reverse: true);
+    _entryDrop = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
+    _empRing   = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000))..repeat();
+    _winLaser  = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+    _winExplode= AnimationController(vsync: this, duration: const Duration(milliseconds: 1400));
 
-    _dropAnim = CurvedAnimation(parent: _drop, curve: Curves.easeOutBack);
-    _glitchAnim = _glitch;
-    _eyeAnim = _eyeFlash;
-    _drop.forward();
+    _bob.addListener(()       { if (mounted) setState(() => _bobVal    = _bob.value); });
+    _tentWave.addListener(()  { if (mounted) setState(() => _tentVal   = _tentWave.value); });
+    _eyePulse.addListener(()  { if (mounted) setState(() => _eyeVal    = _eyePulse.value); });
+    _blinkCtrl.addListener(() { if (mounted) setState(() => _blinkVal  = _blinkAnim()); });
+    _laserPulse.addListener((){if (mounted) setState(() => _laserVal  = _laserPulse.value); });
+    _entryDrop.addListener(() { if (mounted) setState(() => _entryVal  = _entryDrop.value); });
+    _empRing.addListener(()   { if (mounted) setState(() => _empVal    = _empRing.value); });
+    _winLaser.addListener(()  { if (mounted) setState(() => _winLVal   = _winLaser.value); });
+    _winExplode.addListener((){if (mounted) setState(() => _winEVal   = _winExplode.value); });
+
+    // Start blink loop
+    _scheduleBlink();
+
+    // Win sequence
+    if (widget.controller.phase == NexusCorePhase.winBlast) {
+      _winLaser.forward().then((_) => _winExplode.forward());
+    } else if (widget.controller.phase == NexusCorePhase.entry) {
+      _entryDrop.forward();
+    } else {
+      _entryVal = 1.0;
+    }
+  }
+
+  @override
+  void didUpdateWidget(_NexusScene old) {
+    super.didUpdateWidget(old);
+    if (widget.controller.phase == NexusCorePhase.entry && _entryVal == 0) {
+      _entryDrop.forward();
+    }
+    if (widget.controller.phase == NexusCorePhase.winBlast && _winLVal == 0) {
+      _winLaser.forward().then((_) { if (mounted) _winExplode.forward(); });
+    }
+  }
+
+  void _scheduleBlink() {
+    if (!mounted || _blinkScheduled) return;
+    _blinkScheduled = true;
+    final delay = 2800 + Random().nextInt(2200);
+    Future.delayed(Duration(milliseconds: delay), () {
+      if (!mounted) return;
+      _blinkScheduled = false;
+      if (widget.controller.phase == NexusCorePhase.stunned) { _scheduleBlink(); return; }
+      _blinkCtrl.forward().then((_) {
+        if (!mounted) return;
+        _blinkCtrl.reverse().then((_) { if (mounted) _scheduleBlink(); });
+      });
+    });
+  }
+
+  // Blink: closes over 60% of anim then reopens — smooth, organic
+  double _blinkAnim() {
+    final t = _blinkCtrl.value;
+    if (t <= 0.6) return Curves.easeIn.transform(t / 0.6);
+    return Curves.easeOut.transform(1 - (t - 0.6) / 0.4);
   }
 
   @override
   void dispose() {
-    _drop.dispose(); _glitch.dispose(); _eyeFlash.dispose();
+    _bob.dispose(); _tentWave.dispose(); _eyePulse.dispose(); _blinkCtrl.dispose();
+    _laserPulse.dispose(); _entryDrop.dispose(); _empRing.dispose();
+    _winLaser.dispose(); _winExplode.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final sz = MediaQuery.of(context).size;
-    final restY = _bossRestY(sz);
-    return AnimatedBuilder(
-      animation: Listenable.merge([_drop, _glitch, _eyeFlash]),
-      builder: (_, __) {
-        final y = -140.0 + (_dropAnim.value * (restY + 140.0));
-        final glitchColor = Color.lerp(const Color(0xFF00FF44), _kEyeRed, _glitchAnim.value)!;
-        return Positioned(
-          top: y,
-          left: 0, right: 0,
-          child: Center(
-            child: _NexusBody(
-              eyeColor: Color.lerp(_kEyeGlow, _kEyeRed, _eyeAnim.value)!,
-              bodyColor: _kMetal,
-              tentacleOpacity: _dropAnim.value * 0.7,
-              glitchColor: glitchColor,
-              glitchOpacity: (1 - _dropAnim.value) * 0.6 + 0.2,
-              scale: 1.0,
+    final sz  = MediaQuery.of(context).size;
+    final p   = widget.controller.phase;
+    final cy  = _bossCY(sz);
+
+    // Compute entry Y offset
+    final entryY = p == NexusCorePhase.entry
+        ? -180.0 + Curves.easeOutBack.transform(_entryVal) * (cy + 180)
+        : cy;
+
+    // Stun: desaturate eye
+    final isStunned = p == NexusCorePhase.stunned;
+    final eyeColor  = isStunned ? const Color(0xFF444444)
+        : Color.lerp(_kEyeRed, _kEyeOrange, _eyeVal * 0.4)!;
+    final bodyBrightness = isStunned ? 0.5 : 1.0;
+
+    // Targeted cell rect for laser
+    final target    = widget.controller.targetedCell;
+    final targetRect= target != null ? widget.getCellRect(target.$1, target.$2) : null;
+
+    return Stack(children: [
+
+      // ── Laser beam from eye to targeted cell ─────────────────────────────
+      if (p == NexusCorePhase.active && targetRect != null)
+        Positioned.fill(
+          child: IgnorePointer(
+            child: CustomPaint(
+              painter: _LaserBeamPainter(
+                fromCenter: Offset(sz.width / 2, entryY),
+                toRect:     targetRect,
+                intensity:  0.6 + _laserVal * 0.4,
+                secsLeft:   widget.controller.targetSecondsLeft,
+              ),
             ),
           ),
-        );
-      },
-    );
+        ),
+
+      // ── Boss body ────────────────────────────────────────────────────────
+      Positioned(
+        top: entryY - 60,
+        left: 0, right: 0,
+        child: Center(
+          child: SizedBox(
+            width: 160, height: 120,
+            child: CustomPaint(
+              painter: _NexusBodyPainter(
+                bobOffset:        (_bobVal - 0.5) * 12,
+                tentPhase:        _tentVal,
+                eyeColor:         eyeColor,
+                blinkT:           isStunned ? 0 : _blinkVal,
+                bodyBrightness:   bodyBrightness,
+                isTargeting:      p == NexusCorePhase.active && targetRect != null,
+                eyePulse:         _eyeVal,
+                glitchIntensity:  p == NexusCorePhase.entry ? (1 - _entryVal) * 0.8 : 0,
+              ),
+            ),
+          ),
+        ),
+      ),
+
+      // ── Hacked cell sparks ───────────────────────────────────────────────
+      if (p == NexusCorePhase.active || p == NexusCorePhase.stunned)
+        _HackedCells(controller: widget.controller, getCellRect: widget.getCellRect),
+
+      // ── Crosshair on targeted cell ───────────────────────────────────────
+      if (p == NexusCorePhase.active && target != null && targetRect != null)
+        _CrosshairWidget(rect: targetRect, secsLeft: widget.controller.targetSecondsLeft, laserVal: _laserVal),
+
+      // ── Stunned overlay ──────────────────────────────────────────────────
+      if (isStunned)
+        Positioned(
+          top: entryY - 78,
+          left: 0, right: 0,
+          child: Center(
+            child: CustomPaint(
+              size: const Size(200, 160),
+              painter: _EmpRingPainter(_empVal),
+            ),
+          ),
+        ),
+      if (isStunned)
+        Positioned(
+          top: entryY - 90,
+          left: 0, right: 0,
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: _kEMP.withOpacity(0.88),
+                borderRadius: BorderRadius.circular(6),
+                boxShadow: [BoxShadow(color: _kEMP.withOpacity(0.55), blurRadius: 10)],
+              ),
+              child: Text(
+                'STUNNED  ${widget.controller.stunSecondsLeft}s',
+                style: const TextStyle(color: Colors.white, fontSize: 12,
+                    fontWeight: FontWeight.w900, letterSpacing: 1.4),
+              ),
+            ),
+          ),
+        ),
+
+      // ── Win blast ────────────────────────────────────────────────────────
+      if (p == NexusCorePhase.winBlast)
+        Positioned.fill(
+          child: IgnorePointer(
+            child: CustomPaint(
+              painter: _WinBlastPainter(
+                bossCY:  cy,
+                bossX:   sz.width / 2,
+                quotaY:  sz.height * 0.72,
+                laserT:  _winLVal,
+                explodeT:_winEVal,
+              ),
+            ),
+          ),
+        ),
+      if (p == NexusCorePhase.winBlast && _winEVal > 0.55)
+        Positioned(
+          top: sz.height * 0.38,
+          left: 16, right: 16,
+          child: Opacity(
+            opacity: ((_winEVal - 0.55) / 0.45).clamp(0, 1),
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.88),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: _kGold, width: 2.5),
+                  boxShadow: [BoxShadow(color: _kGold.withOpacity(0.45), blurRadius: 28)],
+                ),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  ShaderMask(
+                    shaderCallback: (b) => const LinearGradient(
+                      colors: [Color(0xFFFFD700), Color(0xFFFF8C00), Color(0xFFFFD700)],
+                    ).createShader(b),
+                    child: const Text('LEVEL 40 CLEARED',
+                      style: TextStyle(color: Colors.white, fontSize: 22,
+                          fontWeight: FontWeight.w900, letterSpacing: 2.5)),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text('NEXUS CORE DESTROYED',
+                    style: TextStyle(color: Colors.white70, fontSize: 14,
+                        fontWeight: FontWeight.w700, letterSpacing: 1.8)),
+                  const SizedBox(height: 10),
+                  const Text('🛸💥🤖', style: TextStyle(fontSize: 30)),
+                ]),
+              ),
+            ),
+          ),
+        ),
+
+      // ── Hint ticker ──────────────────────────────────────────────────────
+      if (p == NexusCorePhase.active || isStunned)
+        _HintBar(controller: widget.controller),
+
+      // ── Dialogue bubble ──────────────────────────────────────────────────
+      if (p == NexusCorePhase.active && widget.controller.dialogueText != null)
+        _DialogueBubble(text: widget.controller.dialogueText!, bossCY: cy, screenW: sz.width),
+    ]);
   }
 }
 
-// ── Active Boss (floating bob) ────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// NEXUS CORE Body Painter — full mechanical squid drawn every frame
+// ─────────────────────────────────────────────────────────────────────────────
 
-class _ActiveBoss extends StatefulWidget {
-  final NexusCoreController controller;
-  const _ActiveBoss({required this.controller});
-  @override State<_ActiveBoss> createState() => _ActiveBossState();
-}
-class _ActiveBossState extends State<_ActiveBoss> with TickerProviderStateMixin {
-  late final AnimationController _bob;
-  late final AnimationController _eyePulse;
-  late final Animation<double> _bobAnim;
-  late final Animation<double> _eyeAnim;
+class _NexusBodyPainter extends CustomPainter {
+  final double bobOffset;
+  final double tentPhase;       // 0..1 continuous wave
+  final Color  eyeColor;
+  final double blinkT;          // 0=open, 1=closed
+  final double bodyBrightness;  // 1.0 = normal, 0.5 = stunned grey
+  final bool   isTargeting;
+  final double eyePulse;
+  final double glitchIntensity;
+
+  const _NexusBodyPainter({
+    required this.bobOffset,
+    required this.tentPhase,
+    required this.eyeColor,
+    required this.blinkT,
+    required this.bodyBrightness,
+    required this.isTargeting,
+    required this.eyePulse,
+    required this.glitchIntensity,
+  });
 
   @override
-  void initState() {
-    super.initState();
-    _bob = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400))
-      ..repeat(reverse: true);
-    _eyePulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))
-      ..repeat(reverse: true);
-    _bobAnim  = CurvedAnimation(parent: _bob, curve: Curves.easeInOut);
-    _eyeAnim  = CurvedAnimation(parent: _eyePulse, curve: Curves.easeInOut);
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width  / 2;
+    final cy = size.height / 2 + bobOffset;
+
+    _drawTentacles(canvas, size, cx, cy);
+    _drawBody(canvas, cx, cy);
+    _drawEye(canvas, cx, cy);
+    if (glitchIntensity > 0) _drawGlitch(canvas, size, cx, cy);
+  }
+
+  // ── Tentacles ─────────────────────────────────────────────────────────────
+
+  void _drawTentacles(Canvas canvas, Size size, double cx, double cy) {
+    const nArms = 8;
+    // Spread evenly below the body (170° arc pointing downward)
+    const spreadStart = math.pi * 0.28;  // ~50° from straight down
+    const spreadTotal = math.pi * 0.44;  // full spread of 80° total
+    const nSeg = 5;
+    const segLen = 18.0;
+
+    for (int a = 0; a < nArms; a++) {
+      final frac     = nArms == 1 ? 0.5 : a / (nArms - 1).toDouble();
+      final baseAngle= spreadStart + frac * spreadTotal - math.pi / 2; // start angle
+      final phase    = tentPhase * math.pi * 2 + a * (math.pi / 4);
+
+      final path = Path();
+      double px = cx;
+      double py = cy + 36; // attach to bottom of body
+      path.moveTo(px, py);
+
+      for (int s = 0; s < nSeg; s++) {
+        final waveAmp  = 6.0 + s * 2.0; // grows toward tip
+        final waveFreq = 1.5;
+        final segAngle = baseAngle + math.sin(phase + s * 0.7) * waveAmp * 0.06;
+        final nx       = px + math.cos(segAngle) * segLen;
+        final ny       = py + math.sin(segAngle) * segLen;
+        // Control point for smooth bezier
+        final mx = (px + nx) / 2 + math.sin(phase + s * 1.2) * waveAmp * 0.5;
+        final my = (py + ny) / 2;
+        path.quadraticBezierTo(mx, my, nx, ny);
+        px = nx; py = ny;
+      }
+
+      final strokeW = 3.5 - a.abs() * 0.1;
+      final opacity = bodyBrightness * (0.55 + (1 - a / nArms) * 0.25);
+
+      // Outer glow
+      canvas.drawPath(path, Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = strokeW + 2
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..color = _kEyeRed.withOpacity(isTargeting ? opacity * 0.35 : 0.0)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+
+      // Core tentacle
+      canvas.drawPath(path, Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = strokeW
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..shader = LinearGradient(
+          colors: [
+            Color.lerp(_kTentBase, Colors.grey, 1 - bodyBrightness)!.withOpacity(opacity),
+            _kTentTip.withOpacity(opacity * 0.5),
+          ],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ).createShader(Rect.fromLTWH(0, cy, size.width, size.height - cy)));
+
+      // Joint dots
+      final rng = Random(a);
+      double jx = cx, jy = cy + 36;
+      for (int s = 0; s < nSeg; s++) {
+        final waveAmp  = 6.0 + s * 2.0;
+        final segAngle = baseAngle + math.sin(phase + s * 0.7) * waveAmp * 0.06;
+        jx += math.cos(segAngle) * segLen;
+        jy += math.sin(segAngle) * segLen;
+        canvas.drawCircle(Offset(jx, jy), 2.2,
+          Paint()..color = _kBodyEdge.withOpacity(opacity * 0.8 * bodyBrightness));
+      }
+    }
+  }
+
+  // ── Main Body ──────────────────────────────────────────────────────────────
+
+  void _drawBody(Canvas canvas, double cx, double cy) {
+    final bodyRect = Rect.fromCenter(center: Offset(cx, cy), width: 140, height: 88);
+
+    // Outer glow / aura
+    canvas.drawOval(bodyRect.inflate(12), Paint()
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18)
+      ..color = (isTargeting ? _kEyeRed : _kBodyMid)
+          .withOpacity(bodyBrightness * (isTargeting ? 0.35 : 0.18)));
+
+    // Shell base gradient
+    final bodyPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Color.lerp(_kBodyMid, Colors.grey.shade800, 1 - bodyBrightness)!,
+          Color.lerp(_kBodyDark, Colors.grey.shade900, 1 - bodyBrightness)!,
+        ],
+      ).createShader(bodyRect);
+    canvas.drawOval(bodyRect, bodyPaint);
+
+    // Rim highlight (top edge bright)
+    canvas.drawArc(bodyRect, math.pi, math.pi, false, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..color = _kBodyEdge.withOpacity(bodyBrightness * 0.7));
+
+    // Panel lines
+    final pLine = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.9
+      ..color = _kPanelLine.withOpacity(bodyBrightness * 0.65);
+
+    // Horizontal divider
+    canvas.drawLine(Offset(cx - 55, cy), Offset(cx + 55, cy), pLine);
+    // Vertical dividers
+    canvas.drawLine(Offset(cx - 28, cy - 35), Offset(cx - 28, cy + 35), pLine);
+    canvas.drawLine(Offset(cx + 28, cy - 35), Offset(cx + 28, cy + 35), pLine);
+    // Diagonal reinforcement
+    canvas.drawLine(Offset(cx - 52, cy - 14), Offset(cx - 28, cy - 30), pLine);
+    canvas.drawLine(Offset(cx + 28, cy - 30), Offset(cx + 52, cy - 14), pLine);
+
+    // Bolt circles (mechanical detail)
+    final boltPaint = Paint()..color = _kPanelLine.withOpacity(bodyBrightness * 0.8);
+    for (final pos in [
+      Offset(cx - 52, cy - 8), Offset(cx + 52, cy - 8),
+      Offset(cx - 52, cy + 8), Offset(cx + 52, cy + 8),
+      Offset(cx - 20, cy - 32), Offset(cx + 20, cy - 32),
+    ]) {
+      canvas.drawCircle(pos, 3.0, boltPaint);
+      canvas.drawCircle(pos, 3.0, Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.8
+        ..color = _kBodyEdge.withOpacity(bodyBrightness * 0.5));
+    }
+
+    // Vent slits on sides
+    final ventPaint = Paint()..color = _kBodyDark.withOpacity(bodyBrightness * 0.9)
+      ..strokeWidth = 1.5..style = PaintingStyle.stroke;
+    for (int v = 0; v < 3; v++) {
+      final vy = cy - 8 + v * 8.0;
+      canvas.drawLine(Offset(cx - 68, vy), Offset(cx - 58, vy), ventPaint);
+      canvas.drawLine(Offset(cx + 58, vy), Offset(cx + 68, vy), ventPaint);
+    }
+
+    // Rim border
+    canvas.drawOval(bodyRect, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8
+      ..color = _kBodyEdge.withOpacity(bodyBrightness * 0.55));
+  }
+
+  // ── Eye ───────────────────────────────────────────────────────────────────
+
+  void _drawEye(Canvas canvas, double cx, double cy) {
+    const eyeR = 22.0; // full open radius
+
+    // Outer glow
+    canvas.drawCircle(Offset(cx, cy), eyeR + 10, Paint()
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14)
+      ..color = eyeColor.withOpacity(bodyBrightness * (0.4 + eyePulse * 0.35)));
+
+    // Outer ring
+    canvas.drawCircle(Offset(cx, cy), eyeR + 4, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..color = eyeColor.withOpacity(bodyBrightness * 0.3));
+
+    // Dark lens housing
+    canvas.drawCircle(Offset(cx, cy), eyeR + 2, Paint()
+      ..color = _kBodyDark.withOpacity(0.6));
+
+    // Lens glass gradient
+    canvas.drawCircle(Offset(cx, cy), eyeR, Paint()
+      ..shader = RadialGradient(
+        colors: [
+          Colors.white.withOpacity(bodyBrightness * 0.85),
+          eyeColor.withOpacity(bodyBrightness),
+          eyeColor.withOpacity(bodyBrightness * 0.6),
+          Colors.black.withOpacity(0.9),
+        ],
+        stops: const [0.0, 0.28, 0.65, 1.0],
+      ).createShader(Rect.fromCircle(center: Offset(cx, cy), radius: eyeR)));
+
+    // Iris ring segments (6 segments, rotating slightly with eye pulse)
+    final irisR = eyeR * 0.75;
+    for (int i = 0; i < 6; i++) {
+      final a1 = i * (math.pi / 3) + eyePulse * 0.15;
+      final a2 = a1 + math.pi / 3 - 0.12;
+      canvas.drawArc(
+        Rect.fromCircle(center: Offset(cx, cy), radius: irisR),
+        a1, a2 - a1, false,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.5
+          ..color = eyeColor.withOpacity(bodyBrightness * 0.5));
+    }
+
+    // Pupil
+    canvas.drawCircle(Offset(cx + 1, cy), eyeR * 0.3, Paint()
+      ..color = Colors.black.withOpacity(0.92));
+
+    // Lens glint
+    canvas.drawCircle(Offset(cx - 6, cy - 7), 4.5, Paint()
+      ..color = Colors.white.withOpacity(bodyBrightness * 0.65));
+    canvas.drawCircle(Offset(cx - 6, cy - 7), 2.0, Paint()
+      ..color = Colors.white.withOpacity(bodyBrightness * 0.9));
+
+    // Targeting charge ring
+    if (isTargeting) {
+      canvas.drawCircle(Offset(cx, cy), eyeR + 8, Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5
+        ..color = _kEyeRed.withOpacity(0.8 + eyePulse * 0.2)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5));
+    }
+
+    // ── Blink (eyelid plates sliding over eye) ────────────────────────────
+    if (blinkT > 0.01) {
+      final lidH  = (eyeR + 3) * blinkT; // how far lids have closed
+      final lidR  = eyeR + 3;
+
+      // Clip to circle so lids don't go outside eye housing
+      canvas.save();
+      final clipPath = Path()..addOval(Rect.fromCircle(center: Offset(cx, cy), radius: lidR));
+      canvas.clipPath(clipPath);
+
+      // Top eyelid plate
+      final topLid = RRect.fromRectAndCorners(
+        Rect.fromLTWH(cx - lidR, cy - lidR, lidR * 2, lidH),
+        topLeft:    const Radius.circular(3),
+        topRight:   const Radius.circular(3),
+      );
+      canvas.drawRRect(topLid, Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [_kBodyMid, _kBodyDark],
+        ).createShader(topLid.outerRect));
+
+      // Bottom eyelid plate
+      final botLid = RRect.fromRectAndCorners(
+        Rect.fromLTWH(cx - lidR, cy + lidR - lidH, lidR * 2, lidH),
+        bottomLeft:  const Radius.circular(3),
+        bottomRight: const Radius.circular(3),
+      );
+      canvas.drawRRect(botLid, Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.bottomCenter, end: Alignment.topCenter,
+          colors: [_kBodyMid, _kBodyDark],
+        ).createShader(botLid.outerRect));
+
+      // Lid edge seam
+      if (blinkT > 0.4) {
+        final seamY = cy - lidR + lidH;
+        canvas.drawLine(Offset(cx - lidR, seamY), Offset(cx + lidR, seamY),
+          Paint()..color = _kEyeRed.withOpacity(0.5 * (blinkT - 0.4) / 0.6)..strokeWidth = 1.2);
+      }
+
+      canvas.restore();
+
+      // Lid rim lines (panel bolts on eyelids)
+      final boltC = Paint()..color = _kBodyEdge.withOpacity(blinkT * 0.7);
+      canvas.drawCircle(Offset(cx - 12, cy - lidR + 4), 1.8, boltC);
+      canvas.drawCircle(Offset(cx + 12, cy - lidR + 4), 1.8, boltC);
+    }
+  }
+
+  // ── Entry Glitch ──────────────────────────────────────────────────────────
+
+  void _drawGlitch(Canvas canvas, Size size, double cx, double cy) {
+    if (glitchIntensity <= 0) return;
+    final rng = Random((glitchIntensity * 100).toInt());
+    final col = Color.lerp(const Color(0xFF00FF44), _kEyeRed, 1 - glitchIntensity)!;
+    final p = Paint()..color = col.withOpacity(glitchIntensity * 0.4);
+    for (int i = 0; i < 8; i++) {
+      final gy = rng.nextDouble() * size.height;
+      final gw = 20.0 + rng.nextDouble() * (size.width * 0.7);
+      final gx = rng.nextDouble() * (size.width - gw);
+      canvas.drawRect(Rect.fromLTWH(gx, gy, gw, 2.5 + rng.nextDouble() * 2), p);
+    }
   }
 
   @override
-  void dispose() { _bob.dispose(); _eyePulse.dispose(); super.dispose(); }
+  bool shouldRepaint(_NexusBodyPainter o) => true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Laser Beam — boss eye to targeted cell
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _LaserBeamPainter extends CustomPainter {
+  final Offset fromCenter; // boss body center in screen
+  final Rect   toRect;     // targeted cell rect
+  final double intensity;
+  final int    secsLeft;
+
+  const _LaserBeamPainter({
+    required this.fromCenter,
+    required this.toRect,
+    required this.intensity,
+    required this.secsLeft,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Eye is roughly 22px above body center (eye center)
+    final eyePos  = fromCenter - const Offset(0, 22);
+    final cellPos = toRect.center;
+    final dist    = (cellPos - eyePos).distance;
+
+    // Outer glow beam
+    canvas.drawLine(eyePos, cellPos, Paint()
+      ..color = _kEyeRed.withOpacity(intensity * 0.18)
+      ..strokeWidth = 18
+      ..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10));
+
+    // Mid beam
+    canvas.drawLine(eyePos, cellPos, Paint()
+      ..color = _kEyeRed.withOpacity(intensity * 0.55)
+      ..strokeWidth = 4.5
+      ..strokeCap = StrokeCap.round);
+
+    // Core beam
+    canvas.drawLine(eyePos, cellPos, Paint()
+      ..color = Color.lerp(_kEyeOrange, Colors.white, intensity * 0.4)!.withOpacity(intensity * 0.9)
+      ..strokeWidth = 1.8
+      ..strokeCap = StrokeCap.round);
+
+    // Scanning sparks along beam (3 sparks at 25%, 50%, 75%)
+    final dir = (cellPos - eyePos) / dist;
+    final rng = Random((intensity * 20).toInt());
+    for (double t = 0.2; t <= 0.85; t += 0.3) {
+      final sPos = eyePos + dir * (dist * t);
+      final offset = Offset(
+        (rng.nextDouble() - 0.5) * 6,
+        (rng.nextDouble() - 0.5) * 6,
+      );
+      canvas.drawCircle(sPos + offset, 2.5 + rng.nextDouble() * 2, Paint()
+        ..color = _kEyeOrange.withOpacity(intensity * 0.8)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+    }
+
+    // Impact circle at cell
+    canvas.drawCircle(cellPos, 14 + intensity * 4, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..color = _kEyeRed.withOpacity(intensity * 0.8));
+    canvas.drawCircle(cellPos, 6, Paint()
+      ..color = _kEyeOrange.withOpacity(intensity * 0.9)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+  }
+
+  @override bool shouldRepaint(_LaserBeamPainter o) =>
+      o.intensity != intensity || o.toRect != toRect;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Crosshair widget on targeted cell
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _CrosshairWidget extends StatelessWidget {
+  final Rect   rect;
+  final int    secsLeft;
+  final double laserVal;
+  const _CrosshairWidget({required this.rect, required this.secsLeft, required this.laserVal});
 
   @override
   Widget build(BuildContext context) {
-    final sz = MediaQuery.of(context).size;
-    final baseY = _bossRestY(sz);
-    return AnimatedBuilder(
-      animation: Listenable.merge([_bob, _eyePulse]),
-      builder: (_, __) {
-        final y = baseY + (_bobAnim.value - 0.5) * 10.0;
-        final eyeC = Color.lerp(const Color(0xFFFF4040), const Color(0xFFFF0000), _eyeAnim.value)!;
-        // Attack countdown laser charge effect
-        final isTargeting = widget.controller.isTargeting;
-        return Positioned(
-          top: y,
-          left: 0, right: 0,
-          child: Center(
-            child: _NexusBody(
-              eyeColor: eyeC,
-              bodyColor: _kMetal,
-              tentacleOpacity: 0.65,
-              glitchColor: _kEyeRed,
-              glitchOpacity: isTargeting ? 0.7 : 0.0,
-              scale: 1.0,
-              laserCharging: isTargeting,
+    return Positioned(
+      left:   rect.left  - 6,
+      top:    rect.top   - 6,
+      width:  rect.width + 12,
+      height: rect.height + 12,
+      child: IgnorePointer(
+        child: Stack(alignment: Alignment.center, children: [
+          // Pulsing red border + glow
+          Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: _kEyeRed.withOpacity(0.6 + laserVal * 0.4), width: 2.5),
+              boxShadow: [BoxShadow(
+                color: _kEyeRed.withOpacity(0.4 + laserVal * 0.3),
+                blurRadius: 14, spreadRadius: 2)],
             ),
           ),
-        );
-      },
+          // Corner brackets
+          CustomPaint(
+            size: Size(rect.width + 12, rect.height + 12),
+            painter: _CrosshairBracketPainter(0.6 + laserVal * 0.4),
+          ),
+          // Countdown timer
+          Positioned(
+            bottom: 3,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: _kEyeRed.withOpacity(0.88),
+                borderRadius: BorderRadius.circular(4)),
+              child: Text('${secsLeft}s',
+                style: const TextStyle(
+                  color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)),
+            ),
+          ),
+        ]),
+      ),
     );
   }
 }
 
-// ── Stunned Boss ──────────────────────────────────────────────────────────────
+class _CrosshairBracketPainter extends CustomPainter {
+  final double intensity;
+  const _CrosshairBracketPainter(this.intensity);
 
-class _StunnedBoss extends StatefulWidget {
-  final NexusCoreController controller;
-  const _StunnedBoss({required this.controller});
-  @override State<_StunnedBoss> createState() => _StunnedBossState();
+  @override
+  void paint(Canvas canvas, Size size) {
+    const arm = 9.0;
+    final cx = size.width / 2, cy = size.height / 2;
+    final p  = Paint()..color = _kEyeRed.withOpacity(intensity)
+      ..strokeWidth = 1.8..style = PaintingStyle.stroke;
+    // Center cross
+    canvas.drawLine(Offset(cx - 7, cy), Offset(cx + 7, cy), p);
+    canvas.drawLine(Offset(cx, cy - 7), Offset(cx, cy + 7), p);
+    // Corner L brackets
+    for (final dx in [-1.0, 1.0]) {
+      for (final dy in [-1.0, 1.0]) {
+        final bx = cx + dx * (size.width / 2 - 4);
+        final by = cy + dy * (size.height / 2 - 4);
+        canvas.drawLine(Offset(bx, by), Offset(bx - dx * arm, by), p);
+        canvas.drawLine(Offset(bx, by), Offset(bx, by - dy * arm), p);
+      }
+    }
+  }
+
+  @override bool shouldRepaint(_CrosshairBracketPainter o) => o.intensity != intensity;
 }
-class _StunnedBossState extends State<_StunnedBoss> with TickerProviderStateMixin {
-  late final AnimationController _empRing;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Hacked cell sparks
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _HackedCells extends StatefulWidget {
+  final NexusCoreController controller;
+  final Rect? Function(int col, int row) getCellRect;
+  const _HackedCells({required this.controller, required this.getCellRect});
+  @override State<_HackedCells> createState() => _HackedCellsState();
+}
+class _HackedCellsState extends State<_HackedCells> with SingleTickerProviderStateMixin {
+  late final AnimationController _spark;
   @override void initState() {
     super.initState();
-    _empRing = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
-      ..repeat();
+    _spark = AnimationController(vsync: this, duration: const Duration(milliseconds: 280))..repeat();
+    _spark.addListener(() { if (mounted) setState(() {}); });
   }
-  @override void dispose() { _empRing.dispose(); super.dispose(); }
-
-  @override
-  Widget build(BuildContext context) {
-    final sz = MediaQuery.of(context).size;
-    final y  = _bossRestY(sz);
-    return AnimatedBuilder(
-      animation: _empRing,
-      builder: (_, __) {
-        return Positioned(
-          top: y - 10,
-          left: 0, right: 0,
-          child: Center(
-            child: SizedBox(
-              width: 160, height: 130,
-              child: Stack(alignment: Alignment.center, children: [
-                // EMP ring
-                CustomPaint(
-                  size: const Size(160, 130),
-                  painter: _EmpRingPainter(_empRing.value),
-                ),
-                // Grey body
-                _NexusBody(
-                  eyeColor: Colors.transparent,
-                  bodyColor: const Color(0xFF3A3A3A),
-                  tentacleOpacity: 0.3,
-                  glitchColor: Colors.transparent,
-                  glitchOpacity: 0,
-                  scale: 1.0,
-                ),
-                // STUNNED label
-                Positioned(
-                  top: 0,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: _kEMP.withOpacity(0.85),
-                      borderRadius: BorderRadius.circular(6),
-                      boxShadow: [BoxShadow(color: _kEMP.withOpacity(0.5), blurRadius: 8)],
-                    ),
-                    child: Text(
-                      'STUNNED ${widget.controller.stunSecondsLeft}s',
-                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 1.2),
-                    ),
-                  ),
-                ),
-              ]),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-// ── Win Blast ─────────────────────────────────────────────────────────────────
-
-class _WinBlast extends StatefulWidget {
-  final NexusCoreController controller;
-  const _WinBlast({required this.controller});
-  @override State<_WinBlast> createState() => _WinBlastState();
-}
-class _WinBlastState extends State<_WinBlast> with TickerProviderStateMixin {
-  late final AnimationController _laser;
-  late final AnimationController _shake;
-  late final AnimationController _explode;
-  late final AnimationController _text;
-
-  @override
-  void initState() {
-    super.initState();
-    _laser   = AnimationController(vsync: this, duration: const Duration(milliseconds: 800))..forward();
-    _shake   = AnimationController(vsync: this, duration: const Duration(milliseconds: 500))..forward();
-    _explode = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200));
-    _text    = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
-    _laser.addStatusListener((s) { if (s == AnimationStatus.completed) { _explode.forward(); _text.forward(); } });
-  }
-
-  @override
-  void dispose() { _laser.dispose(); _shake.dispose(); _explode.dispose(); _text.dispose(); super.dispose(); }
-
-  @override
-  Widget build(BuildContext context) {
-    final sz = MediaQuery.of(context).size;
-    final bossY = _bossRestY(sz);
-    final bossCX = sz.width / 2;
-    final bossCY = bossY + 40.0;
-    // Laser fires from bottom-center (quota area approx 72% height)
-    final quotaY = sz.height * 0.72;
-
-    return AnimatedBuilder(
-      animation: Listenable.merge([_laser, _shake, _explode, _text]),
-      builder: (_, __) {
-        final shakeX = _shake.isAnimating ? (math.sin(_shake.value * math.pi * 18) * 6 * (1 - _shake.value)) : 0.0;
-        return Stack(children: [
-          // Golden laser beam
-          if (_laser.value > 0 && _explode.value < 1)
-            Positioned.fill(
-              child: CustomPaint(
-                painter: _GoldenLaserPainter(
-                  from: Offset(bossCX, quotaY),
-                  to: Offset(bossCX + shakeX, bossCY),
-                  progress: _laser.value,
-                ),
-              ),
-            ),
-
-          // Boss — shaking then exploding
-          Positioned(
-            top: bossY + shakeX * 0.5,
-            left: 0, right: 0,
-            child: Center(
-              child: _explode.value < 0.3
-                ? _NexusBody(
-                    eyeColor: _kGold,
-                    bodyColor: Color.lerp(_kMetal, Colors.orange.shade900, _explode.value * 3)!,
-                    tentacleOpacity: 1 - _explode.value * 3,
-                    glitchColor: _kGold,
-                    glitchOpacity: _laser.value,
-                    scale: 1.0 + _explode.value * 0.5,
-                  )
-                : const SizedBox.shrink(),
-            ),
-          ),
-
-          // Explosion burst
-          if (_explode.value > 0.1)
-            Positioned(
-              top: bossCY - 60,
-              left: bossCX - 60,
-              child: CustomPaint(
-                size: const Size(120, 120),
-                painter: _ExplosionPainter(_explode.value),
-              ),
-            ),
-
-          // SYSTEM OVERLOAD text
-          if (_explode.value > 0.15 && _explode.value < 0.7)
-            Positioned(
-              top: bossCY - 20,
-              left: 0, right: 0,
-              child: Center(
-                child: Text(
-                  'SYSTEM OVERLOAD ⚠️',
-                  style: TextStyle(
-                    color: Colors.red,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 2,
-                    shadows: [Shadow(color: Colors.orange, blurRadius: 12)],
-                  ),
-                ),
-              ),
-            ),
-
-          // Victory text
-          if (_text.value > 0.5)
-            Positioned(
-              top: sz.height * 0.38,
-              left: 16, right: 16,
-              child: Opacity(
-                opacity: (_text.value - 0.5) * 2,
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.82),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: _kGold, width: 2),
-                      boxShadow: [BoxShadow(color: _kGold.withOpacity(0.4), blurRadius: 24)],
-                    ),
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      Text('LEVEL 40 CLEARED', style: TextStyle(color: _kGold, fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: 2, shadows: [Shadow(color: _kGold, blurRadius: 10)])),
-                      const SizedBox(height: 4),
-                      const Text('NEXUS CORE DESTROYED', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
-                      const SizedBox(height: 8),
-                      const Text('🛸💥🤖', style: TextStyle(fontSize: 28)),
-                    ]),
-                  ),
-                ),
-              ),
-            ),
-        ]);
-      },
-    );
-  }
-}
-
-// ── Crosshair on Targeted Cell ────────────────────────────────────────────────
-
-class _CrosshairEffect extends StatefulWidget {
-  final NexusCoreController controller;
-  final Rect? Function(int col, int row) getCellRect;
-  const _CrosshairEffect({required this.controller, required this.getCellRect});
-  @override State<_CrosshairEffect> createState() => _CrosshairEffectState();
-}
-class _CrosshairEffectState extends State<_CrosshairEffect> with SingleTickerProviderStateMixin {
-  late final AnimationController _pulse;
-  @override void initState() { super.initState(); _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 500))..repeat(reverse: true); }
-  @override void dispose() { _pulse.dispose(); super.dispose(); }
-
-  @override
-  Widget build(BuildContext context) {
-    final target = widget.controller.targetedCell;
-    if (target == null) return const SizedBox.shrink();
-    final rect = widget.getCellRect(target.$1, target.$2);
-    if (rect == null) return const SizedBox.shrink();
-    final secsLeft = widget.controller.targetSecondsLeft;
-
-    return AnimatedBuilder(
-      animation: _pulse,
-      builder: (_, __) {
-        final glow = 0.6 + _pulse.value * 0.4;
-        return Positioned(
-          left: rect.left - 6, top: rect.top - 6,
-          width: rect.width + 12, height: rect.height + 12,
-          child: Stack(alignment: Alignment.center, children: [
-            // Pulsing red border
-            Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: _kCrossRed.withOpacity(glow), width: 2.5),
-                boxShadow: [BoxShadow(color: _kCrossRed.withOpacity(glow * 0.5), blurRadius: 10, spreadRadius: 2)],
-              ),
-            ),
-            // Crosshair lines
-            CustomPaint(
-              size: Size(rect.width + 12, rect.height + 12),
-              painter: _CrosshairPainter(glow),
-            ),
-            // Countdown
-            Positioned(
-              bottom: 2,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                decoration: BoxDecoration(color: _kCrossRed.withOpacity(0.85), borderRadius: BorderRadius.circular(4)),
-                child: Text('${secsLeft}s', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w900)),
-              ),
-            ),
-          ]),
-        );
-      },
-    );
-  }
-}
-
-// ── Hacked Cell Sparks ────────────────────────────────────────────────────────
-
-class _HackedCellEffects extends StatefulWidget {
-  final NexusCoreController controller;
-  final Rect? Function(int col, int row) getCellRect;
-  const _HackedCellEffects({required this.controller, required this.getCellRect});
-  @override State<_HackedCellEffects> createState() => _HackedCellEffectsState();
-}
-class _HackedCellEffectsState extends State<_HackedCellEffects> with SingleTickerProviderStateMixin {
-  late final AnimationController _spark;
-  @override void initState() { super.initState(); _spark = AnimationController(vsync: this, duration: const Duration(milliseconds: 300))..repeat(); }
   @override void dispose() { _spark.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) {
     if (widget.controller.hackedCells.isEmpty) return const SizedBox.shrink();
-    return AnimatedBuilder(
-      animation: _spark,
-      builder: (_, __) {
-        final cells = widget.controller.hackedCells.toList();
-        return Stack(
-          children: cells.map((cell) {
-            final rect = widget.getCellRect(cell.$1, cell.$2);
-            if (rect == null) return const SizedBox.shrink();
-            return Positioned(
-              left: rect.left, top: rect.top,
-              width: rect.width, height: rect.height,
-              child: IgnorePointer(
-                child: CustomPaint(
-                  painter: _HackSparkPainter(_spark.value, cell.hashCode),
-                ),
-              ),
-            );
-          }).toList(),
+    return Stack(
+      children: widget.controller.hackedCells.map((cell) {
+        final rect = widget.getCellRect(cell.$1, cell.$2);
+        if (rect == null) return const SizedBox.shrink();
+        return Positioned(
+          left: rect.left, top: rect.top,
+          width: rect.width, height: rect.height,
+          child: IgnorePointer(
+            child: CustomPaint(
+              painter: _HackSparkPainter(_spark.value, cell.hashCode),
+            ),
+          ),
         );
-      },
+      }).toList(),
     );
   }
 }
-
-// ── Hint Ticker ───────────────────────────────────────────────────────────────
-
-class _HintTicker extends StatelessWidget {
-  final NexusCoreController controller;
-  const _HintTicker({required this.controller});
-
-  @override
-  Widget build(BuildContext context) {
-    final sz = MediaQuery.of(context).size;
-    final hint = kNexusHints[controller.hintIndex % kNexusHints.length];
-    final isTargeting = controller.isTargeting;
-    return Positioned(
-      top: sz.height * 0.098,  // just below energy bar
-      left: 0, right: 0,
-      child: Center(
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 400),
-          child: Container(
-            key: ValueKey(isTargeting ? 'dodge' : controller.hintIndex),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            decoration: BoxDecoration(
-              color: isTargeting ? _kCrossRed.withOpacity(0.88) : Colors.black.withOpacity(0.55),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: isTargeting ? _kCrossRed : Colors.white24, width: 1),
-            ),
-            child: Text(
-              isTargeting ? '⚡ MERGE QUICK TO DODGE! ⚡' : '💡 $hint',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 11,
-                fontWeight: isTargeting ? FontWeight.w900 : FontWeight.w500,
-                letterSpacing: isTargeting ? 1.2 : 0.3,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Dialogue Bubble ───────────────────────────────────────────────────────────
-
-class _DialogueBubble extends StatelessWidget {
-  final String text;
-  const _DialogueBubble({required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    final sz = MediaQuery.of(context).size;
-    return Positioned(
-      top: _bossRestY(sz) - 42,
-      left: sz.width * 0.52,
-      right: 12,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.82),
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(10),
-            topRight: Radius.circular(10),
-            bottomRight: Radius.circular(10),
-          ),
-          border: Border.all(color: _kEyeRed.withOpacity(0.7), width: 1),
-          boxShadow: [BoxShadow(color: _kEyeRed.withOpacity(0.3), blurRadius: 8)],
-        ),
-        child: Text(
-          text,
-          style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.4),
-          maxLines: 2, overflow: TextOverflow.ellipsis,
-        ),
-      ),
-    );
-  }
-}
-
-// ── Boss Body Widget ──────────────────────────────────────────────────────────
-
-class _NexusBody extends StatelessWidget {
-  final Color eyeColor;
-  final Color bodyColor;
-  final double tentacleOpacity;
-  final Color glitchColor;
-  final double glitchOpacity;
-  final double scale;
-  final bool laserCharging;
-  const _NexusBody({
-    required this.eyeColor,
-    required this.bodyColor,
-    required this.tentacleOpacity,
-    required this.glitchColor,
-    required this.glitchOpacity,
-    required this.scale,
-    this.laserCharging = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Transform.scale(
-      scale: scale,
-      child: SizedBox(
-        width: 120, height: 100,
-        child: CustomPaint(
-          painter: _NexusBodyPainter(
-            eyeColor: eyeColor,
-            bodyColor: bodyColor,
-            tentacleOpacity: tentacleOpacity,
-            glitchColor: glitchColor,
-            glitchOpacity: glitchOpacity,
-            laserCharging: laserCharging,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Custom Painters
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _NexusBodyPainter extends CustomPainter {
-  final Color eyeColor, bodyColor, glitchColor;
-  final double tentacleOpacity, glitchOpacity;
-  final bool laserCharging;
-  const _NexusBodyPainter({
-    required this.eyeColor, required this.bodyColor,
-    required this.tentacleOpacity, required this.glitchColor,
-    required this.glitchOpacity, required this.laserCharging,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2;
-    final cy = size.height * 0.42;
-
-    // ── Tentacles (8 thin mechanical arms radiating downward) ──
-    if (tentacleOpacity > 0) {
-      final tPaint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.8
-        ..color = _kMetalMid.withOpacity(tentacleOpacity);
-      final angles = List.generate(8, (i) => (math.pi * 0.15) + i * (math.pi * 0.85 / 7));
-      for (int i = 0; i < 8; i++) {
-        final a = angles[i];
-        final len = 38.0 + (i % 3) * 12.0;
-        final mx = cx + math.cos(a - math.pi / 2) * (len * 0.55);
-        final my = cy + math.sin(a - math.pi / 2) * (len * 0.55) + 26;
-        final ex = cx + math.cos(a - math.pi / 2) * len;
-        final ey = cy + math.sin(a - math.pi / 2) * len + 26;
-        final path = Path()
-          ..moveTo(cx + math.cos(a - math.pi / 2) * 28, cy + math.sin(a - math.pi / 2) * 28 + 20)
-          ..quadraticBezierTo(mx + (i.isEven ? 8 : -8), my, ex, ey);
-        canvas.drawPath(path, tPaint);
-        // Joint dot
-        canvas.drawCircle(Offset(ex, ey), 2.0,
-          Paint()..color = _kMetalMid.withOpacity(tentacleOpacity * 0.8));
-      }
-    }
-
-    // ── Body outer glow ──
-    final glowPaint = Paint()
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14)
-      ..color = bodyColor.withOpacity(0.55);
-    canvas.drawOval(Rect.fromCenter(center: Offset(cx, cy), width: 86, height: 60), glowPaint);
-
-    // ── Body dark shell ──
-    final bodyPaint = Paint()
-      ..shader = RadialGradient(colors: [_kMetalMid, bodyColor]).createShader(
-          Rect.fromCenter(center: Offset(cx, cy), width: 82, height: 58));
-    canvas.drawOval(Rect.fromCenter(center: Offset(cx, cy), width: 82, height: 58), bodyPaint);
-
-    // ── Body rim (metallic edge) ──
-    canvas.drawOval(
-      Rect.fromCenter(center: Offset(cx, cy), width: 82, height: 58),
-      Paint()..style = PaintingStyle.stroke..color = const Color(0xFF4A5A7A)..strokeWidth = 1.5,
-    );
-
-    // ── Panel lines (mechanical detail) ──
-    final linePaint = Paint()..color = const Color(0xFF3A4A60)..strokeWidth = 0.8..style = PaintingStyle.stroke;
-    canvas.drawLine(Offset(cx - 16, cy - 14), Offset(cx - 16, cy + 14), linePaint);
-    canvas.drawLine(Offset(cx + 16, cy - 14), Offset(cx + 16, cy + 14), linePaint);
-    canvas.drawLine(Offset(cx - 34, cy), Offset(cx + 34, cy), linePaint);
-
-    // ── Eye lens (glowing red circle) ──
-    if (eyeColor != Colors.transparent) {
-      // Outer glow
-      canvas.drawCircle(Offset(cx, cy), 18,
-        Paint()..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10)
-               ..color = eyeColor.withOpacity(0.6));
-      // Mid ring
-      canvas.drawCircle(Offset(cx, cy), 16,
-        Paint()..color = eyeColor.withOpacity(0.2));
-      // Core lens gradient
-      canvas.drawCircle(Offset(cx, cy), 13,
-        Paint()..shader = RadialGradient(
-          colors: [Colors.white.withOpacity(0.9), eyeColor, eyeColor.withOpacity(0.4)],
-          stops: const [0.0, 0.55, 1.0],
-        ).createShader(Rect.fromCircle(center: Offset(cx, cy), radius: 13)));
-      // Pupil
-      canvas.drawCircle(Offset(cx + 2, cy - 2), 4,
-        Paint()..color = Colors.black.withOpacity(0.8));
-      // Lens glint
-      canvas.drawCircle(Offset(cx - 4, cy - 5), 2.5,
-        Paint()..color = Colors.white.withOpacity(0.7));
-
-      // Laser charge ring
-      if (laserCharging) {
-        canvas.drawCircle(Offset(cx, cy), 22,
-          Paint()..style = PaintingStyle.stroke
-                 ..color = _kEyeRed.withOpacity(0.9)
-                 ..strokeWidth = 2.5
-                 ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
-      }
-    }
-
-    // ── Glitch overlay ──
-    if (glitchOpacity > 0 && glitchColor != Colors.transparent) {
-      final rng = Random(42);
-      final gPaint = Paint()..color = glitchColor.withOpacity(glitchOpacity * 0.4);
-      for (int i = 0; i < 5; i++) {
-        final y = cy - 25 + rng.nextDouble() * 50;
-        final w = 10.0 + rng.nextDouble() * 35;
-        final x = cx - 40 + rng.nextDouble() * 60;
-        canvas.drawRect(Rect.fromLTWH(x, y, w, 2.5), gPaint);
-      }
-    }
-  }
-
-  @override bool shouldRepaint(_NexusBodyPainter old) => true;
-}
-
-// ── Crosshair Painter ────────────────────────────────────────────────────────
-
-class _CrosshairPainter extends CustomPainter {
-  final double intensity;
-  const _CrosshairPainter(this.intensity);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2, cy = size.height / 2;
-    final p = Paint()
-      ..color = _kCrossRed.withOpacity(intensity)
-      ..strokeWidth = 1.5
-      ..style = PaintingStyle.stroke;
-    const armLen = 10.0;
-    // Crosshair arms
-    canvas.drawLine(Offset(cx - armLen, cy), Offset(cx + armLen, cy), p);
-    canvas.drawLine(Offset(cx, cy - armLen), Offset(cx, cy + armLen), p);
-    // Corner brackets
-    final c = Paint()..color = _kCrossRed.withOpacity(intensity * 0.7)..strokeWidth = 1.5..style = PaintingStyle.stroke;
-    const b = 7.0;
-    for (final dx in [-1.0, 1.0]) {
-      for (final dy in [-1.0, 1.0]) {
-        canvas.drawLine(Offset(cx + dx * (size.width/2 - 4), cy + dy * (size.height/2 - 4)),
-                        Offset(cx + dx * (size.width/2 - 4 - b * dx.abs()), cy + dy * (size.height/2 - 4)), c);
-        canvas.drawLine(Offset(cx + dx * (size.width/2 - 4), cy + dy * (size.height/2 - 4)),
-                        Offset(cx + dx * (size.width/2 - 4), cy + dy * (size.height/2 - 4 - b * dy.abs())), c);
-      }
-    }
-  }
-
-  @override bool shouldRepaint(_CrosshairPainter old) => old.intensity != intensity;
-}
-
-// ── Hack Spark Painter ────────────────────────────────────────────────────────
 
 class _HackSparkPainter extends CustomPainter {
   final double t;
-  final int seed;
+  final int    seed;
   const _HackSparkPainter(this.t, this.seed);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final rng = Random(seed + (t * 8).toInt());
-    final p = Paint()..style = PaintingStyle.fill;
-    // Red glitch scanlines
-    for (int i = 0; i < 4; i++) {
-      final y = rng.nextDouble() * size.height;
-      final w = 4 + rng.nextDouble() * (size.width - 8);
-      p.color = _kHackSpark.withOpacity(0.3 + rng.nextDouble() * 0.4);
-      canvas.drawRect(Rect.fromLTWH(rng.nextDouble() * 6, y, w, 2), p);
+    final rng = Random(seed + (t * 10).toInt());
+
+    // Scanline glitches
+    for (int i = 0; i < 5; i++) {
+      final y  = rng.nextDouble() * size.height;
+      final w  = 6 + rng.nextDouble() * (size.width - 10);
+      final x  = rng.nextDouble() * (size.width - w);
+      final op = 0.25 + rng.nextDouble() * 0.45;
+      canvas.drawRect(Rect.fromLTWH(x, y, w, 2.2), Paint()
+        ..color = _kHack.withOpacity(op));
     }
-    // Corner sparks
-    p.color = _kHackSpark.withOpacity(0.6 + rng.nextDouble() * 0.4);
-    for (int i = 0; i < 3; i++) {
-      final sx = rng.nextDouble() * size.width;
-      final sy = rng.nextDouble() * size.height;
-      canvas.drawCircle(Offset(sx, sy), 1.2 + rng.nextDouble() * 2, p);
+    // Spark dots
+    for (int i = 0; i < 4; i++) {
+      canvas.drawCircle(
+        Offset(rng.nextDouble() * size.width, rng.nextDouble() * size.height),
+        1.0 + rng.nextDouble() * 2.5,
+        Paint()..color = _kEyeOrange.withOpacity(0.5 + rng.nextDouble() * 0.5));
     }
     // Red border flash
     canvas.drawRect(
-      Rect.fromLTWH(0, 0, size.width, size.height),
-      Paint()..style = PaintingStyle.stroke..color = _kHackSpark.withOpacity(0.5 + 0.3 * t)..strokeWidth = 2,
-    );
+      Rect.fromLTWH(1, 1, size.width - 2, size.height - 2),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0
+        ..color = _kHack.withOpacity(0.4 + t * 0.4));
   }
 
-  @override bool shouldRepaint(_HackSparkPainter old) => old.t != t;
+  @override bool shouldRepaint(_HackSparkPainter o) => o.t != t;
 }
 
-// ── EMP Ring Painter ──────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// EMP Ring — stunned state
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _EmpRingPainter extends CustomPainter {
   final double t;
@@ -800,87 +885,180 @@ class _EmpRingPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final cx = size.width / 2, cy = size.height / 2;
-    final r = 55.0 + t * 30.0;
-    canvas.drawCircle(Offset(cx, cy), r,
-      Paint()
+    for (int r = 0; r < 3; r++) {
+      final rt  = ((t + r * 0.33) % 1.0);
+      final rad = 55.0 + rt * 55.0;
+      final op  = (1 - rt) * 0.55;
+      canvas.drawCircle(Offset(cx, cy), rad, Paint()
         ..style = PaintingStyle.stroke
-        ..color = _kEMP.withOpacity((1 - t) * 0.7)
+        ..strokeWidth = 2.5 - rt * 1.5
+        ..color = _kEMP.withOpacity(op)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5));
+    }
+  }
+
+  @override bool shouldRepaint(_EmpRingPainter o) => o.t != t;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Win Blast Painter
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _WinBlastPainter extends CustomPainter {
+  final double bossCY, bossX, quotaY, laserT, explodeT;
+  const _WinBlastPainter({
+    required this.bossCY, required this.bossX,
+    required this.quotaY, required this.laserT, required this.explodeT,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final from = Offset(bossX, quotaY);
+    final to   = Offset(bossX, bossCY);
+
+    // Golden laser (grows from quota toward boss)
+    if (laserT > 0) {
+      final end = Offset.lerp(from, to, Curves.easeIn.transform(laserT))!;
+      canvas.drawLine(from, end, Paint()
+        ..color = _kGold.withOpacity(0.3)
+        ..strokeWidth = 28
+        ..strokeCap = StrokeCap.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12));
+      canvas.drawLine(from, end, Paint()
+        ..color = _kGold
+        ..strokeWidth = 7
+        ..strokeCap = StrokeCap.round);
+      canvas.drawLine(from, end, Paint()
+        ..color = Colors.white.withOpacity(0.85)
         ..strokeWidth = 2.5
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
-  }
-
-  @override bool shouldRepaint(_EmpRingPainter old) => old.t != t;
-}
-
-// ── Golden Laser Painter ──────────────────────────────────────────────────────
-
-class _GoldenLaserPainter extends CustomPainter {
-  final Offset from, to;
-  final double progress;
-  const _GoldenLaserPainter({required this.from, required this.to, required this.progress});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (progress <= 0) return;
-    final end = Offset.lerp(from, to, progress)!;
-    // Core beam
-    canvas.drawLine(from, end, Paint()
-      ..color = _kGold
-      ..strokeWidth = 6
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
-    // Outer glow
-    canvas.drawLine(from, end, Paint()
-      ..color = _kGold.withOpacity(0.35)
-      ..strokeWidth = 18
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
-    // White hot core
-    canvas.drawLine(from, end, Paint()
-      ..color = Colors.white.withOpacity(0.8)
-      ..strokeWidth = 2);
-  }
-
-  @override bool shouldRepaint(_GoldenLaserPainter old) =>
-    old.progress != progress || old.from != from || old.to != to;
-}
-
-// ── Explosion Painter ─────────────────────────────────────────────────────────
-
-class _ExplosionPainter extends CustomPainter {
-  final double t;
-  const _ExplosionPainter(this.t);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2, cy = size.height / 2;
-    final rng = Random(77);
-    // Radial burst rays
-    for (int i = 0; i < 16; i++) {
-      final a = i * (math.pi * 2 / 16);
-      final len = 20 + t * 50 + rng.nextDouble() * 15;
-      final opacity = (1 - t).clamp(0.0, 1.0);
-      canvas.drawLine(
-        Offset(cx + math.cos(a) * 8, cy + math.sin(a) * 8),
-        Offset(cx + math.cos(a) * len, cy + math.sin(a) * len),
-        Paint()
-          ..color = (i.isEven ? _kGold : Colors.orange).withOpacity(opacity)
-          ..strokeWidth = 3 - t * 2,
-      );
+        ..strokeCap = StrokeCap.round);
     }
-    // Center flash
-    canvas.drawCircle(Offset(cx, cy), 20 * t,
-      Paint()..color = Colors.white.withOpacity((1 - t * 1.5).clamp(0, 1))
-             ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
-    // Debris particles
-    for (int i = 0; i < 12; i++) {
-      final a = rng.nextDouble() * math.pi * 2;
-      final d = 10 + rng.nextDouble() * 40 * t;
-      canvas.drawCircle(
-        Offset(cx + math.cos(a) * d, cy + math.sin(a) * d),
-        2 + rng.nextDouble() * 3,
-        Paint()..color = (i.isEven ? Colors.orange : Colors.red).withOpacity((1 - t).clamp(0, 1)),
-      );
+
+    // Explosion burst
+    if (explodeT > 0) {
+      final rng = Random(99);
+      final op  = (1 - explodeT).clamp(0.0, 1.0);
+      for (int i = 0; i < 20; i++) {
+        final a   = i * (math.pi * 2 / 20) + explodeT * 0.3;
+        final len = 25 + explodeT * 70 + rng.nextDouble() * 20;
+        canvas.drawLine(
+          Offset(bossX + math.cos(a) * 8, bossCY + math.sin(a) * 8),
+          Offset(bossX + math.cos(a) * len, bossCY + math.sin(a) * len),
+          Paint()
+            ..color = (i.isEven ? _kGold : Colors.orange).withOpacity(op)
+            ..strokeWidth = 3.5 - explodeT * 2.5
+            ..strokeCap = StrokeCap.round);
+      }
+      // Shockwave ring
+      canvas.drawCircle(Offset(bossX, bossCY), 20 + explodeT * 90, Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4 - explodeT * 3
+        ..color = Colors.white.withOpacity(op * 0.6)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
+      // Flash
+      canvas.drawCircle(Offset(bossX, bossCY), 50 * explodeT, Paint()
+        ..color = Colors.white.withOpacity((1 - explodeT * 1.2).clamp(0, 0.8))
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 20));
+      // Debris
+      for (int i = 0; i < 14; i++) {
+        final a = rng.nextDouble() * math.pi * 2;
+        final d = (20 + rng.nextDouble() * 60) * explodeT;
+        canvas.drawCircle(
+          Offset(bossX + math.cos(a) * d, bossCY + math.sin(a) * d),
+          2 + rng.nextDouble() * 3.5,
+          Paint()..color = (i.isEven ? Colors.orange : Colors.red).withOpacity(op));
+      }
     }
   }
 
-  @override bool shouldRepaint(_ExplosionPainter old) => old.t != t;
+  @override bool shouldRepaint(_WinBlastPainter o) =>
+      o.laserT != laserT || o.explodeT != explodeT;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Hint Bar
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _HintBar extends StatelessWidget {
+  final NexusCoreController controller;
+  const _HintBar({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    final sz        = MediaQuery.of(context).size;
+    final targeting = controller.isTargeting;
+    final hint      = kNexusHints[controller.hintIndex % kNexusHints.length];
+    return Positioned(
+      top: sz.height * 0.097,
+      left: 0, right: 0,
+      child: Center(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 350),
+          child: Container(
+            key: ValueKey(targeting ? 'dodge' : controller.hintIndex),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+            decoration: BoxDecoration(
+              color: targeting
+                  ? _kEyeRed.withOpacity(0.90)
+                  : Colors.black.withOpacity(0.58),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: targeting ? _kEyeRed : Colors.white24, width: 1),
+              boxShadow: targeting
+                  ? [BoxShadow(color: _kEyeRed.withOpacity(0.4), blurRadius: 10)]
+                  : [],
+            ),
+            child: Text(
+              targeting ? '⚡ MERGE QUICK TO DODGE! ⚡' : '💡 $hint',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: targeting ? FontWeight.w900 : FontWeight.w500,
+                letterSpacing: targeting ? 1.2 : 0.3,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dialogue Bubble
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _DialogueBubble extends StatelessWidget {
+  final String text;
+  final double bossCY;
+  final double screenW;
+  const _DialogueBubble({required this.text, required this.bossCY, required this.screenW});
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top:   bossCY - 52,
+      left:  screenW * 0.50,
+      right: 12,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.85),
+          borderRadius: const BorderRadius.only(
+            topLeft:     Radius.circular(10),
+            topRight:    Radius.circular(10),
+            bottomRight: Radius.circular(10),
+          ),
+          border: Border.all(color: _kEyeRed.withOpacity(0.65), width: 1),
+          boxShadow: [BoxShadow(color: _kEyeRed.withOpacity(0.25), blurRadius: 8)],
+        ),
+        child: Text(
+          text,
+          style: const TextStyle(color: Colors.white, fontSize: 10,
+              fontWeight: FontWeight.w600, letterSpacing: 0.4),
+          maxLines: 2, overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
+  }
 }
