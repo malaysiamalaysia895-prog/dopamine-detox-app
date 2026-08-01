@@ -21,6 +21,7 @@ import '../controllers/spaceship_boss_controller.dart';
 import '../controllers/octopus_alien_controller.dart';
 import '../controllers/snake_alien_controller.dart';
 import '../controllers/antigravity_controller.dart';
+import '../controllers/nexus_core_controller.dart';
 
 // ─── Persistence Keys ─────────────────────────────────────────────────────────
 
@@ -240,6 +241,7 @@ class GameNotifier extends StateNotifier<GameState> {
   final octopusAlienController  = OctopusAlienController();
   final snakeAlienController    = SnakeAlienController();
   final antiGravityController   = AntiGravityController();
+  final nexusCoreController     = NexusCoreController();
   Timer? _creatureThrowCdTimer;
 
   /// True if the player voluntarily watched the Rewarded Ad (3× coins) on the
@@ -769,6 +771,29 @@ class GameNotifier extends StateNotifier<GameState> {
       snakeAlienController.reset();
     }
 
+    // ── NEXUS CORE trigger (L40) ──────────────────────────────────────────────
+    if (cfg.number == kNexusCoreLevel) {
+      nexusCoreController.triggerForLevel(
+        cfg.number,
+        gridCols: cfg.gridCols,
+        gridRows: cfg.gridRows,
+        onHacked: (col, row) {
+          // Visual feedback only — hacked state is tracked by the controller.
+          // The merge penalty is handled inside _mergeItems.
+          HapticFeedback.mediumImpact();
+        },
+        onPenalty: (e) {
+          final newE = (state.energy - e).clamp(0, state.maxEnergy);
+          state = state.copyWith(energy: newE);
+          AudioManager.instance.playErrorBuzz();
+          HapticFeedback.heavyImpact();
+        },
+        isOccupied: (c, r) => state.grid[c][r].itemId != null && !state.grid[c][r].isBlocked,
+      );
+    } else {
+      nexusCoreController.reset();
+    }
+
     // ── Anti-Gravity trigger (L37) ────────────────────────────────────────────
     if (cfg.number == 37) {
       antiGravityController.triggerForLevel(
@@ -917,6 +942,32 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   void _mergeItems(int fc, int fr, int tc, int tr) {
+    // ── NEXUS CORE: hacked-merge trap (L40) ──────────────────────────────────
+    if (nexusCoreController.phase != NexusCorePhase.idle) {
+      final fromHacked = nexusCoreController.isHackedAt(fc, fr);
+      final toHacked   = nexusCoreController.isHackedAt(tc, tr);
+      if (fromHacked || toHacked) {
+        // Delete BOTH items, deduct 15 energy, play error — merge fails.
+        final newGrid = _cloneGrid();
+        newGrid[fc][fr] = newGrid[fc][fr].clearItem();
+        newGrid[tc][tr] = newGrid[tc][tr].clearItem();
+        final newE = (state.energy - 15).clamp(0, state.maxEnergy);
+        final anims = [
+          ...state.pendingAnimations,
+          PendingAnimation(fc, fr, AnimType.hazardHit),
+          PendingAnimation(tc, tr, AnimType.hazardHit),
+        ];
+        state = state.copyWith(grid: newGrid, energy: newE, pendingAnimations: anims);
+        nexusCoreController.onCellCleared(fc, fr);
+        nexusCoreController.onCellCleared(tc, tr);
+        AudioManager.instance.playErrorBuzz();
+        HapticFeedback.heavyImpact();
+        return;
+      }
+      // Normal merge on un-hacked cells → notify controller (may cancel targeting)
+      nexusCoreController.onItemMerged(fc, fr, tc, tr);
+    }
+
     final id   = state.grid[fc][fr].itemId!;
     final next = ItemDictionary.nextItem(id);
     if (next == null) {
@@ -1157,6 +1208,11 @@ class GameNotifier extends StateNotifier<GameState> {
 
     AudioManager.instance.playMergeSnap();
 
+    // ── NEXUS CORE: Space Station delivery → EMP stun (L40) ──────────────────
+    if (nexusCoreController.phase != NexusCorePhase.idle && itemId == 41) {
+      nexusCoreController.onSatelliteDelivered();
+    }
+
     if (state.isLevelComplete) {
       _onLevelComplete();
     }
@@ -1256,6 +1312,7 @@ class GameNotifier extends StateNotifier<GameState> {
     octopusAlienController.onLevelComplete();  // ← Octopus alien (L36)
     snakeAlienController.onLevelComplete();    // ← Snake alien (L38)
     antiGravityController.onLevelComplete();   // ← Anti-Gravity boss (L37)
+    nexusCoreController.onLevelComplete();     // ← NEXUS CORE (L40)
     _timer?.cancel();
     AudioManager.instance.pauseBgm();
     AudioManager.instance.playVictory();
@@ -1585,6 +1642,7 @@ class GameNotifier extends StateNotifier<GameState> {
     octopusAlienController.dispose();
     snakeAlienController.dispose();
     antiGravityController.dispose();
+    nexusCoreController.dispose();
     super.dispose();
   }
 }
