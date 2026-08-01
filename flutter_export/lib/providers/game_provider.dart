@@ -927,6 +927,8 @@ class GameNotifier extends StateNotifier<GameState> {
     state = state.copyWith(grid: newGrid);
     // Cancel creature throw on source cell — item moved, no penalty
     _cancelCreatureThrowAt(fc, fr);
+    // NEXUS CORE: hacked state + targeting follow the moved item
+    nexusCoreController.onCellMoved(fc, fr, tc, tr);
   }
 
   void _swapCells(int fc, int fr, int tc, int tr) {
@@ -939,6 +941,8 @@ class GameNotifier extends StateNotifier<GameState> {
     // Cancel creature throws on both swapped cells — items moved, no penalty
     _cancelCreatureThrowAt(fc, fr);
     _cancelCreatureThrowAt(tc, tr);
+    // NEXUS CORE: swap hacked states with items
+    nexusCoreController.onCellsSwapped(fc, fr, tc, tr);
   }
 
   void _mergeItems(int fc, int fr, int tc, int tr) {
