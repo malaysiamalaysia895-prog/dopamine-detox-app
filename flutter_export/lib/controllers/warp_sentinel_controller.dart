@@ -165,7 +165,9 @@ class WarpSentinelController extends ChangeNotifier {
       // Use actual grid black hole positions (no random picking)
       blackHoles    = List.of(blackHolePositions);
       if (blackHoles.isEmpty) blackHoles = [(gridCols ~/ 2, 1)]; // fallback
-      bossHoleIndex = blackHoles.length > 1 ? _rng.nextInt(2) : 0;
+      // Always start with hole[0] as the active boss hole — deterministic, not random.
+      // For L41: hole[0]=(1,2) left-center, hole[1]=(4,3) right-center.
+      bossHoleIndex = 0;
       notifyListeners();
 
       // Phase 2: entry animation 3.2s

@@ -500,9 +500,26 @@ class GameNotifier extends StateNotifier<GameState> {
     int posIdx = 0;
 
     // Black Holes (Phase 5)
-    for (int i = 0; i < cfg.blackHoleCount && posIdx < positions.length; i++) {
-      final (c, r) = positions[posIdx++];
-      cells[c][r] = const GridCell(obstacle: ObstacleType.blackHole);
+    // Level 41 (Warp Sentinel) uses FIXED positions so coverage is always optimal
+    // and consistent across every restart.
+    //   Hole A = (col=1, row=2): 3×3 zone covers cols 0-2, rows 1-3 (left-center cluster)
+    //   Hole B = (col=4, row=3): 3×3 zone covers cols 3-5, rows 2-4 (right-center cluster)
+    // Both zones avoid row 0 (boss anchor) and row 5 (locked corners), together
+    // covering 18 of 36 cells in the two highest-density item areas.
+    if (cfg.number == 41) {
+      const fixedHoles = [(1, 2), (4, 3)];
+      for (final hole in fixedHoles) {
+        final hc = hole.$1;
+        final hr = hole.$2;
+        if (hc < cfg.gridCols && hr < cfg.gridRows && cells[hc][hr].isEmpty) {
+          cells[hc][hr] = const GridCell(obstacle: ObstacleType.blackHole);
+        }
+      }
+    } else {
+      for (int i = 0; i < cfg.blackHoleCount && posIdx < positions.length; i++) {
+        final (c, r) = positions[posIdx++];
+        cells[c][r] = const GridCell(obstacle: ObstacleType.blackHole);
+      }
     }
 
     // Dusty Webs (Phase 1 L6+)
