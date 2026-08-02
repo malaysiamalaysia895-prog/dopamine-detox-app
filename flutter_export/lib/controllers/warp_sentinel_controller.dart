@@ -89,6 +89,10 @@ class WarpSentinelController extends ChangeNotifier {
   // ── Overload flash (black hole was fed) ───────────────────────────────────
   bool overloadFlash = false;
 
+  // ── Recent siphon events (col, row) for overlay particle animation ─────────
+  // Each entry is cleared automatically after 850ms (animation duration).
+  List<(int, int)> recentSiphons = [];
+
   // ── Callbacks ──────────────────────────────────────────────────────────────
   void Function(int col, int row)? onCellSiphoned;
   void Function(int energy)?       onPlayerPenalty;
@@ -196,22 +200,40 @@ class WarpSentinelController extends ChangeNotifier {
   }
 
   void onCellMoved(int fc, int fr, int tc, int tr) {
-    // Pull zone follows items only during warning — during pull the zone is fixed
+    // During WARNING: only follow item if it stays inside the actual 3×3 zone.
+    // If the player drags the item OUTSIDE the zone, drop it from pullZoneCells
+    // so the pull phase CANNOT siphon it from its new safe position.
+    // During PULL: zone is fixed — moving items does not change pullZoneCells,
+    // but isCellOccupied check in _pullNearestItem will correctly skip the old
+    // cell since the item is gone from there.
     if (siphonPhase == WarpSiphonPhase.warning) {
       if (pullZoneCells.contains((fc, fr))) {
         pullZoneCells.remove((fc, fr));
-        pullZoneCells.add((tc, tr));
+        if (blackHoles.isNotEmpty) {
+          final hole = blackHoles[bossHoleIndex];
+          final zone = _compute3x3(hole.$1, hole.$2);
+          // Only re-track item if it moved to a cell still inside the zone
+          if (zone.contains((tc, tr))) pullZoneCells.add((tc, tr));
+          // else: item escaped the danger zone — safe, not tracked
+        }
         notifyListeners();
       }
     }
   }
 
   void onCellsSwapped(int fc, int fr, int tc, int tr) {
-    if (siphonPhase == WarpSiphonPhase.warning) {
-      final fa = pullZoneCells.contains((fc, fr));
-      final ta = pullZoneCells.contains((tc, tr));
-      if (fa) { pullZoneCells.remove((fc, fr)); pullZoneCells.add((tc, tr)); }
-      if (ta) { pullZoneCells.remove((tc, tr)); pullZoneCells.add((fc, fr)); }
+    if (siphonPhase == WarpSiphonPhase.warning && blackHoles.isNotEmpty) {
+      final zone = _compute3x3(blackHoles[bossHoleIndex].$1, blackHoles[bossHoleIndex].$2);
+      final fa   = pullZoneCells.contains((fc, fr));
+      final ta   = pullZoneCells.contains((tc, tr));
+      if (fa) {
+        pullZoneCells.remove((fc, fr));
+        if (zone.contains((tc, tr))) pullZoneCells.add((tc, tr));
+      }
+      if (ta) {
+        pullZoneCells.remove((tc, tr));
+        if (zone.contains((fc, fr))) pullZoneCells.add((fc, fr));
+      }
       if (fa || ta) notifyListeners();
     }
   }
@@ -381,6 +403,14 @@ class WarpSentinelController extends ChangeNotifier {
 
     if (candidates.isEmpty) return;
     final target = candidates.first;
+
+    // ── Track for overlay siphon animation (auto-clear after 850ms) ──────────
+    recentSiphons.add((target.$1, target.$2));
+    Timer(const Duration(milliseconds: 850), () {
+      recentSiphons.remove((target.$1, target.$2));
+      if (!_disposed) notifyListeners();
+    });
+
     onCellSiphoned?.call(target.$1, target.$2);
     pullZoneCells.remove(target);
     try { HapticFeedback.mediumImpact(); } catch (_) {}
@@ -388,9 +418,10 @@ class WarpSentinelController extends ChangeNotifier {
   }
 
   void _endPullPhase() {
-    siphonPhase      = WarpSiphonPhase.inactive;
+    siphonPhase        = WarpSiphonPhase.inactive;
     isAttackPoseActive = false;
     pullZoneCells.clear();
+    recentSiphons.clear();
     notifyListeners();
     _scheduleCooldown();
   }
@@ -546,6 +577,7 @@ class WarpSentinelController extends ChangeNotifier {
     isAttackPoseActive = false;
     blackHoles       = [];
     pullZoneCells.clear();
+    recentSiphons.clear();
     isStunned        = false;
     dialogueText     = null;
     winFlashReady    = false;

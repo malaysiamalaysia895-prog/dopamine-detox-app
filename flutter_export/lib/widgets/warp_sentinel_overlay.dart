@@ -50,21 +50,25 @@ class _WarpSentinelOverlayState extends State<WarpSentinelOverlay>
   late final AnimationController _teleport;
   late final AnimationController _win;
   late final AnimationController _particle;
+  // Drives the particle-streak animation when an item is siphoned into the hole
+  late final AnimationController _siphonFlash;
 
   @override
   void initState() {
     super.initState();
-    _bob       = AnimationController(vsync: this, duration: const Duration(milliseconds: 2600))..repeat(reverse: true);
-    _holeSpin  = AnimationController(vsync: this, duration: const Duration(milliseconds: 2800))..repeat();
-    _corePulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 800))..repeat(reverse: true);
-    _vortex    = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat();
-    _warnPulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 380))..repeat(reverse: true);
-    _shake     = AnimationController(vsync: this, duration: const Duration(milliseconds: 55))..repeat();
-    _glitch    = AnimationController(vsync: this, duration: const Duration(milliseconds: 75))..repeat();
-    _entry     = AnimationController(vsync: this, duration: const Duration(milliseconds: 3200));
-    _teleport  = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
-    _win       = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
-    _particle  = AnimationController(vsync: this, duration: const Duration(milliseconds: 3800))..repeat();
+    _bob        = AnimationController(vsync: this, duration: const Duration(milliseconds: 2600))..repeat(reverse: true);
+    _holeSpin   = AnimationController(vsync: this, duration: const Duration(milliseconds: 2800))..repeat();
+    _corePulse  = AnimationController(vsync: this, duration: const Duration(milliseconds: 800))..repeat(reverse: true);
+    _vortex     = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat();
+    _warnPulse  = AnimationController(vsync: this, duration: const Duration(milliseconds: 380))..repeat(reverse: true);
+    _shake      = AnimationController(vsync: this, duration: const Duration(milliseconds: 55))..repeat();
+    _glitch     = AnimationController(vsync: this, duration: const Duration(milliseconds: 75))..repeat();
+    _entry      = AnimationController(vsync: this, duration: const Duration(milliseconds: 3200));
+    _teleport   = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
+    _win        = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
+    _particle   = AnimationController(vsync: this, duration: const Duration(milliseconds: 3800))..repeat();
+    // Siphon streak: 850ms one-shot, re-triggered each time an item is siphoned
+    _siphonFlash = AnimationController(vsync: this, duration: const Duration(milliseconds: 850));
     widget.controller.addListener(_onChanged);
   }
 
@@ -91,6 +95,10 @@ class _WarpSentinelOverlayState extends State<WarpSentinelOverlay>
     if (c.phase == WarpSentinelPhase.winBlast && !_win.isAnimating) {
       _win.forward(from: 0);
     }
+    // Trigger siphon streak animation each time an item is newly siphoned
+    if (c.recentSiphons.isNotEmpty && !_siphonFlash.isAnimating) {
+      _siphonFlash.forward(from: 0);
+    }
     setState(() {});
   }
 
@@ -98,7 +106,8 @@ class _WarpSentinelOverlayState extends State<WarpSentinelOverlay>
   void dispose() {
     widget.controller.removeListener(_onChanged);
     for (final ac in [_bob, _holeSpin, _corePulse, _vortex, _warnPulse,
-                      _shake, _glitch, _entry, _teleport, _win, _particle]) {
+                      _shake, _glitch, _entry, _teleport, _win, _particle,
+                      _siphonFlash]) {
       ac.dispose();
     }
     super.dispose();
@@ -112,7 +121,7 @@ class _WarpSentinelOverlayState extends State<WarpSentinelOverlay>
     return AnimatedBuilder(
       animation: Listenable.merge([
         _bob, _holeSpin, _corePulse, _vortex, _warnPulse,
-        _shake, _glitch, _entry, _teleport, _win, _particle,
+        _shake, _glitch, _entry, _teleport, _win, _particle, _siphonFlash,
       ]),
       builder: (_, __) {
         final shaking = widget.controller.isPulling;
@@ -121,19 +130,20 @@ class _WarpSentinelOverlayState extends State<WarpSentinelOverlay>
 
         Widget scene = CustomPaint(
           painter: _WarpScenePainter(
-            controller:  widget.controller,
-            getCellRect: widget.getCellRect,
-            bobT:        _bob.value,
-            holeSpinT:   _holeSpin.value,
-            corePulseT:  _corePulse.value,
-            vortexT:     _vortex.value,
-            warnPulseT:  _warnPulse.value,
-            shakeT:      _shake.value,
-            glitchT:     _glitch.value,
-            entryT:      _entry.value,
-            teleportT:   _teleport.value,
-            winT:        _win.value,
-            particleT:   _particle.value,
+            controller:    widget.controller,
+            getCellRect:   widget.getCellRect,
+            bobT:          _bob.value,
+            holeSpinT:     _holeSpin.value,
+            corePulseT:    _corePulse.value,
+            vortexT:       _vortex.value,
+            warnPulseT:    _warnPulse.value,
+            shakeT:        _shake.value,
+            glitchT:       _glitch.value,
+            entryT:        _entry.value,
+            teleportT:     _teleport.value,
+            winT:          _win.value,
+            particleT:     _particle.value,
+            siphonFlashT:  _siphonFlash.value,
           ),
           child: _buildHUD(widget.controller),
         );
@@ -171,6 +181,7 @@ class _WarpScenePainter extends CustomPainter {
   final Rect? Function(int col, int row) getCellRect;
   final double bobT, holeSpinT, corePulseT, vortexT, warnPulseT;
   final double shakeT, glitchT, entryT, teleportT, winT, particleT;
+  final double siphonFlashT; // 0→1 one-shot per siphon event
 
   const _WarpScenePainter({
     required this.controller,
@@ -178,7 +189,7 @@ class _WarpScenePainter extends CustomPainter {
     required this.bobT, required this.holeSpinT, required this.corePulseT,
     required this.vortexT, required this.warnPulseT, required this.shakeT,
     required this.glitchT, required this.entryT, required this.teleportT,
-    required this.winT, required this.particleT,
+    required this.winT, required this.particleT, required this.siphonFlashT,
   });
 
   @override
@@ -210,6 +221,16 @@ class _WarpScenePainter extends CustomPainter {
       final hr = getCellRect(c.blackHoles[c.bossHoleIndex].$1,
                              c.blackHoles[c.bossHoleIndex].$2);
       if (hr != null) _paintAttackVortex(canvas, hr.center, vortexT, c.isPulling);
+    }
+
+    // ── Siphon streak: item spiraling into the black hole ─────────────────────
+    if (c.recentSiphons.isNotEmpty) {
+      _paintSiphonStreaks(canvas, c);
+    }
+
+    // ── Targeting reticle: lock-on diamond on nearest item during pull ─────────
+    if (c.isPulling && c.blackHoles.isNotEmpty && c.pullZoneCells.isNotEmpty) {
+      _paintTargetingReticle(canvas, c);
     }
 
     // Overload flash
@@ -950,35 +971,371 @@ class _WarpScenePainter extends CustomPainter {
     p.maskFilter = null;
   }
 
-  // ── Glitch screen ─────────────────────────────────────────────────────────
+  // ── Glitch screen — PREMIUM boss entry ────────────────────────────────────
 
   void _paintGlitch(Canvas canvas, Size size) {
-    final rng = Random(DateTime.now().millisecondsSinceEpoch ~/ 70);
+    final rng = Random(DateTime.now().millisecondsSinceEpoch ~/ 60);
     final p   = Paint();
-    p.color   = const Color(0xCC000000);
+    final cx  = size.width / 2;
+    final cy  = size.height * 0.40;
+
+    // ── Deep-space base gradient ──────────────────────────────────────────────
+    p.shader = ui.Gradient.linear(
+        Offset.zero, Offset(0, size.height),
+        [const Color(0xFF000010), const Color(0xFF08001F), const Color(0xFF000010)]);
     canvas.drawRect(Offset.zero & size, p);
+    p.shader = null;
 
-    for (int i = 0; i < 12 + rng.nextInt(6); i++) {
-      final y = rng.nextDouble() * size.height;
-      final h = 1.2 + rng.nextDouble() * 20;
-      p.color = [const Color(0xAA9B30FF), const Color(0xAA00FFEE),
-                  const Color(0xAAFF2266), const Color(0x88FFFFFF)][rng.nextInt(4)];
-      canvas.drawRect(Rect.fromLTWH(0, y, size.width, h), p);
+    // ── CRT scanline grid (subtle horizontal bands) ───────────────────────────
+    p.style = PaintingStyle.fill;
+    for (int i = 0; i < size.height.toInt(); i += 3) {
+      p.color = Colors.black.withOpacity(0.17);
+      canvas.drawRect(Rect.fromLTWH(0, i.toDouble(), size.width, 1.2), p);
     }
-    final tp = TextPainter(
-      text: const TextSpan(text: '⚡  WARP SENTINEL  ⚡',
-        style: TextStyle(color: Color(0xFFCE93FF), fontSize: 24,
-            fontWeight: FontWeight.w900, letterSpacing: 6,
-            shadows: [Shadow(color: Color(0xCC9B30FF), blurRadius: 22)])),
-      textDirection: TextDirection.ltr)..layout();
-    tp.paint(canvas, Offset((size.width - tp.width) / 2, size.height * .38));
 
-    final tp2 = TextPainter(
+    // ── Chromatic-aberration glitch bands ─────────────────────────────────────
+    final numBands = 9 + rng.nextInt(9);
+    for (int i = 0; i < numBands; i++) {
+      final y     = rng.nextDouble() * size.height;
+      final h     = 0.8 + rng.nextDouble() * 20;
+      final shift = (rng.nextDouble() - 0.5) * 24;
+      final cols  = [
+        const Color(0xBB9B30FF), const Color(0xBB00FFEE),
+        const Color(0xBBFF2266), const Color(0x66FFFFFF), const Color(0x99FF6600),
+      ];
+      p.color = cols[rng.nextInt(cols.length)];
+      canvas.save();
+      canvas.translate(shift, 0);
+      canvas.drawRect(Rect.fromLTWH(0, y, size.width, h), p);
+      canvas.restore();
+    }
+
+    // ── Vertical tear lines ───────────────────────────────────────────────────
+    p..style = PaintingStyle.stroke..strokeWidth = 1.0;
+    for (int i = 0; i < 4 + rng.nextInt(4); i++) {
+      final x = rng.nextDouble() * size.width;
+      p..color = const Color(0x449B30FF)
+       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
+      canvas.drawLine(Offset(x, 0),
+          Offset(x + (rng.nextDouble() - 0.5) * 18, size.height), p);
+    }
+    p..maskFilter = null..style = PaintingStyle.fill;
+
+    // ── Matrix-style Katakana column rain ─────────────────────────────────────
+    const colW = 18.0;
+    final cols = (size.width / colW).ceil();
+    for (int c = 0; c < cols; c++) {
+      if (rng.nextDouble() > 0.28) continue; // ~28% of columns active
+      final headY = rng.nextDouble() * size.height;
+      for (int row = 0; row < 7; row++) {
+        final y = headY - row * 14.0;
+        if (y < 0 || y > size.height) continue;
+        final alpha = ((1.0 - row / 7.0) * (row == 0 ? 1.0 : 0.65)).clamp(0.0, 1.0);
+        final char  = String.fromCharCode(0x30A0 + rng.nextInt(96)); // Katakana
+        final tp    = TextPainter(
+          text: TextSpan(
+            text: char,
+            style: TextStyle(
+              color: const Color(0xFF9B30FF).withOpacity(alpha),
+              fontSize: 11, fontWeight: FontWeight.w700,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, Offset(c * colW, y));
+      }
+    }
+
+    // ── Central power-surge aura ──────────────────────────────────────────────
+    for (final args in [
+      (110.0, const Color(0x339B30FF), 36.0),
+      (72.0,  const Color(0x559B30FF), 20.0),
+      (42.0,  const Color(0x8800CCEE), 12.0),
+    ]) {
+      p
+        ..color       = args.$2
+        ..maskFilter  = MaskFilter.blur(BlurStyle.normal, args.$3);
+      canvas.drawCircle(Offset(cx, cy), args.$1, p);
+    }
+    p.maskFilter = null;
+
+    // Concentric ring decorations
+    p..style = PaintingStyle.stroke..strokeWidth = 1.3;
+    for (int r = 0; r < 6; r++) {
+      p
+        ..color      = const Color(0xFF9B30FF).withOpacity(0.22 - r * 0.03)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
+      canvas.drawCircle(Offset(cx, cy), 48 + r * 19.0, p);
+      p.maskFilter = null;
+    }
+    p.style = PaintingStyle.fill;
+
+    // ── Boss title — multi-layer glow ─────────────────────────────────────────
+    // Phase tag (small, above title)
+    final phaseTp = TextPainter(
+      text: const TextSpan(text: '[ LEVEL 41 — MASTER OF THE UNIVERSE ]',
+        style: TextStyle(
+          color: Color(0xFF5533AA), fontSize: 9,
+          fontWeight: FontWeight.w600, letterSpacing: 2.5,
+        )),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    phaseTp.paint(canvas, Offset(cx - phaseTp.width / 2, cy - 48));
+
+    // Outer glow layers (blurred, stacked for bloom effect)
+    for (final blur in [32.0, 20.0, 10.0]) {
+      final gtp = TextPainter(
+        text: TextSpan(
+          text: '⚡  WARP SENTINEL  ⚡',
+          style: TextStyle(
+            color: const Color(0xFF9B30FF).withOpacity(0.55),
+            fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 5,
+            shadows: [Shadow(color: const Color(0xFF9B30FF), blurRadius: blur)],
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      gtp.paint(canvas, Offset(cx - gtp.width / 2, cy - gtp.height / 2));
+    }
+
+    // Sharp foreground title
+    final titleTp = TextPainter(
+      text: const TextSpan(text: '⚡  WARP SENTINEL  ⚡',
+        style: TextStyle(
+          color: Color(0xFFEEAAFF),
+          fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 5,
+          shadows: [
+            Shadow(color: Color(0xFF9B30FF), blurRadius: 24),
+            Shadow(color: Color(0xFFCC66FF), blurRadius: 7),
+          ],
+        )),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    titleTp.paint(canvas, Offset(cx - titleTp.width / 2, cy - titleTp.height / 2));
+
+    // Subtitle
+    final subTp = TextPainter(
       text: const TextSpan(text: 'REALITY DISTORTION ONLINE',
-        style: TextStyle(color: Color(0xFF7744AA), fontSize: 11,
-            fontWeight: FontWeight.w700, letterSpacing: 3)),
-      textDirection: TextDirection.ltr)..layout();
-    tp2.paint(canvas, Offset((size.width - tp2.width) / 2, size.height * .38 + 38));
+        style: TextStyle(
+          color: Color(0xFF7744BB), fontSize: 11,
+          fontWeight: FontWeight.w700, letterSpacing: 4,
+          shadows: [Shadow(color: Color(0xFF9B30FF), blurRadius: 12)],
+        )),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    subTp.paint(canvas, Offset(cx - subTp.width / 2, cy + titleTp.height / 2 + 10));
+
+    // ── Bottom warning bar ────────────────────────────────────────────────────
+    final warnY = size.height * 0.82;
+    p
+      ..color = const Color(0x44FF2266)
+      ..style = PaintingStyle.fill;
+    canvas.drawRect(Rect.fromLTWH(0, warnY, size.width, 28), p);
+    p
+      ..color       = const Color(0x88FF4488)
+      ..style       = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+    canvas.drawLine(Offset(0, warnY), Offset(size.width, warnY), p);
+    canvas.drawLine(Offset(0, warnY + 28), Offset(size.width, warnY + 28), p);
+    p.style = PaintingStyle.fill;
+    final warnTp = TextPainter(
+      text: const TextSpan(text: '⚠  GRAVITATIONAL ANOMALY DETECTED  ⚠',
+        style: TextStyle(
+          color: Color(0xFFFF6699), fontSize: 10,
+          fontWeight: FontWeight.w700, letterSpacing: 2,
+        )),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    warnTp.paint(canvas, Offset(cx - warnTp.width / 2, warnY + 6));
+
+    // ── Corner bracket decorations ────────────────────────────────────────────
+    p
+      ..color       = const Color(0xFF9B30FF).withOpacity(0.52)
+      ..style       = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+    const bl = 26.0;
+    const mg = 16.0;
+    for (final corner in [
+      (Offset(mg, mg),                                  1.0,  1.0),
+      (Offset(size.width - mg, mg),                    -1.0,  1.0),
+      (Offset(mg, size.height - mg),                    1.0, -1.0),
+      (Offset(size.width - mg, size.height - mg),      -1.0, -1.0),
+    ]) {
+      canvas.drawLine(corner.$1, Offset(corner.$1.dx + corner.$2 * bl, corner.$1.dy), p);
+      canvas.drawLine(corner.$1, Offset(corner.$1.dx, corner.$1.dy + corner.$3 * bl), p);
+    }
+    p.style = PaintingStyle.fill;
+  }
+
+  // ── Siphon streaks — items spiraling into the black hole ──────────────────
+
+  void _paintSiphonStreaks(Canvas canvas, WarpSentinelController c) {
+    if (c.blackHoles.isEmpty || siphonFlashT <= 0) return;
+    final holeRect = getCellRect(
+        c.blackHoles[c.bossHoleIndex].$1, c.blackHoles[c.bossHoleIndex].$2);
+    if (holeRect == null) return;
+    final holePt = holeRect.center;
+    final t      = siphonFlashT; // 0 → 1 over 850ms
+
+    for (final siphon in c.recentSiphons) {
+      final cellRect = getCellRect(siphon.$1, siphon.$2);
+      if (cellRect == null) continue;
+      final fromPt = cellRect.center;
+      final dir    = holePt - fromPt;
+      final dist   = dir.distance.clamp(1.0, 9999.0);
+      final dirN   = dir / dist;
+      final rng    = Random(siphon.$1 * 137 + siphon.$2 * 29);
+      final p      = Paint();
+
+      // ── Phase 1 (t 0→0.35): bright white flash at source cell ────────────
+      final flashA = (1.0 - t / 0.35).clamp(0.0, 1.0);
+      if (flashA > 0) {
+        p
+          ..color      = const Color(0xFFFFFFFF).withOpacity(flashA * 0.80)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 20)
+          ..style      = PaintingStyle.fill;
+        canvas.drawCircle(fromPt, cellRect.width * (0.44 + flashA * 0.22), p);
+        p.maskFilter = null;
+      }
+
+      // ── Phase 2 (t 0.12→0.88): particle stream from cell → hole ──────────
+      final streamT = ((t - 0.12) / 0.76).clamp(0.0, 1.0);
+      if (streamT > 0) {
+        p
+          ..style      = PaintingStyle.fill
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+
+        for (int i = 0; i < 22; i++) {
+          // Each particle starts offset in time so they spread along the path
+          final prog = ((streamT * 1.5) - (i / 22.0) * 0.7).clamp(0.0, 1.0);
+          if (prog <= 0) continue;
+
+          // Spiral offset (tightens near the hole)
+          final angle    = prog * pi * 5 + (i / 22.0) * 2 * pi;
+          final spiralR  = (1.0 - prog) * 14.0 * (rng.nextDouble() * 0.5 + 0.75);
+          final along    = fromPt + dirN * (dist * prog);
+          final pos      = Offset(
+              along.dx + cos(angle) * spiralR,
+              along.dy + sin(angle) * spiralR,
+          );
+
+          final sz    = (4.0 * (1 - prog * 0.65)).clamp(0.8, 4.5);
+          final alpha = ((1.0 - prog * 0.45) * (rng.nextDouble() * 0.4 + 0.6))
+              .clamp(0.0, 1.0);
+          p.color = Color.lerp(
+              const Color(0xFFFFFFFF),
+              const Color(0xFF9B30FF),
+              prog,
+          )!.withOpacity(alpha);
+          canvas.drawCircle(pos, sz, p);
+        }
+        p.maskFilter = null;
+
+        // Energy bolt (main chord line, fades in then out)
+        final boltA = (sin(streamT * pi) * 0.75).clamp(0.0, 1.0);
+        p
+          ..style       = PaintingStyle.stroke
+          ..strokeWidth = 2.2
+          ..maskFilter  = const MaskFilter.blur(BlurStyle.normal, 5)
+          ..color       = const Color(0xFFDD88FF).withOpacity(boltA);
+        canvas.drawLine(fromPt, holePt, p);
+        p.maskFilter = null;
+      }
+
+      // ── Phase 3 (t 0.62→1.0): hole pulse on impact ────────────────────────
+      final pulseT = ((t - 0.62) / 0.38).clamp(0.0, 1.0);
+      if (pulseT > 0) {
+        p
+          ..color      = const Color(0xFFAA44FF).withOpacity(sin(pulseT * pi) * 0.72)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 24)
+          ..style      = PaintingStyle.fill;
+        canvas.drawCircle(holePt, holeRect.width * (0.50 + pulseT * 0.85), p);
+        p.maskFilter = null;
+      }
+    }
+  }
+
+  // ── Targeting reticle — lock-on diamond on nearest item during pull ───────
+
+  void _paintTargetingReticle(Canvas canvas, WarpSentinelController c) {
+    if (c.blackHoles.isEmpty || c.pullZoneCells.isEmpty) return;
+    final hole     = c.blackHoles[c.bossHoleIndex];
+    final holeRect = getCellRect(hole.$1, hole.$2);
+    if (holeRect == null) return;
+
+    // Find the nearest occupied-ish cell in pull zone (same order as controller)
+    (int, int)? nearest;
+    double minDist = double.infinity;
+    for (final cell in c.pullZoneCells) {
+      final d = pow(cell.$1 - hole.$1, 2) + pow(cell.$2 - hole.$2, 2).toDouble();
+      if (d < minDist) { minDist = d; nearest = cell; }
+    }
+    if (nearest == null) return;
+
+    final targetRect = getCellRect(nearest.$1, nearest.$2);
+    if (targetRect == null) return;
+    final center = targetRect.center;
+    final r      = targetRect.width * 0.44;
+    final pulse  = 0.55 + warnPulseT * 0.45; // rides existing warn-pulse
+    final p      = Paint();
+
+    // ── Lock-on diamond ────────────────────────────────────────────────────
+    final diamond = Path()
+      ..moveTo(center.dx,          center.dy - r * 1.45)
+      ..lineTo(center.dx + r * 1.45, center.dy)
+      ..lineTo(center.dx,          center.dy + r * 1.45)
+      ..lineTo(center.dx - r * 1.45, center.dy)
+      ..close();
+
+    // Outer glow
+    p
+      ..color       = const Color(0xFFFF2244).withOpacity(pulse * 0.38)
+      ..maskFilter  = const MaskFilter.blur(BlurStyle.normal, 7)
+      ..style       = PaintingStyle.stroke
+      ..strokeWidth = 4.0;
+    canvas.drawPath(diamond, p);
+    p.maskFilter = null;
+
+    // Sharp diamond edge
+    p
+      ..color       = const Color(0xFFFF3355).withOpacity(pulse * 0.95)
+      ..strokeWidth = 1.8;
+    canvas.drawPath(diamond, p);
+
+    // ── Corner brackets (HUD-style) ────────────────────────────────────────
+    final bl = r * 0.55;
+    p..strokeWidth = 1.5..color = const Color(0xFFFF5577).withOpacity(pulse);
+    for (final corner in [
+      (Offset(center.dx - r, center.dy - r),  1.0,  1.0),
+      (Offset(center.dx + r, center.dy - r), -1.0,  1.0),
+      (Offset(center.dx - r, center.dy + r),  1.0, -1.0),
+      (Offset(center.dx + r, center.dy + r), -1.0, -1.0),
+    ]) {
+      canvas.drawLine(corner.$1, Offset(corner.$1.dx + corner.$2 * bl, corner.$1.dy), p);
+      canvas.drawLine(corner.$1, Offset(corner.$1.dx, corner.$1.dy + corner.$3 * bl), p);
+    }
+
+    // ── Center dot ────────────────────────────────────────────────────────
+    p
+      ..style      = PaintingStyle.fill
+      ..color      = const Color(0xFFFF2244).withOpacity(pulse * 0.95)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7);
+    canvas.drawCircle(center, 4.5, p);
+    p.maskFilter = null;
+    p.color = const Color(0xFFFFFFFF).withOpacity(pulse * 0.90);
+    canvas.drawCircle(center, 2.2, p);
+
+    // ── Gravity beam from reticle to black hole ────────────────────────────
+    p
+      ..style       = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..color       = const Color(0xFFFF2244).withOpacity(pulse * 0.42)
+      ..maskFilter  = const MaskFilter.blur(BlurStyle.normal, 4);
+    canvas.drawLine(center, holeRect.center, p);
+    p.maskFilter = null;
+    p..strokeWidth = 0.7..color = const Color(0xFFFF6688).withOpacity(pulse * 0.72);
+    canvas.drawLine(center, holeRect.center, p);
+    p.style = PaintingStyle.fill;
   }
 
   // ── Black hole ────────────────────────────────────────────────────────────
