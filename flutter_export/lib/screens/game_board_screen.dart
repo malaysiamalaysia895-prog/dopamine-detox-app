@@ -1137,7 +1137,8 @@ class _GridCellState extends ConsumerState<_GridCell>
   late AnimationController _mergeGlowCtrl;
   late AnimationController _burstCtrl;
   late AnimationController _mergePulseCtrl;
-  late AnimationController _decoyHitCtrl;   // floating -30 ⚡ text on decoy tap
+  late AnimationController _decoyHitCtrl;    // floating -30 ⚡ text on decoy tap (L5-20)
+  late AnimationController _decoyHit20Ctrl; // floating -20 ⚡ text on decoy tap (L41)
   late Animation<double>   _scaleAnim;
   late Animation<double>   _shakeAnim;
   late Animation<double>   _mergeGlowAnim;
@@ -1154,7 +1155,8 @@ class _GridCellState extends ConsumerState<_GridCell>
     _shakeCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 300));
     _mergeGlowCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
     _burstCtrl     = AnimationController(vsync: this, duration: const Duration(milliseconds: 720));
-    _decoyHitCtrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+    _decoyHitCtrl    = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+    _decoyHit20Ctrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
 
     _scaleAnim = TweenSequence<double>([
       TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.25).chain(CurveTween(curve: Curves.elasticOut)), weight: 60),
@@ -1189,10 +1191,12 @@ class _GridCellState extends ConsumerState<_GridCell>
     _burstCtrl.dispose();
     _mergePulseCtrl.dispose();
     _decoyHitCtrl.dispose();
+    _decoyHit20Ctrl.dispose();
     super.dispose();
   }
 
-  void _triggerDecoyHit() => _decoyHitCtrl.forward(from: 0);
+  void _triggerDecoyHit()   => _decoyHitCtrl.forward(from: 0);
+  void _triggerDecoyHit20() => _decoyHit20Ctrl.forward(from: 0);
 
   void _triggerSpawn() => _scaleCtrl.forward(from: 0);
   void _triggerMerge() {
@@ -1237,7 +1241,8 @@ class _GridCellState extends ConsumerState<_GridCell>
             case AnimType.error:       _triggerError();  break;
             case AnimType.unlock:      _triggerSpawn();  break;
             case AnimType.hazardHit:   break; // handled by _HazardFlashOverlay
-            case AnimType.decoyHit:    _triggerDecoyHit(); break;
+            case AnimType.decoyHit:    _triggerDecoyHit();   break;
+            case AnimType.decoyHit20:  _triggerDecoyHit20(); break;
           }
           ref.read(gameProvider.notifier).consumeAnimation(anim);
         }
@@ -1497,6 +1502,7 @@ class _GridCellState extends ConsumerState<_GridCell>
               child: CreatureThrowCountdown(secondsLeft: myCreatureThrow.secondsLeft),
             ),
           ),
+        // Floating -30 ⚡ for L5-20 decoy penalty
         IgnorePointer(
           child: SizedBox.shrink(
             child: AnimatedBuilder(
@@ -1517,6 +1523,36 @@ class _GridCellState extends ConsumerState<_GridCell>
                         shadows: const [
                           Shadow(color: Colors.red, blurRadius: 10),
                           Shadow(color: Colors.red, blurRadius: 20),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        // Floating -20 ⚡ for L41 warp glitchy decoy penalty
+        IgnorePointer(
+          child: SizedBox.shrink(
+            child: AnimatedBuilder(
+              animation: _decoyHit20Ctrl,
+              builder: (_, __) {
+                final t = _decoyHit20Ctrl.value;
+                if (t <= 0) return const SizedBox.shrink();
+                return Transform.translate(
+                  offset: Offset(0, -widget.size * 2.6 * t),
+                  child: Opacity(
+                    opacity: (1.0 - t * 1.3).clamp(0.0, 1.0),
+                    child: Text(
+                      '-20 ⚡',
+                      style: TextStyle(
+                        color: Colors.orangeAccent,
+                        fontSize: widget.size * 0.24,
+                        fontWeight: FontWeight.w900,
+                        shadows: const [
+                          Shadow(color: Colors.deepOrange, blurRadius: 10),
+                          Shadow(color: Colors.deepOrange, blurRadius: 20),
                         ],
                       ),
                     ),
