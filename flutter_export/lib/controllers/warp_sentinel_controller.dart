@@ -97,6 +97,8 @@ class WarpSentinelController extends ChangeNotifier {
   void Function(int col, int row)? onCellSiphoned;
   void Function(int energy)?       onPlayerPenalty;
   bool Function(int col, int row)? isCellOccupied;
+  /// Fired when the boss teleports to a new hole. Arg = new bossHoleIndex.
+  void Function(int newBossHoleIndex)? onBossHoleSwitched;
 
   bool         _disposed    = false;
   final Random _rng         = Random();
@@ -470,6 +472,8 @@ class WarpSentinelController extends ChangeNotifier {
         if (_disposed) return;
         // Switch hole
         bossHoleIndex = toHoleIndex;
+        // Notify game_provider so L41 glitchy decoys reposition to opposite side
+        onBossHoleSwitched?.call(bossHoleIndex);
         // Phase: materialise from other hole
         teleportPhase = WarpTeleportPhase.materializing;
         notifyListeners();
