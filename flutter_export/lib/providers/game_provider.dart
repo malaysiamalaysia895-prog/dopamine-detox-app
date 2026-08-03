@@ -49,7 +49,7 @@ class PendingAnimation {
   const PendingAnimation(this.col, this.row, this.type);
 }
 
-enum AnimType { spawn, merge, error, unlock, hazardHit, upwardSpawn, decoyHit }
+enum AnimType { spawn, merge, error, unlock, hazardHit, upwardSpawn, decoyHit, decoyHit20 }
 
 // ─── Game State (Immutable) ───────────────────────────────────────────────────
 
@@ -592,6 +592,15 @@ class GameNotifier extends StateNotifier<GameState> {
       }
     }
 
+    // ── L41 Glitchy Decoys (4 items, opposite side of active black hole) ─────
+    // On start bossHoleIndex=0 (Hole A/LEFT at col=1 active) → decoys on RIGHT.
+    // Positions are mathematically fixed outside both holes' 3×3 pull zones:
+    //   RIGHT positions (bossHoleIndex=0): (3,0),(5,0),(3,5),(5,5)
+    //   LEFT  positions (bossHoleIndex=1): (0,0),(2,0),(0,5),(2,5)
+    if (cfg.hasL41Decoys) {
+      _placeL41DecoysCells(cells, 0, cfg.gridCols, cfg.gridRows, cfg.spawnerItemId);
+    }
+
     return cells;
   }
 
@@ -629,7 +638,9 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   // ── Glitched Decoy Tap ────────────────────────────────────────────────────
-  // Penalty: tapping a Glitched Decoy costs -30 Energy + screen flash.
+  // Penalty: tapping a Glitched Decoy costs:
+  //   -30 Energy on L5-20 (standard decoys)
+  //   -20 Energy on L41  (warp glitchy decoys)
   // If energy drops to 0, the zeroEnergy dialog fires.
 
   void tapDecoy(int col, int row) {
@@ -640,10 +651,14 @@ class GameNotifier extends StateNotifier<GameState> {
     HapticFeedback.heavyImpact();
     AudioManager.instance.playErrorBuzz();
 
-    final newEnergy = (state.energy - 30).clamp(0, state.maxEnergy);
+    final isL41Decoy = state.currentLevel.hasL41Decoys;
+    final penalty    = isL41Decoy ? 20 : 30;
+    final hitAnim    = isL41Decoy ? AnimType.decoyHit20 : AnimType.decoyHit;
+
+    final newEnergy = (state.energy - penalty).clamp(0, state.maxEnergy);
     final anims = [
       ...state.pendingAnimations,
-      PendingAnimation(col, row, AnimType.decoyHit),     // floating -30⚡ text
+      PendingAnimation(col, row, hitAnim),               // floating -20/-30⚡ text
       const PendingAnimation(-1, -1, AnimType.hazardHit), // screen flash
     ];
 
@@ -682,8 +697,8 @@ class GameNotifier extends StateNotifier<GameState> {
     if (cfg.number >= 11 && cfg.number <= 50) {
       _scheduleNextSupplyDrop();
     }
-    // Start Glitched Decoy timers for levels 5–20
-    if (cfg.hasDecoys) {
+    // Start Glitched Decoy timers for levels 5–20 and L41
+    if (cfg.hasDecoys || cfg.hasL41Decoys) {
       _startGlitchTimer();
       if (cfg.decoysAreTeleporting) _startDecoyTeleportTimer();
     }
@@ -824,6 +839,11 @@ class GameNotifier extends StateNotifier<GameState> {
           }
         }
       }
+      warpSentinelController.onBossHoleSwitched = (newBossHoleIndex) {
+        // L41: when the boss teleports to the other black hole, reposition
+        // the 4 glitchy decoys to the opposite side of the new active hole.
+        if (!_disposed) _repositionL41Decoys(newBossHoleIndex);
+      };
       warpSentinelController.triggerForLevel(
         cfg.number,
         gridCols:           cfg.gridCols,
@@ -1675,12 +1695,124 @@ class GameNotifier extends StateNotifier<GameState> {
     }
   }
 
+  // ── L41 Glitchy Decoy Helpers ─────────────────────────────────────────────
+  //
+  // Positions are computed from the 6×6 grid geometry so that the 4 decoys:
+  //   • Are always on the OPPOSITE half from the active black hole.
+  //   • Sit in corner slots that lie OUTSIDE both holes' 3×3 pull zones:
+  //       Hole A (LEFT)  (1,2) → zone cols 0-2, rows 1-3
+  //       Hole B (RIGHT) (4,3) → zone cols 3-5, rows 2-4
+  //   • Rows 0 and 5 are safe for both holes, so (c,0) and (c,5) are the
+  //     anchors. Alternating columns 0/2 (left) or 3/5 (right) spreads them
+  //     across the grid to block the maximum number of merge paths.
+  //
+  // bossHoleIndex=0 (LEFT active)  → decoys on RIGHT: (3,0)(5,0)(3,5)(5,5)
+  // bossHoleIndex=1 (RIGHT active) → decoys on LEFT:  (0,0)(2,0)(0,5)(2,5)
+
+  static const _kL41DecoyPositionsRight = [(3, 0), (5, 0), (3, 5), (5, 5)];
+  static const _kL41DecoyPositionsLeft  = [(0, 0), (2, 0), (0, 5), (2, 5)];
+
+  /// Place 4 L41 glitchy decoys into [cells] based on [activeBossHoleIndex].
+  void _placeL41DecoysCells(
+    List<List<GridCell>> cells,
+    int activeBossHoleIndex,
+    int gridCols,
+    int gridRows,
+    int spawnerItemId,
+  ) {
+    final positions = activeBossHoleIndex == 0
+        ? _kL41DecoyPositionsRight
+        : _kL41DecoyPositionsLeft;
+    final decoyMimicId = (spawnerItemId + 1).clamp(1, 51);
+    for (final pos in positions) {
+      final c = pos.$1;
+      final r = pos.$2;
+      if (c < gridCols && r < gridRows) {
+        // Clear any existing item/obstacle, then place the glitchy decoy
+        cells[c][r] = GridCell(
+          obstacle: ObstacleType.glitchedDecoy,
+          decoyItemId: decoyMimicId,
+        );
+      }
+    }
+  }
+
+  /// Called when Warp Sentinel teleports — moves all 4 L41 glitchy decoys to
+  /// the opposite side of the newly active black hole.
+  /// If a target position has an item, that item is displaced to the nearest
+  /// empty cell on the SAME side so no item is silently destroyed.
+  void _repositionL41Decoys(int newBossHoleIndex) {
+    if (state.activeDialog != ActiveDialog.none) return;
+    final cfg     = state.currentLevel;
+    if (!cfg.hasL41Decoys) return;
+
+    final newGrid = _cloneGrid();
+
+    // 1. Remove existing glitchy decoys — those cells become empty
+    for (int c = 0; c < cfg.gridCols; c++) {
+      for (int r = 0; r < cfg.gridRows; r++) {
+        if (newGrid[c][r].isDecoy) {
+          newGrid[c][r] = const GridCell();
+        }
+      }
+    }
+
+    // 2. For each target decoy position: displace any existing item first
+    final targets = newBossHoleIndex == 0
+        ? _kL41DecoyPositionsRight
+        : _kL41DecoyPositionsLeft;
+    final decoyMimicId = (cfg.spawnerItemId + 1).clamp(1, 51);
+
+    // Determine safe fallback columns for displaced items
+    // Right decoys (cols 3-5) → displaced items stay on right (cols 3-5)
+    // Left  decoys (cols 0-2) → displaced items stay on left  (cols 0-2)
+    final isRightSide = newBossHoleIndex == 0;
+    final sideColMin  = isRightSide ? 3 : 0;
+    final sideColMax  = isRightSide ? cfg.gridCols - 1 : 2;
+
+    for (final pos in targets) {
+      final tc = pos.$1;
+      final tr = pos.$2;
+      if (tc >= cfg.gridCols || tr >= cfg.gridRows) continue;
+
+      final occupant = newGrid[tc][tr];
+      if (occupant.itemId != null && !occupant.isBlocked) {
+        // Find nearest empty, non-decoy cell on the same side
+        (int, int)? emptySlot;
+        outer:
+        for (int c = sideColMin; c <= sideColMax; c++) {
+          for (int r = 0; r < cfg.gridRows; r++) {
+            if (!targets.contains((c, r)) && newGrid[c][r].isEmpty) {
+              emptySlot = (c, r);
+              break outer;
+            }
+          }
+        }
+        if (emptySlot != null) {
+          // Displace item to that empty slot
+          newGrid[emptySlot!.$1][emptySlot.$2] =
+              newGrid[emptySlot.$1][emptySlot.$2].withItem(occupant.itemId!);
+        }
+        // Clear the item from the target cell so the decoy can be placed
+        newGrid[tc][tr] = newGrid[tc][tr].clearItem();
+      }
+
+      // Place the glitchy decoy
+      newGrid[tc][tr] = GridCell(
+        obstacle:    ObstacleType.glitchedDecoy,
+        decoyItemId: decoyMimicId,
+      );
+    }
+
+    state = state.copyWith(grid: newGrid);
+  }
+
   // ── Glitch Timer Helpers ──────────────────────────────────────────────────
 
   void _startGlitchTimer() {
     _glitchTimer?.cancel();
     final cfg = state.currentLevel;
-    if (!cfg.hasDecoys) return;
+    if (!cfg.hasDecoys && !cfg.hasL41Decoys) return;
     _glitchTimer = Timer.periodic(
       Duration(seconds: cfg.glitchIntervalSeconds), (_) {
         if (_disposed) return;
