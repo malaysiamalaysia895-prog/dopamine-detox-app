@@ -224,7 +224,9 @@ class _WarpScenePainter extends CustomPainter {
     }
 
     // ── Siphon streak: item spiraling into the black hole ─────────────────────
-    if (c.recentSiphons.isNotEmpty) {
+    // Use OR so the streak keeps painting until the animation fully completes,
+    // even if recentSiphons was cleared by its 850ms timer a frame earlier.
+    if (c.recentSiphons.isNotEmpty || siphonFlashT > 0.01) {
       _paintSiphonStreaks(canvas, c);
     }
 
@@ -1170,7 +1172,10 @@ class _WarpScenePainter extends CustomPainter {
   // ── Siphon streaks — items spiraling into the black hole ──────────────────
 
   void _paintSiphonStreaks(Canvas canvas, WarpSentinelController c) {
-    if (c.blackHoles.isEmpty || siphonFlashT <= 0) return;
+    // Note: siphonFlashT starts at 0 on the very first tick — do NOT bail out
+    // on siphonFlashT <= 0 or the animation never renders its first frame.
+    if (c.blackHoles.isEmpty) return;
+    if (c.recentSiphons.isEmpty && siphonFlashT < 0.01) return;
     final holeRect = getCellRect(
         c.blackHoles[c.bossHoleIndex].$1, c.blackHoles[c.bossHoleIndex].$2);
     if (holeRect == null) return;

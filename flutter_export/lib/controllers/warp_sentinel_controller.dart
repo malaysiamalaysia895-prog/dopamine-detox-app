@@ -202,42 +202,40 @@ class WarpSentinelController extends ChangeNotifier {
   }
 
   void onCellMoved(int fc, int fr, int tc, int tr) {
-    // During WARNING: only follow item if it stays inside the actual 3×3 zone.
-    // If the player drags the item OUTSIDE the zone, drop it from pullZoneCells
-    // so the pull phase CANNOT siphon it from its new safe position.
-    // During PULL: zone is fixed — moving items does not change pullZoneCells,
-    // but isCellOccupied check in _pullNearestItem will correctly skip the old
-    // cell since the item is gone from there.
-    if (siphonPhase == WarpSiphonPhase.warning) {
-      if (pullZoneCells.contains((fc, fr))) {
-        pullZoneCells.remove((fc, fr));
-        if (blackHoles.isNotEmpty) {
-          final hole = blackHoles[bossHoleIndex];
-          final zone = _compute3x3(hole.$1, hole.$2);
-          // Only re-track item if it moved to a cell still inside the zone
-          if (zone.contains((tc, tr))) pullZoneCells.add((tc, tr));
-          // else: item escaped the danger zone — safe, not tracked
-        }
-        notifyListeners();
-      }
+    // During WARNING and PULL phases: track item only if it remains inside the
+    // actual 3×3 zone.  Dragging an item OUT of the zone removes it from
+    // pullZoneCells so it can NEVER be siphoned — even mid-pull-phase.
+    // This means players can rescue an item at any point by moving it outside
+    // the highlighted 3×3 area, including while the pull timer is running.
+    final inAttack = siphonPhase == WarpSiphonPhase.warning ||
+                     siphonPhase == WarpSiphonPhase.pull;
+    if (inAttack && pullZoneCells.contains((fc, fr)) && blackHoles.isNotEmpty) {
+      final hole = blackHoles[bossHoleIndex];
+      final zone = _compute3x3(hole.$1, hole.$2);
+      pullZoneCells.remove((fc, fr));
+      if (zone.contains((tc, tr))) pullZoneCells.add((tc, tr));
+      // else: item escaped to safety — no longer tracked, cannot be siphoned
+      notifyListeners();
     }
   }
 
   void onCellsSwapped(int fc, int fr, int tc, int tr) {
-    if (siphonPhase == WarpSiphonPhase.warning && blackHoles.isNotEmpty) {
-      final zone = _compute3x3(blackHoles[bossHoleIndex].$1, blackHoles[bossHoleIndex].$2);
-      final fa   = pullZoneCells.contains((fc, fr));
-      final ta   = pullZoneCells.contains((tc, tr));
-      if (fa) {
-        pullZoneCells.remove((fc, fr));
-        if (zone.contains((tc, tr))) pullZoneCells.add((tc, tr));
-      }
-      if (ta) {
-        pullZoneCells.remove((tc, tr));
-        if (zone.contains((fc, fr))) pullZoneCells.add((fc, fr));
-      }
-      if (fa || ta) notifyListeners();
+    final inAttack = (siphonPhase == WarpSiphonPhase.warning ||
+                      siphonPhase == WarpSiphonPhase.pull) &&
+                     blackHoles.isNotEmpty;
+    if (!inAttack) return;
+    final zone = _compute3x3(blackHoles[bossHoleIndex].$1, blackHoles[bossHoleIndex].$2);
+    final fa   = pullZoneCells.contains((fc, fr));
+    final ta   = pullZoneCells.contains((tc, tr));
+    if (fa) {
+      pullZoneCells.remove((fc, fr));
+      if (zone.contains((tc, tr))) pullZoneCells.add((tc, tr));
     }
+    if (ta) {
+      pullZoneCells.remove((tc, tr));
+      if (zone.contains((fc, fr))) pullZoneCells.add((fc, fr));
+    }
+    if (fa || ta) notifyListeners();
   }
 
   /// Player drags item onto a black hole cell — sacrifice / feed mechanic.
