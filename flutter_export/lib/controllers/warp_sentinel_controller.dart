@@ -356,65 +356,64 @@ class WarpSentinelController extends ChangeNotifier {
     });
   }
 
-  // Step 3: 5-second pull phase — proximity siphon every 1.5s
+  // Step 3: 600ms windup → devour ALL zone items simultaneously
   void _startPullPhase() {
     if (_disposed || phase != WarpSentinelPhase.active) return;
     siphonPhase  = WarpSiphonPhase.pull;
     pullSecsLeft = _kPullSec;
+    _setDialogue('WARP SIPHON ACTIVE — ALL MATTER CONSUMED! 🕳️');
     notifyListeners();
 
-    // Screen shake + whirring sound cue
     try { HapticFeedback.heavyImpact(); } catch (_) {}
-    AudioManager.instance.playTimeWarning(); // closest available 'whirring' SFX
+    AudioManager.instance.playTimeWarning();
 
-    _pullTickTimer = Timer.periodic(
-        const Duration(milliseconds: _kPullTickMs), (_) {
+    // 600ms dramatic windup, then consume every item in zone at once.
+    // Animation plays for 1 500ms, then phase ends automatically.
+    _pullTickTimer = Timer(const Duration(milliseconds: 600), () {
       if (_disposed) return;
-      _pullNearestItem();
-    });
-
-    _pullCountdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (_disposed) return;
-      pullSecsLeft = (pullSecsLeft - 1).clamp(0, _kPullSec);
-      notifyListeners();
-      if (pullSecsLeft <= 0) {
-        t.cancel();
+      _pullAllItems();
+      _pullCountdownTimer = Timer(const Duration(milliseconds: 1600), () {
+        if (_disposed) return;
         _endPullPhase();
-      }
+      });
     });
   }
 
-  // Siphon the item closest to the black hole center in the pull zone
-  void _pullNearestItem() {
+  // Devour EVERY occupied item in the pull zone simultaneously.
+  // Each item is registered for animation immediately; removal is staggered
+  // by 100ms so the overlay can show them spiraling in one after another.
+  void _pullAllItems() {
     if (blackHoles.isEmpty) return;
-    final hole = blackHoles[bossHoleIndex];
-    final hx = hole.$1.toDouble();
-    final hy = hole.$2.toDouble();
 
-    // Collect occupied pull zone cells, sort by distance to hole
-    final candidates = pullZoneCells
+    final victims = pullZoneCells
         .where((cell) => isCellOccupied?.call(cell.$1, cell.$2) ?? false)
-        .toList()
-      ..sort((a, b) {
-        final da = pow(a.$1 - hx, 2) + pow(a.$2 - hy, 2);
-        final db = pow(b.$1 - hx, 2) + pow(b.$2 - hy, 2);
-        return da.compareTo(db);
+        .toList();
+
+    if (victims.isEmpty) return;
+
+    // Register ALL victims for animation at once — overlay reads recentSiphons
+    for (final v in victims) recentSiphons.add(v);
+    notifyListeners(); // triggers _siphonFlash.forward(from:0) in overlay
+
+    // Stagger actual grid removal: 100ms between each item for visual clarity
+    for (int i = 0; i < victims.length; i++) {
+      final v = victims[i];
+      Timer(Duration(milliseconds: 300 + i * 100), () {
+        if (!_disposed) {
+          onCellSiphoned?.call(v.$1, v.$2);
+          try { HapticFeedback.mediumImpact(); } catch (_) {}
+        }
       });
+    }
 
-    if (candidates.isEmpty) return;
-    final target = candidates.first;
-
-    // ── Track for overlay siphon animation (auto-clear after 850ms) ──────────
-    recentSiphons.add((target.$1, target.$2));
-    Timer(const Duration(milliseconds: 850), () {
-      recentSiphons.remove((target.$1, target.$2));
+    // Clear animation list after full 1500ms animation completes
+    Timer(const Duration(milliseconds: 1500), () {
+      for (final v in victims) recentSiphons.remove(v);
       if (!_disposed) notifyListeners();
     });
 
-    onCellSiphoned?.call(target.$1, target.$2);
-    pullZoneCells.remove(target);
-    try { HapticFeedback.mediumImpact(); } catch (_) {}
-    notifyListeners();
+    pullZoneCells.removeAll(victims);
+    try { HapticFeedback.heavyImpact(); } catch (_) {}
   }
 
   void _endPullPhase() {

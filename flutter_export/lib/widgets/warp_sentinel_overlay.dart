@@ -67,8 +67,8 @@ class _WarpSentinelOverlayState extends State<WarpSentinelOverlay>
     _teleport   = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
     _win        = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
     _particle   = AnimationController(vsync: this, duration: const Duration(milliseconds: 3800))..repeat();
-    // Siphon streak: 850ms one-shot, re-triggered each time an item is siphoned
-    _siphonFlash = AnimationController(vsync: this, duration: const Duration(milliseconds: 850));
+    // Siphon streak: 1500ms one-shot — long enough for all simultaneous victims
+    _siphonFlash = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
     widget.controller.addListener(_onChanged);
   }
 
@@ -1169,20 +1169,22 @@ class _WarpScenePainter extends CustomPainter {
     p.style = PaintingStyle.fill;
   }
 
-  // ── Siphon streaks — items spiraling into the black hole ──────────────────
+  // ── Siphon streaks — ALL items spiraling into the black hole simultaneously ─
 
   void _paintSiphonStreaks(Canvas canvas, WarpSentinelController c) {
-    // Note: siphonFlashT starts at 0 on the very first tick — do NOT bail out
-    // on siphonFlashT <= 0 or the animation never renders its first frame.
     if (c.blackHoles.isEmpty) return;
     if (c.recentSiphons.isEmpty && siphonFlashT < 0.01) return;
     final holeRect = getCellRect(
         c.blackHoles[c.bossHoleIndex].$1, c.blackHoles[c.bossHoleIndex].$2);
     if (holeRect == null) return;
     final holePt = holeRect.center;
-    final t      = siphonFlashT; // 0 → 1 over 850ms
+    final t      = siphonFlashT; // 0 → 1 over 1500ms
+    final total  = c.recentSiphons.length.clamp(1, 9);
+    final p      = Paint();
 
-    for (final siphon in c.recentSiphons) {
+    // ── Per-item streaks, staggered so they arrive in a wave ─────────────────
+    for (int idx = 0; idx < c.recentSiphons.length; idx++) {
+      final siphon   = c.recentSiphons[idx];
       final cellRect = getCellRect(siphon.$1, siphon.$2);
       if (cellRect == null) continue;
       final fromPt = cellRect.center;
@@ -1190,156 +1192,217 @@ class _WarpScenePainter extends CustomPainter {
       final dist   = dir.distance.clamp(1.0, 9999.0);
       final dirN   = dir / dist;
       final rng    = Random(siphon.$1 * 137 + siphon.$2 * 29);
-      final p      = Paint();
 
-      // ── Phase 1 (t 0→0.35): bright white flash at source cell ────────────
-      final flashA = (1.0 - t / 0.35).clamp(0.0, 1.0);
+      // Each item starts a little later: stagger spreads over first 28% of t
+      final stagger = (idx / total) * 0.28;
+      final rawT    = (t - stagger).clamp(0.0, 1.0);
+      final span    = (1.0 - stagger).clamp(0.01, 1.0);
+      final itemT   = rawT / span;
+
+      if (itemT <= 0) continue;
+
+      // ── Phase 1 (itemT 0→0.22): bright flash ring at source cell ──────────
+      final flashA = (1.0 - itemT / 0.22).clamp(0.0, 1.0);
       if (flashA > 0) {
         p
-          ..color      = const Color(0xFFFFFFFF).withOpacity(flashA * 0.80)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 20)
-          ..style      = PaintingStyle.fill;
-        canvas.drawCircle(fromPt, cellRect.width * (0.44 + flashA * 0.22), p);
+          ..color       = const Color(0xFF9B30FF).withOpacity(flashA * 0.55)
+          ..style       = PaintingStyle.stroke
+          ..strokeWidth = 3.0
+          ..maskFilter  = const MaskFilter.blur(BlurStyle.normal, 9);
+        canvas.drawCircle(fromPt, cellRect.width * (0.50 + flashA * 0.28), p);
+        p
+          ..color      = const Color(0xFFFFFFFF).withOpacity(flashA * 0.72)
+          ..style      = PaintingStyle.fill
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18);
+        canvas.drawCircle(fromPt, cellRect.width * (0.36 + flashA * 0.16), p);
         p.maskFilter = null;
       }
 
-      // ── Phase 2 (t 0.12→0.88): particle stream from cell → hole ──────────
-      final streamT = ((t - 0.12) / 0.76).clamp(0.0, 1.0);
+      // ── Phase 2 (itemT 0.10→0.90): particle spiral + triple-layer beam ─────
+      final streamT = ((itemT - 0.10) / 0.80).clamp(0.0, 1.0);
       if (streamT > 0) {
-        p
-          ..style      = PaintingStyle.fill
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
-
-        for (int i = 0; i < 22; i++) {
-          // Each particle starts offset in time so they spread along the path
-          final prog = ((streamT * 1.5) - (i / 22.0) * 0.7).clamp(0.0, 1.0);
+        // Particles
+        p..style = PaintingStyle.fill..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
+        for (int i = 0; i < 28; i++) {
+          final prog = ((streamT * 1.4) - (i / 28.0) * 0.6).clamp(0.0, 1.0);
           if (prog <= 0) continue;
-
-          // Spiral offset (tightens near the hole)
-          final angle    = prog * pi * 5 + (i / 22.0) * 2 * pi;
-          final spiralR  = (1.0 - prog) * 14.0 * (rng.nextDouble() * 0.5 + 0.75);
-          final along    = fromPt + dirN * (dist * prog);
-          final pos      = Offset(
-              along.dx + cos(angle) * spiralR,
-              along.dy + sin(angle) * spiralR,
-          );
-
-          final sz    = (4.0 * (1 - prog * 0.65)).clamp(0.8, 4.5);
-          final alpha = ((1.0 - prog * 0.45) * (rng.nextDouble() * 0.4 + 0.6))
-              .clamp(0.0, 1.0);
-          p.color = Color.lerp(
-              const Color(0xFFFFFFFF),
-              const Color(0xFF9B30FF),
-              prog,
-          )!.withOpacity(alpha);
+          final angle   = prog * pi * 6 + (i / 28.0) * 2 * pi + idx * 0.9;
+          final spiralR = (1.0 - prog) * 16.0 * (rng.nextDouble() * 0.5 + 0.75);
+          final along   = fromPt + dirN * (dist * prog);
+          final pos     = Offset(along.dx + cos(angle) * spiralR,
+                                 along.dy + sin(angle) * spiralR);
+          final sz    = (5.0 * (1 - prog * 0.70)).clamp(0.8, 5.5);
+          final alpha = ((1.0 - prog * 0.40) *
+                         (rng.nextDouble() * 0.30 + 0.70)).clamp(0.0, 1.0);
+          p.color = Color.lerp(const Color(0xFFFFFFFF),
+                               const Color(0xFF9B30FF), prog)!.withOpacity(alpha);
           canvas.drawCircle(pos, sz, p);
         }
         p.maskFilter = null;
 
-        // Energy bolt (main chord line, fades in then out)
-        final boltA = (sin(streamT * pi) * 0.75).clamp(0.0, 1.0);
+        // Triple-layer energy chord
+        final boltA = (sin(streamT * pi) * 0.88).clamp(0.0, 1.0);
+        p..style = PaintingStyle.stroke;
+        // Outer glow
+        p..strokeWidth = 6.0
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10)
+          ..color      = const Color(0xFF9B30FF).withOpacity(boltA * 0.45);
+        canvas.drawLine(fromPt, holePt, p);
+        // Mid glow
+        p..strokeWidth = 3.0
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4)
+          ..color      = const Color(0xFFCC66FF).withOpacity(boltA * 0.72);
+        canvas.drawLine(fromPt, holePt, p);
+        // Sharp bright core
+        p..strokeWidth = 1.4..maskFilter = null
+          ..color = const Color(0xFFFFEEFF).withOpacity(boltA * 0.92);
+        canvas.drawLine(fromPt, holePt, p);
+        p.style = PaintingStyle.fill;
+      }
+    }
+
+    // ── Big impact at hole when items arrive (t 0.62 → 1.0) ─────────────────
+    final impactT = ((t - 0.62) / 0.38).clamp(0.0, 1.0);
+    if (impactT > 0) {
+      // 3 expanding shockwave rings
+      for (int ring = 0; ring < 3; ring++) {
+        final rT = (impactT - ring * 0.14).clamp(0.0, 1.0);
+        if (rT <= 0) continue;
         p
           ..style       = PaintingStyle.stroke
-          ..strokeWidth = 2.2
-          ..maskFilter  = const MaskFilter.blur(BlurStyle.normal, 5)
-          ..color       = const Color(0xFFDD88FF).withOpacity(boltA);
-        canvas.drawLine(fromPt, holePt, p);
+          ..strokeWidth = (3.5 * (1 - rT * 0.75)).clamp(0.5, 3.5)
+          ..color       = const Color(0xFF9B30FF).withOpacity((1.0 - rT) * 0.72)
+          ..maskFilter  = const MaskFilter.blur(BlurStyle.normal, 6);
+        canvas.drawCircle(holePt, holeRect.width * (0.5 + rT * 3.0), p);
         p.maskFilter = null;
       }
-
-      // ── Phase 3 (t 0.62→1.0): hole pulse on impact ────────────────────────
-      final pulseT = ((t - 0.62) / 0.38).clamp(0.0, 1.0);
-      if (pulseT > 0) {
-        p
-          ..color      = const Color(0xFFAA44FF).withOpacity(sin(pulseT * pi) * 0.72)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 24)
-          ..style      = PaintingStyle.fill;
-        canvas.drawCircle(holePt, holeRect.width * (0.50 + pulseT * 0.85), p);
-        p.maskFilter = null;
-      }
+      // Central aura bloom
+      p
+        ..style      = PaintingStyle.fill
+        ..color      = const Color(0xFFAA44FF).withOpacity(sin(impactT * pi) * 0.88)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 30);
+      canvas.drawCircle(holePt, holeRect.width * (0.6 + impactT * 1.4), p);
+      // White hotspot
+      p
+        ..color      = const Color(0xFFFFFFFF).withOpacity(sin(impactT * pi) * 0.65)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
+      canvas.drawCircle(holePt, holeRect.width * 0.38, p);
+      p.maskFilter = null;
     }
   }
 
-  // ── Targeting reticle — lock-on diamond on nearest item during pull ───────
+  // ── Targeting reticle — lock-on on EVERY item in zone + gravitational rings ─
 
   void _paintTargetingReticle(Canvas canvas, WarpSentinelController c) {
     if (c.blackHoles.isEmpty || c.pullZoneCells.isEmpty) return;
     final hole     = c.blackHoles[c.bossHoleIndex];
     final holeRect = getCellRect(hole.$1, hole.$2);
     if (holeRect == null) return;
-
-    // Find the nearest occupied-ish cell in pull zone (same order as controller)
-    (int, int)? nearest;
-    double minDist = double.infinity;
-    for (final cell in c.pullZoneCells) {
-      final d = pow(cell.$1 - hole.$1, 2) + pow(cell.$2 - hole.$2, 2).toDouble();
-      if (d < minDist) { minDist = d; nearest = cell; }
-    }
-    if (nearest == null) return;
-
-    final targetRect = getCellRect(nearest.$1, nearest.$2);
-    if (targetRect == null) return;
-    final center = targetRect.center;
-    final r      = targetRect.width * 0.44;
-    final pulse  = 0.55 + warnPulseT * 0.45; // rides existing warn-pulse
+    final holePt = holeRect.center;
+    final pulse  = 0.55 + warnPulseT * 0.45;
     final p      = Paint();
 
-    // ── Lock-on diamond ────────────────────────────────────────────────────
-    final diamond = Path()
-      ..moveTo(center.dx,          center.dy - r * 1.45)
-      ..lineTo(center.dx + r * 1.45, center.dy)
-      ..lineTo(center.dx,          center.dy + r * 1.45)
-      ..lineTo(center.dx - r * 1.45, center.dy)
-      ..close();
-
-    // Outer glow
-    p
-      ..color       = const Color(0xFFFF2244).withOpacity(pulse * 0.38)
-      ..maskFilter  = const MaskFilter.blur(BlurStyle.normal, 7)
-      ..style       = PaintingStyle.stroke
-      ..strokeWidth = 4.0;
-    canvas.drawPath(diamond, p);
-    p.maskFilter = null;
-
-    // Sharp diamond edge
-    p
-      ..color       = const Color(0xFFFF3355).withOpacity(pulse * 0.95)
-      ..strokeWidth = 1.8;
-    canvas.drawPath(diamond, p);
-
-    // ── Corner brackets (HUD-style) ────────────────────────────────────────
-    final bl = r * 0.55;
-    p..strokeWidth = 1.5..color = const Color(0xFFFF5577).withOpacity(pulse);
-    for (final corner in [
-      (Offset(center.dx - r, center.dy - r),  1.0,  1.0),
-      (Offset(center.dx + r, center.dy - r), -1.0,  1.0),
-      (Offset(center.dx - r, center.dy + r),  1.0, -1.0),
-      (Offset(center.dx + r, center.dy + r), -1.0, -1.0),
-    ]) {
-      canvas.drawLine(corner.$1, Offset(corner.$1.dx + corner.$2 * bl, corner.$1.dy), p);
-      canvas.drawLine(corner.$1, Offset(corner.$1.dx, corner.$1.dy + corner.$3 * bl), p);
+    // ── Gravitational lens rings expanding from the black hole ───────────────
+    // 4 rings at different phases so they continuously ripple outward
+    for (int ring = 0; ring < 4; ring++) {
+      final ringPhase = (warnPulseT + ring * 0.25) % 1.0;
+      final ringR     = holeRect.width * (0.55 + ringPhase * 3.2);
+      final ringA     = (1.0 - ringPhase) * 0.45;
+      p
+        ..style       = PaintingStyle.stroke
+        ..strokeWidth = (2.0 * (1 - ringPhase * 0.65)).clamp(0.4, 2.0)
+        ..color       = const Color(0xFF9B30FF).withOpacity(ringA)
+        ..maskFilter  = const MaskFilter.blur(BlurStyle.normal, 4);
+      canvas.drawCircle(holePt, ringR, p);
+      p.maskFilter = null;
     }
 
-    // ── Center dot ────────────────────────────────────────────────────────
-    p
-      ..style      = PaintingStyle.fill
-      ..color      = const Color(0xFFFF2244).withOpacity(pulse * 0.95)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7);
-    canvas.drawCircle(center, 4.5, p);
-    p.maskFilter = null;
-    p.color = const Color(0xFFFFFFFF).withOpacity(pulse * 0.90);
-    canvas.drawCircle(center, 2.2, p);
+    // ── Per-item: diamond reticle + corner brackets + tendril to hole ────────
+    for (final cell in c.pullZoneCells) {
+      final targetRect = getCellRect(cell.$1, cell.$2);
+      if (targetRect == null) continue;
+      final center = targetRect.center;
+      final r      = targetRect.width * 0.44;
 
-    // ── Gravity beam from reticle to black hole ────────────────────────────
-    p
-      ..style       = PaintingStyle.stroke
-      ..strokeWidth = 1.4
-      ..color       = const Color(0xFFFF2244).withOpacity(pulse * 0.42)
-      ..maskFilter  = const MaskFilter.blur(BlurStyle.normal, 4);
-    canvas.drawLine(center, holeRect.center, p);
-    p.maskFilter = null;
-    p..strokeWidth = 0.7..color = const Color(0xFFFF6688).withOpacity(pulse * 0.72);
-    canvas.drawLine(center, holeRect.center, p);
+      // Lock-on diamond
+      final diamond = Path()
+        ..moveTo(center.dx,            center.dy - r * 1.45)
+        ..lineTo(center.dx + r * 1.45, center.dy)
+        ..lineTo(center.dx,            center.dy + r * 1.45)
+        ..lineTo(center.dx - r * 1.45, center.dy)
+        ..close();
+      // Outer glow
+      p
+        ..color       = const Color(0xFFFF2244).withOpacity(pulse * 0.35)
+        ..maskFilter  = const MaskFilter.blur(BlurStyle.normal, 8)
+        ..style       = PaintingStyle.stroke
+        ..strokeWidth = 4.5;
+      canvas.drawPath(diamond, p);
+      p.maskFilter = null;
+      // Sharp edge
+      p..color = const Color(0xFFFF3355).withOpacity(pulse * 0.92)
+       ..strokeWidth = 1.8;
+      canvas.drawPath(diamond, p);
+
+      // HUD corner brackets
+      final bl = r * 0.52;
+      p..strokeWidth = 1.5..color = const Color(0xFFFF5577).withOpacity(pulse * 0.88);
+      for (final corner in [
+        (Offset(center.dx - r, center.dy - r),  1.0,  1.0),
+        (Offset(center.dx + r, center.dy - r), -1.0,  1.0),
+        (Offset(center.dx - r, center.dy + r),  1.0, -1.0),
+        (Offset(center.dx + r, center.dy + r), -1.0, -1.0),
+      ]) {
+        canvas.drawLine(
+            corner.$1, Offset(corner.$1.dx + corner.$2 * bl, corner.$1.dy), p);
+        canvas.drawLine(
+            corner.$1, Offset(corner.$1.dx, corner.$1.dy + corner.$3 * bl), p);
+      }
+
+      // Center dot
+      p
+        ..style      = PaintingStyle.fill
+        ..color      = const Color(0xFFFF2244).withOpacity(pulse * 0.92)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7);
+      canvas.drawCircle(center, 4.5, p);
+      p.maskFilter = null;
+      p.color = const Color(0xFFFFFFFF).withOpacity(pulse * 0.88);
+      canvas.drawCircle(center, 2.0, p);
+
+      // Energy tendril: item → black hole
+      final tDist = (holePt - center).distance;
+      if (tDist < 4) continue;
+      final normD = (holePt - center) / tDist;
+
+      // Glow tendril
+      p
+        ..style       = PaintingStyle.stroke
+        ..strokeWidth = 2.0
+        ..color       = const Color(0xFFFF2244).withOpacity(pulse * 0.30)
+        ..maskFilter  = const MaskFilter.blur(BlurStyle.normal, 5);
+      canvas.drawLine(center, holePt, p);
+      p.maskFilter = null;
+      // Bright core
+      p..strokeWidth = 0.8
+       ..color = const Color(0xFFFF8899).withOpacity(pulse * 0.68);
+      canvas.drawLine(center, holePt, p);
+
+      // Arrowhead pointing toward hole
+      final arrowTip = holePt - normD * (holeRect.width * 0.52);
+      final perp     = Offset(-normD.dy, normD.dx) * 5.0;
+      final arrowPath = Path()
+        ..moveTo(arrowTip.dx, arrowTip.dy)
+        ..lineTo((arrowTip - normD * 9 + perp).dx,
+                 (arrowTip - normD * 9 + perp).dy)
+        ..lineTo((arrowTip - normD * 9 - perp).dx,
+                 (arrowTip - normD * 9 - perp).dy)
+        ..close();
+      p
+        ..style = PaintingStyle.fill
+        ..color = const Color(0xFFFF4466).withOpacity(pulse * 0.82);
+      canvas.drawPath(arrowPath, p);
+    }
+
     p.style = PaintingStyle.fill;
   }
 
