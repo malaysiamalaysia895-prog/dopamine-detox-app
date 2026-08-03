@@ -157,6 +157,8 @@ class LevelDefinition {
     return 0;
   }
   bool get hasDecoys           => decoyCount > 0;
+  /// L41 has 4 glitchy decoys that move opposite to the active black hole.
+  bool get hasL41Decoys        => number == 41;
   /// Decoys swap positions with random cells every 6 s (L11-20 only).
   bool get decoysAreTeleporting => number >= 11 && number <= 20;
   /// Glitch animation fires every 5 s (L5-10) or every 4 s (L11-20).
