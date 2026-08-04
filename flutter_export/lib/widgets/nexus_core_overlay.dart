@@ -938,19 +938,6 @@ class _CrosshairWidget extends StatelessWidget {
             size: Size(rect.width + 12, rect.height + 12),
             painter: _CrosshairBracketPainter(0.6 + laserVal * 0.4),
           ),
-          // Countdown timer
-          Positioned(
-            bottom: 3,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-              decoration: BoxDecoration(
-                color: _kEyeRed.withOpacity(0.88),
-                borderRadius: BorderRadius.circular(4)),
-              child: Text('${secsLeft}s',
-                style: const TextStyle(
-                  color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)),
-            ),
-          ),
         ]),
       ),
     );
