@@ -14,7 +14,7 @@ enum NexusCorePhase { idle, entry, active, stunned, winBlast }
 
 const int kNexusCoreLevel        = 40;
 const int _kSpaceSatelliteId     = 41;  // Space Station → triggers EMP stun
-const int _kTargetWindowSec      = 5;   // seconds player has to merge targeted item
+const int _kTargetWindowSec      = 3;   // seconds player has to merge targeted item
 const int _kAttackIntervalSec    = 10;  // seconds between attacks
 const int _kFirstAttackDelaySec  = 5;   // seconds after entry before first attack
 const int _kStunDurationSec      = 10;  // seconds boss is frozen after satellite delivery
