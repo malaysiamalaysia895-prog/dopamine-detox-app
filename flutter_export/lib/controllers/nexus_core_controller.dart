@@ -14,10 +14,10 @@ enum NexusCorePhase { idle, entry, active, stunned, winBlast }
 
 const int kNexusCoreLevel        = 40;
 const int _kSpaceSatelliteId     = 41;  // Space Station → triggers EMP stun
-const int _kTargetWindowSec      = 2;   // seconds player has to merge targeted item
+const int _kTargetWindowSec      = 5;   // seconds player has to merge targeted item
 const int _kAttackIntervalSec    = 10;  // seconds between attacks
 const int _kFirstAttackDelaySec  = 5;   // seconds after entry before first attack
-const int _kStunDurationSec      = 20;  // seconds boss is frozen
+const int _kStunDurationSec      = 10;  // seconds boss is frozen after satellite delivery
 const int _kEntryDurationMs      = 3500; // entry animation length (ms)
 
 const List<String> _kDialogues = [
@@ -63,6 +63,9 @@ class NexusCoreController extends ChangeNotifier {
   // Next attack countdown (displayed in overlay)
   int attackSecondsLeft = _kAttackIntervalSec;
 
+  // Pre-attack laser charging state (overlay shows eye charge-up when true)
+  bool isLaserCharging = false;
+
   // Win flash flag (overlay reads this once)
   bool winFlashReady = false;
 
@@ -84,6 +87,7 @@ class NexusCoreController extends ChangeNotifier {
   Timer? _hintTimer;
   Timer? _dialogueTimer;
   Timer? _attackCountdownTickTimer;
+  Timer? _preChargeTimer;
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -211,6 +215,8 @@ class NexusCoreController extends ChangeNotifier {
   void _scheduleAttack({Duration delay = const Duration(seconds: _kAttackIntervalSec)}) {
     _attackLoopTimer?.cancel();
     _attackCountdownTickTimer?.cancel();
+    _preChargeTimer?.cancel();
+    isLaserCharging = false;
     attackSecondsLeft = delay.inSeconds;
 
     _attackCountdownTickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -219,9 +225,20 @@ class NexusCoreController extends ChangeNotifier {
       notifyListeners();
     });
 
+    // Pre-charge: show eye charge-up animation 2s before attack fires
+    final preChargeDelay = delay - const Duration(seconds: 2);
+    if (!preChargeDelay.isNegative) {
+      _preChargeTimer = Timer(preChargeDelay, () {
+        if (_disposed || isStunned || phase != NexusCorePhase.active) return;
+        isLaserCharging = true;
+        notifyListeners();
+      });
+    }
+
     _attackLoopTimer = Timer(delay, () {
       if (_disposed || isStunned || phase != NexusCorePhase.active) return;
       _attackCountdownTickTimer?.cancel();
+      isLaserCharging = false;
       _fireAttack();
     });
   }
@@ -281,6 +298,8 @@ class NexusCoreController extends ChangeNotifier {
     _attackLoopTimer?.cancel();
     _attackCountdownTickTimer?.cancel();
     _targetCountdownTimer?.cancel();
+    _preChargeTimer?.cancel();
+    isLaserCharging = false;
     targetedCell = null;
 
     isStunned       = true;
@@ -325,13 +344,14 @@ class NexusCoreController extends ChangeNotifier {
 
   void _goIdle() {
     _cancelTimers();
-    phase         = NexusCorePhase.idle;
-    entryComplete = false;
+    phase           = NexusCorePhase.idle;
+    entryComplete   = false;
     hackedCells.clear();
-    targetedCell  = null;
-    isStunned     = false;
-    dialogueText  = null;
-    winFlashReady = false;
+    targetedCell    = null;
+    isStunned       = false;
+    isLaserCharging = false;
+    dialogueText    = null;
+    winFlashReady   = false;
     notifyListeners();
   }
 
@@ -343,9 +363,10 @@ class NexusCoreController extends ChangeNotifier {
     _hintTimer?.cancel();
     _dialogueTimer?.cancel();
     _attackCountdownTickTimer?.cancel();
+    _preChargeTimer?.cancel();
     _entryTimer = _attackLoopTimer = _targetCountdownTimer =
         _stunCountdownTimer = _hintTimer = _dialogueTimer =
-        _attackCountdownTickTimer = null;
+        _attackCountdownTickTimer = _preChargeTimer = null;
   }
 
   Future<void> _safeVibrate({List<int>? pattern, int duration = 300}) async {
