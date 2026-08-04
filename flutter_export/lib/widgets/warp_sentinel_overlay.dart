@@ -117,6 +117,7 @@ class _WarpSentinelOverlayState extends State<WarpSentinelOverlay>
   Widget build(BuildContext context) {
     final c = widget.controller;
     if (c.phase == WarpSentinelPhase.idle) return const SizedBox.shrink();
+    if (widget.isDialogActive)            return const SizedBox.shrink();
 
     return AnimatedBuilder(
       animation: Listenable.merge([
