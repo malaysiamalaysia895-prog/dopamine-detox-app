@@ -252,7 +252,7 @@ class SnakeAlienController extends ChangeNotifier {
     final newDrops = <MiniAlienDrop>[];
     for (int i = 0; i < count; i++) {
       _idCounter += 1;
-      newDrops.add(MiniAlienDrop(candidates[i].$1, candidates[i].$2, 5, _idCounter));
+      newDrops.add(MiniAlienDrop(candidates[i].$1, candidates[i].$2, 10, _idCounter));
     }
     activeDrops = [...activeDrops, ...newDrops];
     onDropWave?.call(newDrops);
