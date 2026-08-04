@@ -268,13 +268,19 @@ class _WarpScenePainter extends CustomPainter {
 
     if (tp == WarpTeleportPhase.idle || tp == WarpTeleportPhase.arming) {
       _paintTether(canvas, bossCenter, holeRect.center, corePulseT, c.isAttackPoseActive || c.isPulling);
-      _paintBossEntity(canvas, bossCenter,
-          opacity:    c.phase == WarpSentinelPhase.entry ? entryT.clamp(0.0, 1.0) : 1.0,
-          isStunned:  c.isStunned,
-          armPose:    tp == WarpTeleportPhase.arming    ? _ArmPose.teleportArm
-                    : c.isAttackPoseActive              ? _ArmPose.attackBoth
-                    :                                     _ArmPose.idle,
-          isAttacking: c.isAttackPoseActive || c.isWarning || c.isPulling);
+
+      if (c.phase == WarpSentinelPhase.entry) {
+        // Professional glitch-materialize: boss coalesces from the black hole
+        _paintBossGlitchEntry(canvas, bossCenter, holeRect.center, c.isStunned);
+      } else {
+        _paintBossEntity(canvas, bossCenter,
+            opacity:     1.0,
+            isStunned:   c.isStunned,
+            armPose:     tp == WarpTeleportPhase.arming ? _ArmPose.teleportArm
+                       : c.isAttackPoseActive            ? _ArmPose.attackBoth
+                       :                                   _ArmPose.idle,
+            isAttacking: c.isAttackPoseActive || c.isWarning || c.isPulling);
+      }
 
     } else if (tp == WarpTeleportPhase.dissolving) {
       final fromRect  = getCellRect(c.blackHoles[c.fromHoleIndex].$1,
@@ -920,6 +926,123 @@ class _WarpScenePainter extends CustomPainter {
           Offset(cos(a + .45) * (d + l), sin(a + .45) * (d + l)), p);
     }
     p.style = PaintingStyle.fill;
+  }
+
+  // ── Entry: glitch-materialize — boss coalesces from the black hole ───────────
+  // entryT 0→1 over 3.2 s:
+  //   Phase A (0.00–0.90): 60 pixel-sparks shoot from holeCenter to bossCenter
+  //   Phase B (0.25–1.00): boss body scan-wipes upward (bottom → top) with jitter
+  //   Phase C (0.00–0.75): chromatic-aberration RGB ghosts fade away
+  //   Edge glow:           bright scan-line at the materialization front
+
+  void _paintBossGlitchEntry(
+      Canvas canvas, Offset bossCenter, Offset holeCenter, bool isStunned) {
+    final t  = entryT.clamp(0.0, 1.0);
+    final ac = isStunned ? _kStunBlue : _kPurple;
+    final p  = Paint()..style = PaintingStyle.fill;
+
+    // ── A. Pixel sparks: 60 dots fly from holeCenter → bossCenter ────────────
+    if (t < 0.90) {
+      final dir   = bossCenter - holeCenter;
+      final dist  = dir.distance.clamp(1.0, 9999.0);
+      final dirNx = dir.dx / dist;
+      final dirNy = dir.dy / dist;
+      final rng   = Random(7777);
+
+      p.maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
+      for (int d = 0; d < 60; d++) {
+        final bodyAngle    = rng.nextDouble() * 2 * pi;
+        final bodyR        = rng.nextDouble() * 52;
+        final staggerStart = rng.nextDouble() * 0.50;
+        if (t < staggerStart) continue;
+        final rawProg = ((t - staggerStart) / (1.0 - staggerStart)).clamp(0.0, 1.0);
+        final spiral  = cos(bodyAngle + rawProg * 3 * pi) * 12 * (1 - rawProg);
+
+        final x = holeCenter.dx + dir.dx * rawProg
+                  + cos(bodyAngle) * bodyR * rawProg
+                  + spiral * dirNy;
+        final y = holeCenter.dy + dir.dy * rawProg
+                  + sin(bodyAngle) * bodyR * rawProg
+                  - spiral * dirNx;
+        final sz  = (0.8 + rawProg * 2.2).clamp(0.3, 3.0);
+        final alp = (rawProg * 0.9 *
+                     (1.0 - (rawProg - 0.75).clamp(0.0, 1.0) * 4))
+                        .clamp(0.0, 1.0);
+        p.color = ac.withOpacity(alp);
+        canvas.drawCircle(Offset(x, y), sz, p);
+      }
+      p.maskFilter = null;
+    }
+
+    // ── B. Boss body: scan-wipe from bottom up, with horizontal jitter ───────
+    final bodyProg = ((t - 0.25) * 1.35).clamp(0.0, 1.0);
+    if (bodyProg > 0.01) {
+      const bossBottom =  95.0; // px below bossCenter
+      const bossTop    = -82.0; // px above bossCenter
+      const totalH     = bossBottom - bossTop; // 177 px
+
+      final wipeY = bossBottom - totalH * bodyProg;
+
+      // Horizontal jitter strongest at low bodyProg, gone by ~0.7
+      final jitterAmt = (1.0 - bodyProg * 1.45).clamp(0.0, 1.0);
+      final jitterX   = jitterAmt > 0.02
+          ? (Random(glitchT.hashCode ^ 0x1F3A).nextDouble() - 0.5) *
+              10.0 * jitterAmt
+          : 0.0;
+
+      canvas.save();
+      canvas.clipRect(Rect.fromLTRB(
+        bossCenter.dx - 130,
+        bossCenter.dy + wipeY,
+        bossCenter.dx + 130,
+        bossCenter.dy + bossBottom,
+      ));
+      _paintBossEntity(
+        canvas, Offset(bossCenter.dx + jitterX, bossCenter.dy),
+        opacity:     bodyProg.clamp(0.0, 1.0),
+        isStunned:   isStunned,
+        armPose:     _ArmPose.idle,
+        isAttacking: false,
+      );
+      canvas.restore();
+
+      // Scan-line edge glow at the materialization front
+      if (bodyProg < 0.97) {
+        final edgeY = bossCenter.dy + wipeY;
+        p
+          ..color      = ac.withOpacity((1.0 - bodyProg * 0.65).clamp(0.0, 1.0))
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5)
+          ..style      = PaintingStyle.stroke
+          ..strokeWidth = 2.2;
+        canvas.drawLine(
+            Offset(bossCenter.dx - 75, edgeY),
+            Offset(bossCenter.dx + 75, edgeY), p);
+        p..maskFilter = null..style = PaintingStyle.fill;
+
+        // Sparkles along the scan edge
+        for (int i = 0; i < 5; i++) {
+          final sx = bossCenter.dx + (i / 4.0 - 0.5) * 120.0;
+          p.color = _kWhite.withOpacity(
+              ((1.0 - bodyProg) * 0.65).clamp(0.0, 1.0));
+          canvas.drawCircle(Offset(sx, edgeY), 1.5, p);
+        }
+      }
+    }
+
+    // ── C. Chromatic-aberration RGB ghosts — fade out by t ≈ 0.75 ────────────
+    final aber = (1.0 - t * 1.35).clamp(0.0, 1.0);
+    if (aber > 0.04 && bodyProg > 0.08) {
+      final shift = aber * 10.0;
+      for (final dx in [-shift, shift]) {
+        _paintBossEntity(
+          canvas, Offset(bossCenter.dx + dx, bossCenter.dy),
+          opacity:     (aber * 0.40).clamp(0.0, 1.0),
+          isStunned:   isStunned,
+          armPose:     _ArmPose.idle,
+          isAttacking: false,
+        );
+      }
+    }
   }
 
   // ── Teleport: pixel-scatter dissolve ──────────────────────────────────────

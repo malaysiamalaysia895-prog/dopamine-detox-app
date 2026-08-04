@@ -1757,51 +1757,50 @@ class GameNotifier extends StateNotifier<GameState> {
       }
     }
 
-    // 2. For each target decoy position: displace any existing item first
-    final targets = newBossHoleIndex == 0
+    // 2. Place decoys on the new side — NEVER displace existing items.
+    //    If a preferred target cell is occupied, find the nearest empty cell
+    //    on the same side for the decoy instead. Items stay where they are so
+    //    the siphon phase can still destroy them correctly.
+    final preferred    = newBossHoleIndex == 0
         ? _kL41DecoyPositionsRight
         : _kL41DecoyPositionsLeft;
     final decoyMimicId = (cfg.spawnerItemId + 1).clamp(1, 51);
 
-    // Determine safe fallback columns for displaced items
-    // Right decoys (cols 3-5) → displaced items stay on right (cols 3-5)
-    // Left  decoys (cols 0-2) → displaced items stay on left  (cols 0-2)
     final isRightSide = newBossHoleIndex == 0;
     final sideColMin  = isRightSide ? 3 : 0;
     final sideColMax  = isRightSide ? cfg.gridCols - 1 : 2;
 
-    for (final pos in targets) {
+    // Track cells already claimed by a decoy in this pass
+    final claimed = <(int, int)>{};
+
+    for (final pos in preferred) {
       final tc = pos.$1;
       final tr = pos.$2;
-      if (tc >= cfg.gridCols || tr >= cfg.gridRows) continue;
 
-      final occupant = newGrid[tc][tr];
-      if (occupant.itemId != null && !occupant.isBlocked) {
-        // Find nearest empty, non-decoy cell on the same side
-        (int, int)? emptySlot;
-        outer:
-        for (int c = sideColMin; c <= sideColMax; c++) {
-          for (int r = 0; r < cfg.gridRows; r++) {
-            if (!targets.contains((c, r)) && newGrid[c][r].isEmpty) {
-              emptySlot = (c, r);
-              break outer;
-            }
-          }
-        }
-        if (emptySlot != null) {
-          // Displace item to that empty slot
-          newGrid[emptySlot!.$1][emptySlot.$2] =
-              newGrid[emptySlot.$1][emptySlot.$2].withItem(occupant.itemId!);
-        }
-        // Clear the item from the target cell so the decoy can be placed
-        newGrid[tc][tr] = newGrid[tc][tr].clearItem();
+      // Preferred cell is empty → place decoy directly
+      if (tc < cfg.gridCols && tr < cfg.gridRows && newGrid[tc][tr].isEmpty) {
+        newGrid[tc][tr] = GridCell(
+          obstacle: ObstacleType.glitchedDecoy, decoyItemId: decoyMimicId);
+        claimed.add((tc, tr));
+        continue;
       }
 
-      // Place the glitchy decoy
-      newGrid[tc][tr] = GridCell(
-        obstacle:    ObstacleType.glitchedDecoy,
-        decoyItemId: decoyMimicId,
-      );
+      // Occupied or out-of-bounds → find nearest empty cell on the same side.
+      // Do NOT touch the occupant; items must survive for siphon logic.
+      (int, int)? slot;
+      outer:
+      for (int c = sideColMin; c <= sideColMax; c++) {
+        for (int r = 0; r < cfg.gridRows; r++) {
+          if (!claimed.contains((c, r)) && newGrid[c][r].isEmpty) {
+            slot = (c, r);
+            break outer;
+          }
+        }
+      }
+      if (slot == null) continue; // no empty cell on this side — skip
+      newGrid[slot.$1][slot.$2] = GridCell(
+        obstacle: ObstacleType.glitchedDecoy, decoyItemId: decoyMimicId);
+      claimed.add(slot);
     }
 
     state = state.copyWith(grid: newGrid);
