@@ -1702,17 +1702,24 @@ class GameNotifier extends StateNotifier<GameState> {
   //   • Sit in corner slots that lie OUTSIDE both holes' 3×3 pull zones:
   //       Hole A (LEFT)  (1,2) → zone cols 0-2, rows 1-3
   //       Hole B (RIGHT) (4,3) → zone cols 3-5, rows 2-4
-  //   • Rows 0 and 5 are safe for both holes, so (c,0) and (c,5) are the
-  //     anchors. Alternating columns 0/2 (left) or 3/5 (right) spreads them
-  //     across the grid to block the maximum number of merge paths.
-  //
-  // bossHoleIndex=0 (LEFT active)  → decoys on RIGHT: (3,0)(5,0)(3,5)(5,5)
-  // bossHoleIndex=1 (RIGHT active) → decoys on LEFT:  (0,0)(2,0)(0,5)(2,5)
+  //   • Rows 0 and 5 are safe for both holes (outside every pull zone).
+  //   • When LEFT hole (bossHoleIndex=0) is active:
+  //       5 decoys on RIGHT (opposite) + 3 decoys on LEFT (same side)
+  //   • When RIGHT hole (bossHoleIndex=1) is active:
+  //       5 decoys on LEFT (opposite) + 3 decoys on RIGHT (same side)
+  //   Total: 8 decoys at any time — maximum merge disruption for the player.
 
-  static const _kL41DecoyPositionsRight = [(3, 0), (5, 0), (3, 5), (5, 5)];
-  static const _kL41DecoyPositionsLeft  = [(0, 0), (2, 0), (0, 5), (2, 5)];
+  // bossHoleIndex=0 (LEFT active) — 5 on RIGHT side (opposite)
+  static const _kL41OppRight  = [(3,0),(4,0),(5,0),(3,5),(5,5)];
+  // bossHoleIndex=0 (LEFT active) — 3 on LEFT side (same)
+  static const _kL41SameLeft  = [(0,5),(1,0),(2,5)];
 
-  /// Place 4 L41 glitchy decoys into [cells] based on [activeBossHoleIndex].
+  // bossHoleIndex=1 (RIGHT active) — 5 on LEFT side (opposite)
+  static const _kL41OppLeft   = [(0,0),(1,0),(2,0),(0,5),(2,5)];
+  // bossHoleIndex=1 (RIGHT active) — 3 on RIGHT side (same)
+  static const _kL41SameRight = [(3,0),(4,5),(5,0)];
+
+  /// Place all 8 L41 glitchy decoys into [cells] (initial grid build).
   void _placeL41DecoysCells(
     List<List<GridCell>> cells,
     int activeBossHoleIndex,
@@ -1720,15 +1727,14 @@ class GameNotifier extends StateNotifier<GameState> {
     int gridRows,
     int spawnerItemId,
   ) {
-    final positions = activeBossHoleIndex == 0
-        ? _kL41DecoyPositionsRight
-        : _kL41DecoyPositionsLeft;
     final decoyMimicId = (spawnerItemId + 1).clamp(1, 51);
-    for (final pos in positions) {
+    final allPositions = activeBossHoleIndex == 0
+        ? [..._kL41OppRight, ..._kL41SameLeft]
+        : [..._kL41OppLeft,  ..._kL41SameRight];
+    for (final pos in allPositions) {
       final c = pos.$1;
       final r = pos.$2;
       if (c < gridCols && r < gridRows) {
-        // Clear any existing item/obstacle, then place the glitchy decoy
         cells[c][r] = GridCell(
           obstacle: ObstacleType.glitchedDecoy,
           decoyItemId: decoyMimicId,
@@ -1737,70 +1743,69 @@ class GameNotifier extends StateNotifier<GameState> {
     }
   }
 
-  /// Called when Warp Sentinel teleports — moves all 4 L41 glitchy decoys to
-  /// the opposite side of the newly active black hole.
-  /// If a target position has an item, that item is displaced to the nearest
-  /// empty cell on the SAME side so no item is silently destroyed.
+  /// Called when Warp Sentinel teleports — repositions all 8 L41 glitchy
+  /// decoys: 5 on the opposite side + 3 on the same side as the new active
+  /// black hole. Never displaces existing items; finds the nearest empty cell
+  /// on the correct half for any decoy whose preferred spot is occupied.
   void _repositionL41Decoys(int newBossHoleIndex) {
     if (state.activeDialog != ActiveDialog.none) return;
-    final cfg     = state.currentLevel;
+    final cfg = state.currentLevel;
     if (!cfg.hasL41Decoys) return;
 
-    final newGrid = _cloneGrid();
+    final newGrid      = _cloneGrid();
+    final decoyMimicId = (cfg.spawnerItemId + 1).clamp(1, 51);
 
-    // 1. Remove existing glitchy decoys — those cells become empty
+    // 1. Clear all existing glitchy decoys
     for (int c = 0; c < cfg.gridCols; c++) {
       for (int r = 0; r < cfg.gridRows; r++) {
-        if (newGrid[c][r].isDecoy) {
-          newGrid[c][r] = const GridCell();
-        }
+        if (newGrid[c][r].isDecoy) newGrid[c][r] = const GridCell();
       }
     }
 
-    // 2. Place decoys on the new side — NEVER displace existing items.
-    //    If a preferred target cell is occupied, find the nearest empty cell
-    //    on the same side for the decoy instead. Items stay where they are so
-    //    the siphon phase can still destroy them correctly.
-    final preferred    = newBossHoleIndex == 0
-        ? _kL41DecoyPositionsRight
-        : _kL41DecoyPositionsLeft;
-    final decoyMimicId = (cfg.spawnerItemId + 1).clamp(1, 51);
+    // 2. Build the two groups for the new active hole
+    //    Each group: (preferred positions list, colMin, colMax for fallback)
+    final groups = newBossHoleIndex == 0
+        ? [(_kL41OppRight,  3, cfg.gridCols - 1),
+           (_kL41SameLeft,  0, 2)]
+        : [(_kL41OppLeft,   0, 2),
+           (_kL41SameRight, 3, cfg.gridCols - 1)];
 
-    final isRightSide = newBossHoleIndex == 0;
-    final sideColMin  = isRightSide ? 3 : 0;
-    final sideColMax  = isRightSide ? cfg.gridCols - 1 : 2;
-
-    // Track cells already claimed by a decoy in this pass
     final claimed = <(int, int)>{};
 
-    for (final pos in preferred) {
-      final tc = pos.$1;
-      final tr = pos.$2;
+    for (final group in groups) {
+      final preferred = group.$1 as List<(int, int)>;
+      final colMin    = group.$2 as int;
+      final colMax    = group.$3 as int;
 
-      // Preferred cell is empty → place decoy directly
-      if (tc < cfg.gridCols && tr < cfg.gridRows && newGrid[tc][tr].isEmpty) {
-        newGrid[tc][tr] = GridCell(
-          obstacle: ObstacleType.glitchedDecoy, decoyItemId: decoyMimicId);
-        claimed.add((tc, tr));
-        continue;
-      }
+      for (final pos in preferred) {
+        final tc = pos.$1;
+        final tr = pos.$2;
 
-      // Occupied or out-of-bounds → find nearest empty cell on the same side.
-      // Do NOT touch the occupant; items must survive for siphon logic.
-      (int, int)? slot;
-      outer:
-      for (int c = sideColMin; c <= sideColMax; c++) {
-        for (int r = 0; r < cfg.gridRows; r++) {
-          if (!claimed.contains((c, r)) && newGrid[c][r].isEmpty) {
-            slot = (c, r);
-            break outer;
+        // Preferred cell is free — place directly
+        if (tc < cfg.gridCols && tr < cfg.gridRows &&
+            newGrid[tc][tr].isEmpty && !claimed.contains((tc, tr))) {
+          newGrid[tc][tr] = GridCell(
+            obstacle: ObstacleType.glitchedDecoy, decoyItemId: decoyMimicId);
+          claimed.add((tc, tr));
+          continue;
+        }
+
+        // Occupied → find nearest empty cell on the same half (no item moved)
+        (int, int)? slot;
+        outer:
+        for (int c = colMin; c <= colMax; c++) {
+          for (int r = 0; r < cfg.gridRows; r++) {
+            if (!claimed.contains((c, r)) && newGrid[c][r].isEmpty) {
+              slot = (c, r);
+              break outer;
+            }
           }
         }
+        if (slot == null) continue; // grid half full — skip this decoy
+        newGrid[slot.$1][slot.$2] = GridCell(
+          obstacle: ObstacleType.glitchedDecoy, decoyItemId: decoyMimicId);
+        claimed.add(slot);
       }
-      if (slot == null) continue; // no empty cell on this side — skip
-      newGrid[slot.$1][slot.$2] = GridCell(
-        obstacle: ObstacleType.glitchedDecoy, decoyItemId: decoyMimicId);
-      claimed.add(slot);
     }
 
     state = state.copyWith(grid: newGrid);
