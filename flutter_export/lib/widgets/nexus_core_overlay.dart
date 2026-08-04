@@ -63,15 +63,16 @@ class _NexusScene extends StatefulWidget {
 
 class _NexusSceneState extends State<_NexusScene> with TickerProviderStateMixin {
   // ── Animation controllers ──────────────────────────────────────────────────
-  late final AnimationController _bob;      // continuous bob 0→1 cycle
-  late final AnimationController _tentWave; // tentacle wave 0→1 cycle
-  late final AnimationController _eyePulse; // eye glow pulse 0→1 cycle
-  late final AnimationController _blinkCtrl;// eye blink sequence
-  late final AnimationController _laserPulse;// laser flicker
+  late final AnimationController _bob;        // continuous bob 0→1 cycle
+  late final AnimationController _tentWave;  // tentacle wave 0→1 cycle
+  late final AnimationController _eyePulse;  // eye glow pulse 0→1 cycle
+  late final AnimationController _blinkCtrl; // eye blink sequence
+  late final AnimationController _laserPulse;// laser flicker (fast)
   late final AnimationController _entryDrop; // entry drop-in (0→1 once)
   late final AnimationController _empRing;   // EMP ring on stun
   late final AnimationController _winLaser;  // win blast laser
   late final AnimationController _winExplode;
+  late final AnimationController _laserBuildup; // beam buildup when new target acquired
 
   double _bobVal    = 0;
   double _tentVal   = 0;
@@ -82,9 +83,11 @@ class _NexusSceneState extends State<_NexusScene> with TickerProviderStateMixin 
   double _empVal    = 0;
   double _winLVal   = 0;
   double _winEVal   = 0;
+  double _laserBuildupVal = 0;  // 0→1 beam buildup when new target acquired
 
   // Blink scheduling
   bool _blinkScheduled = false;
+  (int,int)? _prevTarget; // track target changes for buildup anim
 
   @override
   void initState() {
@@ -93,21 +96,23 @@ class _NexusSceneState extends State<_NexusScene> with TickerProviderStateMixin 
     _tentWave  = AnimationController(vsync: this, duration: const Duration(milliseconds: 2200))..repeat();
     _eyePulse  = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..repeat(reverse: true);
     _blinkCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 380));
-    _laserPulse= AnimationController(vsync: this, duration: const Duration(milliseconds: 220))..repeat(reverse: true);
+    _laserPulse= AnimationController(vsync: this, duration: const Duration(milliseconds: 180))..repeat(reverse: true);
     _entryDrop = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
     _empRing   = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000))..repeat();
     _winLaser  = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
     _winExplode= AnimationController(vsync: this, duration: const Duration(milliseconds: 1400));
+    _laserBuildup = AnimationController(vsync: this, duration: const Duration(milliseconds: 650));
 
-    _bob.addListener(()       { if (mounted) setState(() => _bobVal    = _bob.value); });
-    _tentWave.addListener(()  { if (mounted) setState(() => _tentVal   = _tentWave.value); });
-    _eyePulse.addListener(()  { if (mounted) setState(() => _eyeVal    = _eyePulse.value); });
-    _blinkCtrl.addListener(() { if (mounted) setState(() => _blinkVal  = _blinkAnim()); });
-    _laserPulse.addListener((){if (mounted) setState(() => _laserVal  = _laserPulse.value); });
-    _entryDrop.addListener(() { if (mounted) setState(() => _entryVal  = _entryDrop.value); });
-    _empRing.addListener(()   { if (mounted) setState(() => _empVal    = _empRing.value); });
-    _winLaser.addListener(()  { if (mounted) setState(() => _winLVal   = _winLaser.value); });
-    _winExplode.addListener((){if (mounted) setState(() => _winEVal   = _winExplode.value); });
+    _bob.addListener(()         { if (mounted) setState(() => _bobVal         = _bob.value); });
+    _tentWave.addListener(()    { if (mounted) setState(() => _tentVal        = _tentWave.value); });
+    _eyePulse.addListener(()    { if (mounted) setState(() => _eyeVal         = _eyePulse.value); });
+    _blinkCtrl.addListener(()   { if (mounted) setState(() => _blinkVal       = _blinkAnim()); });
+    _laserPulse.addListener(()  { if (mounted) setState(() => _laserVal       = _laserPulse.value); });
+    _entryDrop.addListener(()   { if (mounted) setState(() => _entryVal       = _entryDrop.value); });
+    _empRing.addListener(()     { if (mounted) setState(() => _empVal         = _empRing.value); });
+    _winLaser.addListener(()    { if (mounted) setState(() => _winLVal        = _winLaser.value); });
+    _winExplode.addListener(()  { if (mounted) setState(() => _winEVal        = _winExplode.value); });
+    _laserBuildup.addListener((){if (mounted) setState(() => _laserBuildupVal = _laserBuildup.value); });
 
     // Start blink loop
     _scheduleBlink();
@@ -119,17 +124,6 @@ class _NexusSceneState extends State<_NexusScene> with TickerProviderStateMixin 
       _entryDrop.forward();
     } else {
       _entryVal = 1.0;
-    }
-  }
-
-  @override
-  void didUpdateWidget(_NexusScene old) {
-    super.didUpdateWidget(old);
-    if (widget.controller.phase == NexusCorePhase.entry && _entryVal == 0) {
-      _entryDrop.forward();
-    }
-    if (widget.controller.phase == NexusCorePhase.winBlast && _winLVal == 0) {
-      _winLaser.forward().then((_) { if (mounted) _winExplode.forward(); });
     }
   }
 
@@ -156,10 +150,31 @@ class _NexusSceneState extends State<_NexusScene> with TickerProviderStateMixin 
   }
 
   @override
+  void didUpdateWidget(_NexusScene old) {
+    super.didUpdateWidget(old);
+    if (widget.controller.phase == NexusCorePhase.entry && _entryVal == 0) {
+      _entryDrop.forward();
+    }
+    if (widget.controller.phase == NexusCorePhase.winBlast && _winLVal == 0) {
+      _winLaser.forward().then((_) { if (mounted) _winExplode.forward(); });
+    }
+    // Detect new target → trigger beam buildup animation
+    final newTarget = widget.controller.targetedCell;
+    if (newTarget != _prevTarget) {
+      _prevTarget = newTarget;
+      if (newTarget != null) {
+        _laserBuildup.forward(from: 0);
+      } else {
+        _laserBuildup.value = 0;
+      }
+    }
+  }
+
+  @override
   void dispose() {
     _bob.dispose(); _tentWave.dispose(); _eyePulse.dispose(); _blinkCtrl.dispose();
     _laserPulse.dispose(); _entryDrop.dispose(); _empRing.dispose();
-    _winLaser.dispose(); _winExplode.dispose();
+    _winLaser.dispose(); _winExplode.dispose(); _laserBuildup.dispose();
     super.dispose();
   }
 
@@ -183,19 +198,38 @@ class _NexusSceneState extends State<_NexusScene> with TickerProviderStateMixin 
     // Targeted cell rect for laser
     final target    = widget.controller.targetedCell;
     final targetRect= target != null ? widget.getCellRect(target.$1, target.$2) : null;
+    // Fallback cell position if getCellRect returns null (fixes first-item bug)
+    final effectiveTargetRect = targetRect ?? (target != null ? _estimateCellRect(target.$1, target.$2, sz) : null);
+
+    // Actual eye position on screen (accounts for bob offset)
+    final eyeCenter = Offset(sz.width / 2, entryY + (_bobVal - 0.5) * 12.0);
 
     return Stack(children: [
 
+      // ── Pre-attack charge vignette (eye charging up) ──────────────────────
+      if (p == NexusCorePhase.active && widget.controller.isLaserCharging && effectiveTargetRect == null)
+        Positioned.fill(
+          child: IgnorePointer(
+            child: CustomPaint(
+              painter: _ChargeVignettePainter(
+                eyeCenter: eyeCenter,
+                chargeProgress: _eyeVal,
+              ),
+            ),
+          ),
+        ),
+
       // ── Laser beam from eye to targeted cell ─────────────────────────────
-      if (p == NexusCorePhase.active && targetRect != null)
+      if (p == NexusCorePhase.active && effectiveTargetRect != null)
         Positioned.fill(
           child: IgnorePointer(
             child: CustomPaint(
               painter: _LaserBeamPainter(
-                fromCenter: Offset(sz.width / 2, entryY),
-                toRect:     targetRect,
-                intensity:  0.6 + _laserVal * 0.4,
-                secsLeft:   widget.controller.targetSecondsLeft,
+                eyeCenter:      eyeCenter,
+                toRect:         effectiveTargetRect,
+                flickerVal:     _laserVal,
+                buildupProgress: _laserBuildupVal,
+                secsLeft:       widget.controller.targetSecondsLeft,
               ),
             ),
           ),
@@ -646,74 +680,227 @@ class _NexusBodyPainter extends CustomPainter {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Laser Beam — boss eye to targeted cell
+// Helper: estimate cell rect if getCellRect returns null (first-item bug fix)
+// ─────────────────────────────────────────────────────────────────────────────
+
+Rect _estimateCellRect(int col, int row, Size sz) {
+  // Approximate grid layout based on common game layout proportions
+  const gridMargin = 8.0;
+  const gridCols   = 6;
+  const gridRows   = 5;
+  final gridTop    = sz.height * 0.40;
+  final gridBottom = sz.height * 0.87;
+  final cellW = (sz.width - gridMargin * 2) / gridCols;
+  final cellH = (gridBottom - gridTop) / gridRows;
+  final left  = gridMargin + col * cellW;
+  final top   = gridTop   + row * cellH;
+  return Rect.fromLTWH(left, top, cellW, cellH);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pre-attack charge vignette — red glow emanating from eye before beam fires
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ChargeVignettePainter extends CustomPainter {
+  final Offset eyeCenter;
+  final double chargeProgress; // 0→1 (uses eyePulse for oscillation)
+  const _ChargeVignettePainter({required this.eyeCenter, required this.chargeProgress});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Expanding charge rings from the eye
+    for (int r = 0; r < 4; r++) {
+      final rPhase = ((chargeProgress + r * 0.25) % 1.0);
+      final radius = 16.0 + rPhase * 48.0;
+      final alpha  = (1.0 - rPhase) * 0.55;
+      canvas.drawCircle(eyeCenter, radius, Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.0 - rPhase * 1.5
+        ..color = _kEyeRed.withOpacity(alpha)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5));
+    }
+    // Core charge glow
+    canvas.drawCircle(eyeCenter, 22 + chargeProgress * 10, Paint()
+      ..color = _kEyeRed.withOpacity(0.18 + chargeProgress * 0.12)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18));
+  }
+
+  @override bool shouldRepaint(_ChargeVignettePainter o) =>
+      o.chargeProgress != chargeProgress || o.eyeCenter != eyeCenter;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Laser Beam — boss eye to targeted cell  (professional multi-layer beam)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _LaserBeamPainter extends CustomPainter {
-  final Offset fromCenter; // boss body center in screen
-  final Rect   toRect;     // targeted cell rect
-  final double intensity;
+  final Offset eyeCenter;       // actual eye position on screen
+  final Rect   toRect;          // targeted cell rect
+  final double flickerVal;      // 0→1 fast oscillation for flicker
+  final double buildupProgress; // 0→1 beam buildup animation
   final int    secsLeft;
 
   const _LaserBeamPainter({
-    required this.fromCenter,
+    required this.eyeCenter,
     required this.toRect,
-    required this.intensity,
+    required this.flickerVal,
+    required this.buildupProgress,
     required this.secsLeft,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Eye is roughly 22px above body center (eye center)
-    final eyePos  = fromCenter - const Offset(0, 22);
     final cellPos = toRect.center;
-    final dist    = (cellPos - eyePos).distance;
 
-    // Outer glow beam
-    canvas.drawLine(eyePos, cellPos, Paint()
-      ..color = _kEyeRed.withOpacity(intensity * 0.18)
-      ..strokeWidth = 18
-      ..strokeCap = StrokeCap.round
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10));
+    // How far the beam has traveled (0=not fired, 1=full beam at target)
+    final beamReach = buildupProgress < 0.35
+        ? 0.0
+        : Curves.easeOutCubic.transform((buildupProgress - 0.35) / 0.65);
 
-    // Mid beam
-    canvas.drawLine(eyePos, cellPos, Paint()
-      ..color = _kEyeRed.withOpacity(intensity * 0.55)
-      ..strokeWidth = 4.5
-      ..strokeCap = StrokeCap.round);
+    final dist = (cellPos - eyeCenter).distance;
+    if (dist < 4) return;
 
-    // Core beam
-    canvas.drawLine(eyePos, cellPos, Paint()
-      ..color = Color.lerp(_kEyeOrange, Colors.white, intensity * 0.4)!.withOpacity(intensity * 0.9)
-      ..strokeWidth = 1.8
-      ..strokeCap = StrokeCap.round);
+    final beamEnd = Offset.lerp(eyeCenter, cellPos, beamReach)!;
+    final beamDist = (beamEnd - eyeCenter).distance;
 
-    // Scanning sparks along beam (3 sparks at 25%, 50%, 75%)
-    final dir = (cellPos - eyePos) / dist;
-    final rng = Random((intensity * 20).toInt());
-    for (double t = 0.2; t <= 0.85; t += 0.3) {
-      final sPos = eyePos + dir * (dist * t);
-      final offset = Offset(
-        (rng.nextDouble() - 0.5) * 6,
-        (rng.nextDouble() - 0.5) * 6,
+    // ── 1. Screen red vignette while beam is active ───────────────────────
+    if (buildupProgress > 0.2) {
+      final vAlpha = ((buildupProgress - 0.2) / 0.8).clamp(0.0, 1.0) * 0.07;
+      final gradient = RadialGradient(
+        center: Alignment.topCenter,
+        radius: 1.6,
+        colors: [
+          _kEyeRed.withOpacity(0),
+          _kEyeRed.withOpacity(vAlpha),
+        ],
       );
-      canvas.drawCircle(sPos + offset, 2.5 + rng.nextDouble() * 2, Paint()
-        ..color = _kEyeOrange.withOpacity(intensity * 0.8)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, size.width, size.height),
+        Paint()..shader = gradient.createShader(Rect.fromLTWH(0, 0, size.width, size.height)),
+      );
     }
 
-    // Impact circle at cell
-    canvas.drawCircle(cellPos, 14 + intensity * 4, Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..color = _kEyeRed.withOpacity(intensity * 0.8));
-    canvas.drawCircle(cellPos, 6, Paint()
-      ..color = _kEyeOrange.withOpacity(intensity * 0.9)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+    // ── 2. Eye charge rings (before beam fully extends) ───────────────────
+    if (buildupProgress < 0.6) {
+      final chargeT = buildupProgress / 0.6;
+      for (int r = 0; r < 3; r++) {
+        final rProg = ((chargeT * 3.0) - r).clamp(0.0, 1.0);
+        if (rProg <= 0.01) continue;
+        final ringR  = 10.0 + rProg * 55.0 * (1.0 - chargeT);
+        final alpha  = rProg * (1.0 - rProg) * 1.8 * 0.9;
+        if (alpha < 0.01) continue;
+        canvas.drawCircle(eyeCenter, ringR.clamp(2.0, 80.0), Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3.5 - r * 0.8
+          ..color = _kEyeRed.withOpacity(alpha.clamp(0.0, 1.0))
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7));
+      }
+    }
+
+    if (beamDist < 3) return; // beam hasn't started extending yet
+
+    // ── 3. Outer atmospheric glow (very wide, very soft) ──────────────────
+    canvas.drawLine(eyeCenter, beamEnd, Paint()
+      ..color = _kEyeRed.withOpacity((0.12 + flickerVal * 0.06).clamp(0, 1))
+      ..strokeWidth = 42
+      ..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 22));
+
+    // ── 4. Mid glow beam ──────────────────────────────────────────────────
+    canvas.drawLine(eyeCenter, beamEnd, Paint()
+      ..color = _kEyeRed.withOpacity((0.52 + flickerVal * 0.18).clamp(0, 1))
+      ..strokeWidth = 16
+      ..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
+
+    // ── 5. Core red beam ──────────────────────────────────────────────────
+    canvas.drawLine(eyeCenter, beamEnd, Paint()
+      ..color = _kEyeRed.withOpacity((0.88 + flickerVal * 0.12).clamp(0, 1))
+      ..strokeWidth = 6.5
+      ..strokeCap = StrokeCap.round);
+
+    // ── 6. Orange-hot inner beam ──────────────────────────────────────────
+    canvas.drawLine(eyeCenter, beamEnd, Paint()
+      ..color = _kEyeOrange.withOpacity((0.75 + flickerVal * 0.25).clamp(0, 1))
+      ..strokeWidth = 3.2
+      ..strokeCap = StrokeCap.round);
+
+    // ── 7. White-hot core ─────────────────────────────────────────────────
+    canvas.drawLine(eyeCenter, beamEnd, Paint()
+      ..color = Colors.white.withOpacity((0.70 + flickerVal * 0.30).clamp(0, 1))
+      ..strokeWidth = 1.4
+      ..strokeCap = StrokeCap.round);
+
+    // ── 8. Plasma energy nodes flowing along beam ─────────────────────────
+    if (beamReach > 0.12) {
+      final rng = Random((flickerVal * 40).toInt());
+      final stepCount = (beamDist / 28).clamp(3.0, 12.0).toInt();
+      for (int i = 1; i <= stepCount; i++) {
+        final t = i / (stepCount + 1).toDouble();
+        if (t >= beamReach) break;
+        final nodePos = Offset.lerp(eyeCenter, cellPos, t)!;
+        // Random jitter perpendicular to beam
+        final dx = -(cellPos.dy - eyeCenter.dy) / dist;
+        final dy =  (cellPos.dx - eyeCenter.dx) / dist;
+        final jitter = (rng.nextDouble() - 0.5) * 7.0;
+        final jPos = nodePos + Offset(dx * jitter, dy * jitter);
+        final nodeR = 3.0 + rng.nextDouble() * 4.0 + flickerVal * 2.0;
+        // Node glow
+        canvas.drawCircle(jPos, nodeR + 4, Paint()
+          ..color = _kEyeRed.withOpacity(0.30 + flickerVal * 0.20)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, nodeR * 0.8));
+        // Node core
+        canvas.drawCircle(jPos, nodeR, Paint()
+          ..color = Colors.white.withOpacity(0.55 + flickerVal * 0.45));
+        // Node inner
+        canvas.drawCircle(jPos, nodeR * 0.45, Paint()
+          ..color = _kEyeOrange.withOpacity(0.95));
+      }
+    }
+
+    // ── 9. Impact zone at target ──────────────────────────────────────────
+    if (beamReach > 0.80) {
+      final impactFrac = ((beamReach - 0.80) / 0.20).clamp(0.0, 1.0);
+
+      // Expanding shockwave rings
+      for (int r = 0; r < 4; r++) {
+        final rPhase = ((flickerVal * 2.0 + r * 0.25) % 1.0);
+        final ringR  = (10.0 + rPhase * 30.0) * impactFrac;
+        final ringA  = (1.0 - rPhase) * impactFrac * 0.9;
+        if (ringA < 0.02) continue;
+        canvas.drawCircle(cellPos, ringR, Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = (2.5 - rPhase * 1.5).clamp(0.5, 3.0)
+          ..color = _kEyeRed.withOpacity(ringA.clamp(0, 1))
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+      }
+
+      // Central impact glow
+      canvas.drawCircle(cellPos, (22 + flickerVal * 10) * impactFrac, Paint()
+        ..color = _kEyeRed.withOpacity(0.30 * impactFrac)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14));
+      canvas.drawCircle(cellPos, (8 + flickerVal * 4) * impactFrac, Paint()
+        ..color = _kEyeOrange.withOpacity(0.85 * impactFrac)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5));
+      canvas.drawCircle(cellPos, 3.5 * impactFrac, Paint()
+        ..color = Colors.white.withOpacity(0.95 * impactFrac));
+
+      // Radial spark lines
+      final rng2 = Random(77);
+      for (int i = 0; i < 10; i++) {
+        final angle   = i * (math.pi * 2 / 10) + flickerVal * math.pi * 0.5;
+        final sparkLen = (12.0 + rng2.nextDouble() * 18.0 + flickerVal * 12.0) * impactFrac;
+        final sparkEnd = cellPos + Offset(math.cos(angle) * sparkLen, math.sin(angle) * sparkLen);
+        canvas.drawLine(cellPos, sparkEnd, Paint()
+          ..color = (i.isEven ? _kEyeOrange : _kEyeRed).withOpacity(0.80 * impactFrac)
+          ..strokeWidth = 1.8 + rng2.nextDouble() * 0.8
+          ..strokeCap = StrokeCap.round);
+      }
+    }
   }
 
   @override bool shouldRepaint(_LaserBeamPainter o) =>
-      o.intensity != intensity || o.toRect != toRect;
+      o.flickerVal != flickerVal || o.toRect != toRect || o.buildupProgress != buildupProgress;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
