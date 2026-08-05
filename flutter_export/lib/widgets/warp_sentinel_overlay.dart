@@ -929,12 +929,15 @@ class _WarpScenePainter extends CustomPainter {
     p.style = PaintingStyle.fill;
   }
 
-  // ── Entry: glitch-materialize — boss coalesces from the black hole ───────────
-  // entryT 0→1 over 3.2 s:
-  //   Phase A (0.00–0.90): 60 pixel-sparks shoot from holeCenter to bossCenter
-  //   Phase B (0.25–1.00): boss body scan-wipes upward (bottom → top) with jitter
-  //   Phase C (0.00–0.75): chromatic-aberration RGB ghosts fade away
-  //   Edge glow:           bright scan-line at the materialization front
+  // ── Entry: CINEMATIC WARP ARRIVAL — 5-phase professional entry ───────────────
+  // entryT 0→1 over 3.2 s, all phases overlapping for seamless drama:
+  //   0.00–0.18  FLASH        — full-screen purple/white impact burst
+  //   0.04–0.52  VOID RIFT    — glowing vertical dimensional tear opens at boss pos
+  //   0.05–0.68  VORTEX       — 160 particles spiral inward from all edges
+  //   0.18–0.70  PLASMA RINGS — expanding energy rings radiate outward
+  //   0.36–0.93  MATERIALIZE  — boss assembles via scale+elastic+pixel-scatter, no clip wipe
+  //   0.60–0.88  BURST BEAMS  — 10 radial energy beams explode outward
+  //   0.00–0.93  VIGNETTE     — soft purple corona throughout
 
   void _paintBossGlitchEntry(
       Canvas canvas, Offset bossCenter, Offset holeCenter, bool isStunned) {
@@ -942,107 +945,221 @@ class _WarpScenePainter extends CustomPainter {
     final ac = isStunned ? _kStunBlue : _kPurple;
     final p  = Paint()..style = PaintingStyle.fill;
 
-    // ── A. Pixel sparks: 60 dots fly from holeCenter → bossCenter ────────────
-    if (t < 0.90) {
-      final dir   = bossCenter - holeCenter;
-      final dist  = dir.distance.clamp(1.0, 9999.0);
-      final dirNx = dir.dx / dist;
-      final dirNy = dir.dy / dist;
-      final rng   = Random(7777);
+    // ── Phase 0: Full-screen impact flash (0→0.18) ───────────────────────────
+    if (t < 0.18) {
+      final ft = (t / 0.18).clamp(0.0, 1.0);
+      final fa = (ft < 0.28 ? ft / 0.28 : 1.0 - (ft - 0.28) / 0.72)
+                     .clamp(0.0, 1.0);
+      p.color = _kPurple.withOpacity(fa * 0.55);
+      canvas.drawRect(const Rect.fromLTWH(-500, -500, 6000, 6000), p);
+      p.color = _kWhite.withOpacity(fa * 0.38);
+      canvas.drawRect(const Rect.fromLTWH(-500, -500, 6000, 6000), p);
+    }
 
-      p.maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
-      for (int d = 0; d < 60; d++) {
-        final bodyAngle    = rng.nextDouble() * 2 * pi;
-        final bodyR        = rng.nextDouble() * 52;
-        final staggerStart = rng.nextDouble() * 0.50;
-        if (t < staggerStart) continue;
-        final rawProg = ((t - staggerStart) / (1.0 - staggerStart)).clamp(0.0, 1.0);
-        final spiral  = cos(bodyAngle + rawProg * 3 * pi) * 12 * (1 - rawProg);
+    // ── Phase 1: Void rift — dimensional tear at boss position (0.04→0.52) ───
+    final riftProgress = ((t - 0.04) / 0.48).clamp(0.0, 1.0);
+    if (riftProgress > 0.0) {
+      final riftH = riftProgress < 0.55
+          ? Curves.easeOut.transform(riftProgress / 0.55) * 175.0
+          : 175.0 * (1.0 - Curves.easeIn.transform((riftProgress - 0.55) / 0.45) * 0.65);
+      final riftW = riftProgress < 0.38
+          ? riftProgress / 0.38 * 9.0
+          : 9.0 * (1.0 - (riftProgress - 0.38) / 0.62 * 0.88);
+      final riftA = (riftProgress < 0.50
+          ? riftProgress / 0.50
+          : 1.0 - (riftProgress - 0.50) / 0.50).clamp(0.0, 1.0);
 
-        final x = holeCenter.dx + dir.dx * rawProg
-                  + cos(bodyAngle) * bodyR * rawProg
-                  + spiral * dirNy;
-        final y = holeCenter.dy + dir.dy * rawProg
-                  + sin(bodyAngle) * bodyR * rawProg
-                  - spiral * dirNx;
-        final sz  = (0.8 + rawProg * 2.2).clamp(0.3, 3.0);
-        final alp = (rawProg * 0.9 *
-                     (1.0 - (rawProg - 0.75).clamp(0.0, 1.0) * 4))
-                        .clamp(0.0, 1.0);
-        p.color = ac.withOpacity(alp);
-        canvas.drawCircle(Offset(x, y), sz, p);
+      // Deep glow behind the rift
+      p
+        ..color      = ac.withOpacity(riftA * 0.55)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 22);
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              Rect.fromCenter(center: bossCenter,
+                  width: (riftW * 5.0).clamp(2.0, 80.0), height: riftH.clamp(2.0, 200.0)),
+              const Radius.circular(8)),
+          p);
+      p.maskFilter = null;
+
+      // Bright core slit
+      p.color = _kWhite.withOpacity(riftA * 0.95);
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              Rect.fromCenter(center: bossCenter,
+                  width: (riftW * 0.9).clamp(1.0, 12.0), height: (riftH * 0.88).clamp(1.0, 180.0)),
+              const Radius.circular(3)),
+          p);
+
+      // Horizontal glitch fringe lines emanating from rift edges
+      final rng0 = Random(0xCAFE);
+      p.style = PaintingStyle.stroke;
+      for (int i = 0; i < 18; i++) {
+        final yOff   = (rng0.nextDouble() - 0.5) * riftH * 0.80;
+        final len    = (rng0.nextDouble() * 45 + 10) * riftA;
+        final side   = rng0.nextBool() ? 1.0 : -1.0;
+        final slant  = (rng0.nextDouble() - 0.5) * 7.0;
+        p
+          ..color      = (i.isEven ? ac : _kCyan).withOpacity(rng0.nextDouble() * 0.75 * riftA)
+          ..strokeWidth = 1.0 + rng0.nextDouble() * 0.8;
+        canvas.drawLine(
+            Offset(bossCenter.dx + (riftW / 2) * side, bossCenter.dy + yOff),
+            Offset(bossCenter.dx + (riftW / 2 + len) * side, bossCenter.dy + yOff + slant),
+            p);
+      }
+      p..style = PaintingStyle.fill..maskFilter = null;
+    }
+
+    // ── Phase 2: Particle vortex — 160 sparks spiral inward (0.05→0.68) ──────
+    if (t > 0.05 && t < 0.70) {
+      final vt  = ((t - 0.05) / 0.65).clamp(0.0, 1.0);
+      final rng = Random(0xABCD1234);
+      p.maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5);
+      final cols = [ac, _kCyan, _kWhite, _kVisorGlow, const Color(0xFFFF44FF)];
+      for (int i = 0; i < 160; i++) {
+        final stagger = rng.nextDouble() * 0.55;
+        // consume RNG deterministically even when skipping
+        final angle0  = rng.nextDouble() * 2 * pi;
+        final startR  = 130.0 + rng.nextDouble() * 140.0;
+        final extraSpin = rng.nextDouble() * pi;
+        if (vt < stagger) continue;
+        final prog   = ((vt - stagger) / (1.0 - stagger)).clamp(0.0, 1.0);
+        final spiral = angle0 + prog * (2.2 * pi + extraSpin);
+        final curR   = startR * (1.0 - Curves.easeInCubic.transform(prog));
+        final px     = bossCenter.dx + cos(spiral) * curR;
+        final py     = bossCenter.dy + sin(spiral) * curR;
+        final alpha  = (prog < 0.75
+            ? (prog / 0.35).clamp(0.0, 1.0)
+            : 1.0 - ((prog - 0.75) / 0.25)).clamp(0.0, 1.0) * 0.88;
+        final sz     = (0.7 + (1.0 - prog) * 2.8).clamp(0.4, 3.2);
+        p.color = cols[i % cols.length].withOpacity(alpha.clamp(0.0, 1.0));
+        canvas.drawCircle(Offset(px, py), sz, p);
       }
       p.maskFilter = null;
     }
 
-    // ── B. Boss body: scan-wipe from bottom up, with horizontal jitter ───────
-    final bodyProg = ((t - 0.25) * 1.35).clamp(0.0, 1.0);
-    if (bodyProg > 0.01) {
-      const bossBottom =  95.0; // px below bossCenter
-      const bossTop    = -82.0; // px above bossCenter
-      const totalH     = bossBottom - bossTop; // 177 px
-
-      final wipeY = bossBottom - totalH * bodyProg;
-
-      // Horizontal jitter strongest at low bodyProg, gone by ~0.7
-      final jitterAmt = (1.0 - bodyProg * 1.45).clamp(0.0, 1.0);
-      final jitterX   = jitterAmt > 0.02
-          ? (Random(glitchT.hashCode ^ 0x1F3A).nextDouble() - 0.5) *
-              10.0 * jitterAmt
-          : 0.0;
-
-      canvas.save();
-      canvas.clipRect(Rect.fromLTRB(
-        bossCenter.dx - 130,
-        bossCenter.dy + wipeY,
-        bossCenter.dx + 130,
-        bossCenter.dy + bossBottom,
-      ));
-      _paintBossEntity(
-        canvas, Offset(bossCenter.dx + jitterX, bossCenter.dy),
-        opacity:     bodyProg.clamp(0.0, 1.0),
-        isStunned:   isStunned,
-        armPose:     _ArmPose.idle,
-        isAttacking: false,
-      );
-      canvas.restore();
-
-      // Scan-line edge glow at the materialization front
-      if (bodyProg < 0.97) {
-        final edgeY = bossCenter.dy + wipeY;
+    // ── Phase 3: Plasma rings radiate outward (0.18→0.70) ────────────────────
+    if (t > 0.18 && t < 0.72) {
+      final rt = ((t - 0.18) / 0.54).clamp(0.0, 1.0);
+      p.style = PaintingStyle.stroke;
+      for (int r = 0; r < 6; r++) {
+        final rp = ((rt * 6.0) - r).clamp(0.0, 1.0);
+        if (rp <= 0.01) continue;
+        final ringR = rp * (80.0 + r * 22.0);
+        final ringA = (rp < 0.35
+            ? rp / 0.35
+            : (1.0 - rp) / 0.65).clamp(0.0, 1.0) * 0.80;
+        if (ringA < 0.015) continue;
         p
-          ..color      = ac.withOpacity((1.0 - bodyProg * 0.65).clamp(0.0, 1.0))
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5)
-          ..style      = PaintingStyle.stroke
-          ..strokeWidth = 2.2;
-        canvas.drawLine(
-            Offset(bossCenter.dx - 75, edgeY),
-            Offset(bossCenter.dx + 75, edgeY), p);
-        p..maskFilter = null..style = PaintingStyle.fill;
-
-        // Sparkles along the scan edge
-        for (int i = 0; i < 5; i++) {
-          final sx = bossCenter.dx + (i / 4.0 - 0.5) * 120.0;
-          p.color = _kWhite.withOpacity(
-              ((1.0 - bodyProg) * 0.65).clamp(0.0, 1.0));
-          canvas.drawCircle(Offset(sx, edgeY), 1.5, p);
-        }
+          ..color      = (r.isEven ? ac : _kCyan).withOpacity(ringA.clamp(0, 1))
+          ..strokeWidth = (4.0 - r * 0.45).clamp(0.5, 4.5)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+        canvas.drawCircle(bossCenter, ringR.clamp(2.0, 220.0), p);
       }
+      p..style = PaintingStyle.fill..maskFilter = null;
     }
 
-    // ── C. Chromatic-aberration RGB ghosts — fade out by t ≈ 0.75 ────────────
-    final aber = (1.0 - t * 1.35).clamp(0.0, 1.0);
-    if (aber > 0.04 && bodyProg > 0.08) {
-      final shift = aber * 10.0;
-      for (final dx in [-shift, shift]) {
-        _paintBossEntity(
-          canvas, Offset(bossCenter.dx + dx, bossCenter.dy),
-          opacity:     (aber * 0.40).clamp(0.0, 1.0),
+    // ── Phase 4: Boss materializes — scale+elastic, pixel-scatter, NO clip ───
+    final bodyProg = ((t - 0.36) / 0.57).clamp(0.0, 1.0);
+    if (bodyProg > 0.005) {
+      // Elastic scale: snaps into place with bounce
+      final scaleCurved = Curves.elasticOut.transform(bodyProg);
+      final scale       = (0.06 + scaleCurved * 0.94).clamp(0.0, 1.08);
+      final opacity     = Curves.easeOut.transform(bodyProg).clamp(0.0, 1.0);
+
+      // Pixel scatter noise cloud (strongest early, gone by ~0.78)
+      if (bodyProg < 0.80) {
+        final noiseAmt = (1.0 - bodyProg * 1.28).clamp(0.0, 1.0);
+        final rng2     = Random((glitchT * 300).toInt() ^ 0xBEEF);
+        p.maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.8);
+        for (int i = 0; i < 70; i++) {
+          final ang    = rng2.nextDouble() * 2 * pi;
+          final spread = (rng2.nextDouble() * 72 + 6) * noiseAmt;
+          final pAlpha = (noiseAmt * 0.75 * rng2.nextDouble()).clamp(0.0, 1.0);
+          final pSz    = (0.5 + rng2.nextDouble() * 3.5 * noiseAmt).clamp(0.3, 4.5);
+          final pcols  = [ac, _kCyan, _kVisorGlow, _kWhite];
+          p.color = pcols[i % pcols.length].withOpacity(pAlpha);
+          canvas.drawCircle(
+              Offset(bossCenter.dx + cos(ang) * spread,
+                     bossCenter.dy + sin(ang) * spread),
+              pSz, p);
+        }
+        p.maskFilter = null;
+      }
+
+      // Energy corona pulse around forming body
+      if (bodyProg > 0.25 && bodyProg < 0.82) {
+        final ct = ((bodyProg - 0.25) / 0.57).clamp(0.0, 1.0);
+        final ca = (ct < 0.5 ? ct / 0.5 : (1.0 - ct) / 0.5).clamp(0.0, 1.0) * 0.60;
+        p
+          ..color      = ac.withOpacity(ca.clamp(0, 1))
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 26);
+        canvas.drawCircle(bossCenter, 50.0 + ct * 38.0, p);
+        p.maskFilter = null;
+      }
+
+      // Chromatic aberration ghost (red+cyan offset, fades out by ~0.62)
+      final aber = (1.0 - bodyProg * 1.65).clamp(0.0, 1.0);
+      if (aber > 0.02) {
+        final shift = aber * 16.0;
+        for (final dx in [-shift, shift]) {
+          canvas.save();
+          canvas.translate(bossCenter.dx + dx, bossCenter.dy);
+          canvas.scale(scale, scale);
+          _paintBossEntity(canvas, Offset.zero,
+              opacity: (aber * 0.36).clamp(0.0, 1.0),
+              isStunned: isStunned,
+              armPose: _ArmPose.idle,
+              isAttacking: false);
+          canvas.restore();
+        }
+      }
+
+      // Main boss body — scale from center, no scan-wipe
+      canvas.save();
+      canvas.translate(bossCenter.dx, bossCenter.dy);
+      canvas.scale(scale, scale);
+      _paintBossEntity(canvas, Offset.zero,
+          opacity:     opacity,
           isStunned:   isStunned,
           armPose:     _ArmPose.idle,
-          isAttacking: false,
-        );
+          isAttacking: false);
+      canvas.restore();
+    }
+
+    // ── Phase 5: Radial burst beams explode outward (0.60→0.88) ─────────────
+    if (t > 0.60 && t < 0.90) {
+      final bt  = ((t - 0.60) / 0.30).clamp(0.0, 1.0);
+      final bl  = bt * 110.0;
+      final ba  = (bt < 0.42 ? bt / 0.42 : (1.0 - bt) / 0.58).clamp(0.0, 1.0);
+      p.style = PaintingStyle.stroke;
+      p.strokeCap = StrokeCap.round;
+      for (int i = 0; i < 10; i++) {
+        final angle  = i * (2 * pi / 10) + bt * 0.5;
+        final endPt  = bossCenter + Offset(cos(angle) * bl, sin(angle) * bl);
+        // Outer glow
+        p
+          ..color      = ac.withOpacity((ba * 0.38).clamp(0, 1))
+          ..strokeWidth = 6.0
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+        canvas.drawLine(bossCenter, endPt, p);
+        // Bright core
+        p
+          ..color      = (i.isEven ? _kCyan : _kWhite).withOpacity((ba * 0.92).clamp(0, 1))
+          ..strokeWidth = 1.6
+          ..maskFilter = null;
+        canvas.drawLine(bossCenter, endPt, p);
       }
+      p..style = PaintingStyle.fill..strokeCap = StrokeCap.butt;
+    }
+
+    // ── Ambient vignette corona throughout entry ──────────────────────────────
+    if (t < 0.94) {
+      final va = (t < 0.50 ? t / 0.50 : (0.94 - t) / 0.44).clamp(0.0, 1.0) * 0.28;
+      p
+        ..color      = ac.withOpacity(va.clamp(0, 1))
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 65);
+      canvas.drawCircle(bossCenter, 130, p);
+      p.maskFilter = null;
     }
   }
 
