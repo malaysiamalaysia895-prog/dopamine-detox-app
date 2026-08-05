@@ -95,7 +95,7 @@ class TerraLichController extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
 
     // Mechanical descent: 2.5 s
-    _entryTimer = Timer(const Duration(milliseconds: 2500), _beginActive);
+    _entryTimer = Timer(const Duration(milliseconds: 3800), _beginActive);
   }
 
   /// Called when the player meets the level win condition.
