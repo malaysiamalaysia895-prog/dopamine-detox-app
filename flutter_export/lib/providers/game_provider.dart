@@ -873,6 +873,7 @@ class GameNotifier extends StateNotifier<GameState> {
           HapticFeedback.heavyImpact();
         },
         isOccupied: (c, r) => state.grid[c][r].itemId != null && !state.grid[c][r].isBlocked,
+        isDecoy:    (c, r) => state.grid[c][r].isDecoy,
       );
     } else {
       warpSentinelController.reset();
@@ -1710,14 +1711,18 @@ class GameNotifier extends StateNotifier<GameState> {
   //   Total: 8 decoys at any time — maximum merge disruption for the player.
 
   // bossHoleIndex=0 (LEFT active) — 5 on RIGHT side (opposite)
-  static const _kL41OppRight  = [(3,0),(4,0),(5,0),(3,5),(5,5)];
+  // RIGHT cols 3-5: zone B covers rows 2-4 → rows 0,1,5 are safe
+  static const _kL41OppRight  = [(3,0),(4,1),(5,0),(3,1),(5,5)];
   // bossHoleIndex=0 (LEFT active) — 3 on LEFT side (same)
-  static const _kL41SameLeft  = [(0,5),(1,0),(2,5)];
+  // LEFT cols 0-2: zone A covers rows 1-3 → rows 0,4,5 are safe
+  static const _kL41SameLeft  = [(0,4),(1,0),(2,4)];
 
   // bossHoleIndex=1 (RIGHT active) — 5 on LEFT side (opposite)
-  static const _kL41OppLeft   = [(0,0),(1,0),(2,0),(0,5),(2,5)];
+  // LEFT cols 0-2: zone A covers rows 1-3 → rows 0,4,5 are safe
+  static const _kL41OppLeft   = [(0,0),(1,4),(2,0),(0,4),(2,5)];
   // bossHoleIndex=1 (RIGHT active) — 3 on RIGHT side (same)
-  static const _kL41SameRight = [(3,0),(4,5),(5,0)];
+  // RIGHT cols 3-5: zone B covers rows 2-4 → rows 0,1,5 are safe
+  static const _kL41SameRight = [(3,1),(4,0),(5,1)];
 
   /// Place all 8 L41 glitchy decoys into [cells] (initial grid build).
   void _placeL41DecoysCells(
