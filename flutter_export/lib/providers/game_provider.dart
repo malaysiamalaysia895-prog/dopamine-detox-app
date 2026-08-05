@@ -385,6 +385,9 @@ class GameNotifier extends StateNotifier<GameState> {
 
   void _placeCreatureThrow() {
     if (_disposed) return;
+    // Do not pick new targets while existing targets are still active on the grid.
+    // Player must merge/save all current targets before creature selects new ones.
+    if (state.creatureThrows.isNotEmpty) return;
     final cfg = state.currentLevel;
 
     // Empty cells not already targeted by an active creature throw
