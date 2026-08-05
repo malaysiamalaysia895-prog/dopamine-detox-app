@@ -91,7 +91,7 @@ class _ActivePhaseState extends State<_ActivePhase>
   void initState() {
     super.initState();
 
-    _entry    = AnimationController(vsync: this, duration: const Duration(milliseconds: 2500))
+    _entry    = AnimationController(vsync: this, duration: const Duration(milliseconds: 3800))
       ..forward();
     _bob      = AnimationController(vsync: this, duration: const Duration(milliseconds: 2200))
       ..repeat(reverse: true);
@@ -157,8 +157,19 @@ class _ActivePhaseState extends State<_ActivePhase>
         animation: Listenable.merge([_entry, _bob, _thruster, _idle, _charge, _beam]),
         builder: (ctx, _) {
           final c   = widget.controller;
-          final eT  = Curves.easeOutBack.transform(_entry.value.clamp(0.0, 1.0));
-          final bT  = _bob.value;
+          // ── 3-phase entry timeline ─────────────────────────────────
+          final raw = _entry.value.clamp(0.0, 1.0);
+          // Phase 1 (0.00→0.30): Power Dive — body offline, falls from top
+          final p1 = (raw / 0.30).clamp(0.0, 1.0);
+          // Phase 2 (0.30→0.55): Thruster Brake — hard stop + blast + shake
+          final p2 = ((raw - 0.30) / 0.25).clamp(0.0, 1.0);
+          // Phase 3 (0.55→1.00): System Boot — pipes→chest→eye light up
+          final p3 = ((raw - 0.55) / 0.45).clamp(0.0, 1.0);
+          // Position: use phase1 for descent (easeIn = acceleration = heavy boulder)
+          final eT = raw < 0.30
+              ? Curves.easeIn.transform(p1)
+              : 1.0;
+          final bT  = raw >= 1.0 ? _bob.value : 0.0; // bob only after full entry
           final fT  = _thruster.value;
           final iT  = _idle.value;
           final cT  = _charge.value;
@@ -167,6 +178,9 @@ class _ActivePhaseState extends State<_ActivePhase>
           return CustomPaint(
             painter: _TerraLichPainter(
               entryT:    eT,
+              phase1T:   p1,
+              phase2T:   p2,
+              phase3T:   p3,
               bobT:      bT,
               thrusterT: fT,
               idleAnim:  c.idleAnim,
@@ -222,7 +236,10 @@ class _WinBlastPhaseState extends State<_WinBlastPhase>
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class _TerraLichPainter extends CustomPainter {
-  final double          entryT;     // 0→1 entry slide-in complete
+  final double          entryT;     // 0→1 positional — boss reaches hover pos
+  final double          phase1T;    // 0→1 power dive progress
+  final double          phase2T;    // 0→1 brake+blast+shake progress
+  final double          phase3T;    // 0→1 system boot-up progress
   final double          bobT;       // 0→1 idle hover bob
   final double          thrusterT;  // 0→1 thruster flicker
   final TerraLichIdleAnim idleAnim;
@@ -233,6 +250,9 @@ class _TerraLichPainter extends CustomPainter {
 
   const _TerraLichPainter({
     required this.entryT,
+    required this.phase1T,
+    required this.phase2T,
+    required this.phase3T,
     required this.bobT,
     required this.thrusterT,
     required this.idleAnim,
@@ -244,7 +264,8 @@ class _TerraLichPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_TerraLichPainter o) =>
-      o.entryT != entryT || o.bobT != bobT || o.thrusterT != thrusterT ||
+      o.entryT != entryT || o.phase1T != phase1T || o.phase2T != phase2T ||
+      o.phase3T != phase3T || o.bobT != bobT || o.thrusterT != thrusterT ||
       o.idleAnim != idleAnim || o.idleT != idleT ||
       o.chargeT != chargeT || o.beamT != beamT || o.phase != phase;
 
@@ -253,13 +274,30 @@ class _TerraLichPainter extends CustomPainter {
     // ── Anchor position ────────────────────────────────────────────────────
     final cx = size.width / 2;
 
-    // Entry: boss slides in from above; bob adds gentle hover
-    final bobOffset = math.sin(bobT * math.pi) * 4.0;
-    const baseTop   = 32.0;
-    final entrySlide = (1.0 - entryT) * -260.0; // slides from -260 to 0
-    final ht = baseTop + entrySlide + bobOffset;  // head-top y
+    // Phase 1: boss dives from -380px above screen to hover position.
+    // entryT drives position (0 = off-screen top, 1 = in place).
+    final bobOffset  = math.sin(bobT * math.pi) * 4.0;
+    const baseTop    = 32.0;
+    final entrySlide = (1.0 - entryT) * -380.0;
+    final ht = baseTop + entrySlide + bobOffset;
 
-    // ── Flex animation: shoulders shift up, body leans ────────────────────
+    // Offline = body dark (Phase 1 + Phase 2 = before boot-up)
+    final isOffline  = phase3T <= 0.0;
+
+    // Boot-up progressive online factor (0 = fully offline, 1 = fully online)
+    final onlineT    = isOffline ? 0.0 : phase3T;
+
+    // ── Phase 2: Screen shake ─────────────────────────────────────────────
+    if (phase2T > 0 && phase2T < 1.0) {
+      final shakeFade   = (1.0 - phase2T).clamp(0.0, 1.0);
+      final shakeAmt    = 8.0 * shakeFade;
+      final shakeX      = math.sin(phase2T * 55) * shakeAmt;
+      final shakeY      = math.cos(phase2T * 42) * shakeAmt * 0.6;
+      canvas.save();
+      canvas.translate(shakeX, shakeY);
+    }
+
+    // ── Flex animation ────────────────────────────────────────────────────
     final flexUp = idleAnim == TerraLichIdleAnim.mechanicalFlex
         ? math.sin(idleT * math.pi) * 8.0
         : 0.0;
@@ -269,20 +307,34 @@ class _TerraLichPainter extends CustomPainter {
 
     // ── Draw order: thruster fire → body → arms → head → overlays ────────
 
+    // Phase 2: massive entry brake blast (green plasma explosion)
+    if (phase2T > 0) {
+      _drawEntryBlast(canvas, size, cx, ht, phase2T);
+    }
+
     _drawThrusterFire(canvas, cx, ht, thrusterT,
-        idleAnim == TerraLichIdleAnim.mechanicalFlex ? idleT : 0.0);
+        idleAnim == TerraLichIdleAnim.mechanicalFlex ? idleT : 0.0,
+        phase2T, onlineT);
     _drawThruster(canvas, cx, ht);
-    _drawChest(canvas, cx, ht, flexUp, chargeAngle);
+    _drawChest(canvas, cx, ht, flexUp, chargeAngle, onlineT);
     _drawEnergyPipes(canvas, cx, ht, flexUp,
         idleAnim == TerraLichIdleAnim.energyPulse ? idleT : 0.0,
-        chargeAngle);
-    _drawArms(canvas, cx, ht, flexUp, chargeAngle);
-    _drawNeck(canvas, cx, ht, flexUp);
+        chargeAngle, onlineT);
+    _drawArms(canvas, cx, ht, flexUp, chargeAngle, onlineT);
+    _drawNeck(canvas, cx, ht, flexUp, onlineT);
     _drawHelmet(canvas, cx, ht, flexUp);
-    _drawVisor(canvas, cx, ht, flexUp);
+    _drawVisor(canvas, cx, ht, flexUp, onlineT);
+
+    // Phase 3: boot-up visual sequence overlay
+    if (phase3T > 0 && phase3T < 1.0) {
+      _drawBootSequence(canvas, size, cx, ht, phase3T);
+    }
+
+    // Restore shake translate
+    if (phase2T > 0 && phase2T < 1.0) canvas.restore();
 
     // ── Idle animation overlays ───────────────────────────────────────────
-    if (idleAnim == TerraLichIdleAnim.scannerSweep && idleT > 0) {
+    if (idleAnim == TerraLichIdleAnim.scannerSweep && idleT > 0 && onlineT >= 1.0) {
       _drawScannerLaser(canvas, size, cx, ht, idleT);
     }
 
@@ -385,7 +437,7 @@ class _TerraLichPainter extends CustomPainter {
 
   // ── Visor ─────────────────────────────────────────────────────────────────
 
-  void _drawVisor(Canvas canvas, double cx, double ht, double flexUp) {
+  void _drawVisor(Canvas canvas, double cx, double ht, double flexUp, double onlineT) {
     final top = ht - flexUp;
     // Visor trapezoid
     final visorPath = Path()
@@ -414,14 +466,18 @@ class _TerraLichPainter extends CustomPainter {
 
     // Central eye — glowing circle
     final eyeY = top + 27.0;
+    // Eye lights up during boot Phase 3 (after 80% of boot)
+    final eyeOnT = ((onlineT - 0.80) / 0.20).clamp(0.0, 1.0);
     canvas.drawCircle(Offset(cx, eyeY), 6,
       Paint()
-        ..color = _kRed.withOpacity(0.9)
+        ..color = _kRed.withOpacity(0.9 * eyeOnT)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
-    canvas.drawCircle(Offset(cx, eyeY), 3.5,
-      Paint()..color = _kAmber);
-    canvas.drawCircle(Offset(cx, eyeY), 1.5,
-      Paint()..color = _kWhite);
+    if (eyeOnT > 0) {
+      canvas.drawCircle(Offset(cx, eyeY), 3.5,
+        Paint()..color = _kAmber.withOpacity(eyeOnT));
+      canvas.drawCircle(Offset(cx, eyeY), 1.5,
+        Paint()..color = _kWhite.withOpacity(eyeOnT));
+    }
 
     // Visor scan-line effect
     final slPaint = Paint()
@@ -435,7 +491,7 @@ class _TerraLichPainter extends CustomPainter {
 
   // ── Neck ──────────────────────────────────────────────────────────────────
 
-  void _drawNeck(Canvas canvas, double cx, double ht, double flexUp) {
+  void _drawNeck(Canvas canvas, double cx, double ht, double flexUp, double onlineT) {
     final neckTop = ht + 54 - flexUp;
     final neckRect = Rect.fromLTWH(cx - 11, neckTop, 22, 20);
 
@@ -444,7 +500,7 @@ class _TerraLichPainter extends CustomPainter {
 
     // Glow
     canvas.drawRect(neckRect, Paint()
-      ..color = _kNeonGreen.withOpacity(0.35)
+      ..color = _kNeonGreen.withOpacity(0.35 * onlineT)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
 
     // Horizontal vertebrae grooves
@@ -452,7 +508,7 @@ class _TerraLichPainter extends CustomPainter {
       final gy = neckTop + i * 4.5;
       canvas.drawLine(
         Offset(cx - 10, gy), Offset(cx + 10, gy),
-        Paint()..color = _kNeonGreen.withOpacity(0.70)..strokeWidth = 1.2,
+        Paint()..color = _kNeonGreen.withOpacity(0.70 * onlineT)..strokeWidth = 1.2,
       );
     }
 
@@ -465,7 +521,7 @@ class _TerraLichPainter extends CustomPainter {
 
   // ── Chest / Torso ─────────────────────────────────────────────────────────
 
-  void _drawChest(Canvas canvas, double cx, double ht, double flexUp, double chargeT) {
+  void _drawChest(Canvas canvas, double cx, double ht, double flexUp, double chargeT, double onlineT) {
     final chestTop = ht + 74 - flexUp;
     // Trapezoid: wider at top (92px) narrows to 74px at bottom
     final chestPath = Path()
@@ -529,11 +585,11 @@ class _TerraLichPainter extends CustomPainter {
 
     canvas.drawCircle(reactorCenter, reactorR,
       Paint()
-        ..color = Color.lerp(_kMetal, _kAmber, chargeT)!
+        ..color = Color.lerp(_kMetal, _kAmber, chargeT * onlineT)!
         ..style = PaintingStyle.fill);
     canvas.drawCircle(reactorCenter, reactorR,
       Paint()
-        ..color = _kOrange.withOpacity(0.6 + 0.4 * chargeT)
+        ..color = _kOrange.withOpacity((0.6 + 0.4 * chargeT) * onlineT)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.0);
 
@@ -541,7 +597,7 @@ class _TerraLichPainter extends CustomPainter {
     for (int ri = 1; ri <= 2; ri++) {
       canvas.drawCircle(reactorCenter, reactorR * (0.35 + ri * 0.25),
         Paint()
-          ..color = _kOrange.withOpacity(0.3 + chargeT * 0.5)
+          ..color = _kOrange.withOpacity((0.3 + chargeT * 0.5) * onlineT)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.0);
     }
@@ -562,7 +618,7 @@ class _TerraLichPainter extends CustomPainter {
   // ── Energy Pipes ──────────────────────────────────────────────────────────
 
   void _drawEnergyPipes(Canvas canvas, double cx, double ht, double flexUp,
-      double pulseT, double chargeT) {
+      double pulseT, double chargeT, double onlineT) {
     final pipeTop = ht + 54 - flexUp;   // starts at neck
     final pipeBot = ht + 157 - flexUp;  // ends at thruster
 
@@ -576,6 +632,7 @@ class _TerraLichPainter extends CustomPainter {
         ..strokeWidth = 3.0
         ..strokeCap = StrokeCap.round;
 
+      basePaint.color = _kNeonGreen.withOpacity(0.25 * onlineT);
       canvas.drawLine(Offset(px, pipeTop), Offset(px, pipeBot), basePaint);
 
       // Energy pulse: bright flash races from head (pipeTop) to hand area
@@ -627,12 +684,12 @@ class _TerraLichPainter extends CustomPainter {
     final shoulderY = ht + 82 - flexUp;
 
     for (final side in [-1.0, 1.0]) {
-      _drawArm(canvas, cx, shoulderY, side, chargeT);
+      _drawArm(canvas, cx, shoulderY, side, chargeT, onlineT);
     }
   }
 
   void _drawArm(Canvas canvas, double cx, double shoulderY,
-      double side, double chargeT) {
+      double side, double chargeT, double onlineT) {
 
     // ── Joint positions: normal vs charge ─────────────────────────────────
     // Normal: arm hangs at ~40° outward + downward
@@ -668,7 +725,7 @@ class _TerraLichPainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
 
     final armGlowPaint = Paint()
-      ..color = Color.lerp(_kNeonGreen, _kAmber, chargeFrac)!.withOpacity(0.30 + 0.50 * chargeFrac)
+      ..color = Color.lerp(_kNeonGreen, _kAmber, chargeFrac)!.withOpacity((0.30 + 0.50 * chargeFrac) * onlineT)
       ..strokeWidth = 14.0
       ..strokeCap = StrokeCap.round
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
@@ -799,7 +856,9 @@ class _TerraLichPainter extends CustomPainter {
   // ── Thruster plasma fire ──────────────────────────────────────────────────
 
   void _drawThrusterFire(Canvas canvas, double cx, double ht,
-      double thrusterT, double flexT) {
+      double thrusterT, double flexT, double brakeT, double onlineT) {
+    // Normal idle fire only when online (brake blast drawn separately)
+    if (onlineT <= 0 || brakeT > 0) return;
     final fireBase = ht + 216;  // just below nozzle
     final extraBurst = flexT > 0 ? math.sin(flexT * math.pi) * 30.0 : 0.0;
     final fireLen   = 60.0 + thrusterT * 28.0 + extraBurst;
@@ -975,6 +1034,152 @@ class _TerraLichPainter extends CustomPainter {
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14));
   }
 }
+
+
+  // ── Entry Blast (Phase 2) — Massive green plasma explosion on brake ─────────
+
+  void _drawEntryBlast(Canvas canvas, Size size, double cx, double ht, double p2) {
+    final nozzleCenter = Offset(cx, ht + 216); // nozzle position
+
+    // Blast fade: rises fast (0→0.4) then fades out (0.4→1.0)
+    final blastAlpha = p2 < 0.40
+        ? p2 / 0.40
+        : (1.0 - (p2 - 0.40) / 0.60).clamp(0.0, 1.0);
+
+    // Core blast: massive green expanding circle
+    final blastR = 20.0 + p2 * 110.0;
+    canvas.drawCircle(nozzleCenter, blastR,
+      Paint()
+        ..color = _kNeonGreen.withOpacity(0.18 * blastAlpha)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, blastR * 0.5));
+
+    // Tight inner glow
+    canvas.drawCircle(nozzleCenter, blastR * 0.4,
+      Paint()
+        ..color = _kNeonGreen.withOpacity(0.55 * blastAlpha)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14));
+
+    // Downward plasma jet: long thick stream straight down
+    final jetLen  = 80.0 + p2 * 160.0;
+    final jetPath = Path()
+      ..moveTo(cx - 12 * (1 - p2 * 0.5), nozzleCenter.dy)
+      ..quadraticBezierTo(cx, nozzleCenter.dy + jetLen * 0.6,
+           cx - 3, nozzleCenter.dy + jetLen)
+      ..quadraticBezierTo(cx, nozzleCenter.dy + jetLen * 0.6,
+           cx + 12 * (1 - p2 * 0.5), nozzleCenter.dy)
+      ..close();
+
+    canvas.drawPath(jetPath, Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          _kNeonGreen.withOpacity(0.90 * blastAlpha),
+          _kNeonGreen.withOpacity(0.40 * blastAlpha),
+          _kNeonGreen.withOpacity(0),
+        ],
+        stops: const [0.0, 0.5, 1.0],
+      ).createShader(Rect.fromLTWH(cx - 12, nozzleCenter.dy, 24, jetLen)));
+
+    // 24 radial particle shards
+    final rng = math.Random(99);
+    for (int i = 0; i < 24; i++) {
+      final angle   = i * math.pi * 2 / 24 + rng.nextDouble() * 0.2;
+      final speed   = 60.0 + rng.nextDouble() * 90.0;
+      final dist    = p2 * speed;
+      final pos     = nozzleCenter + Offset(math.cos(angle) * dist,
+          math.sin(angle) * dist + dist * 0.6); // bias downward
+      final alpha   = (1.0 - p2 * 1.1).clamp(0.0, 1.0) * blastAlpha;
+      final pr      = (4.0 + rng.nextDouble() * 5.0) * (1.0 - p2 * 0.55);
+      canvas.drawCircle(pos, pr.clamp(0.5, 10.0), Paint()
+        ..color = _kNeonGreen.withOpacity(alpha)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, pr * 0.5));
+    }
+
+    // Shockwave ring
+    final swR  = 30.0 + p2 * 80.0;
+    final swA  = (1.0 - p2).clamp(0.0, 0.6) * blastAlpha;
+    canvas.drawCircle(nozzleCenter, swR, Paint()
+      ..color = _kNeonGreen.withOpacity(swA)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.0
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5));
+  }
+
+  // ── Boot Sequence Overlay (Phase 3) — pipes → chest → eye ─────────────────
+
+  void _drawBootSequence(Canvas canvas, Size size, double cx, double ht, double p3) {
+    // Scan-line effect: a bright horizontal sweep that moves down the boss body
+    // during early boot (0→0.55)
+    if (p3 < 0.60) {
+      final scanFrac  = (p3 / 0.60).clamp(0.0, 1.0);
+      final scanTop   = ht - 10.0;
+      final scanBot   = ht + 230.0;
+      final scanY     = scanTop + scanFrac * (scanBot - scanTop);
+
+      // Scan glow line
+      canvas.drawRect(
+        Rect.fromLTWH(cx - 60, scanY - 2, 120, 4),
+        Paint()
+          ..color = _kNeonGreen.withOpacity(0.65 * (1.0 - scanFrac))
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+      );
+    }
+
+    // Pipe surge: sequential flash along each pipe channel
+    final pipeXs = [cx - 18.0, cx, cx + 18.0];
+    for (int pi = 0; pi < 3; pi++) {
+      final delay  = pi * 0.14;
+      final localT = ((p3 - delay) / 0.35).clamp(0.0, 1.0);
+      if (localT <= 0) continue;
+      final pipeTop = ht + 54;
+      final pipeBot = ht + 157;
+      final surgeY  = pipeTop + localT * (pipeBot - pipeTop);
+      final tailLen = 40.0;
+      canvas.drawRect(
+        Rect.fromLTWH(pipeXs[pi] - 3, surgeY - tailLen, 6, tailLen),
+        Paint()
+          ..shader = LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              _kNeonGreen.withOpacity(0),
+              _kNeonGreen.withOpacity(0.95),
+              _kWhite.withOpacity(0.5),
+            ],
+          ).createShader(Rect.fromLTWH(
+              pipeXs[pi] - 3, surgeY - tailLen, 6, tailLen))
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+      );
+    }
+
+    // Chest armor glow flash (after 50%)
+    if (p3 > 0.50) {
+      final cFrac   = ((p3 - 0.50) / 0.25).clamp(0.0, 1.0);
+      final chestTop = ht + 74;
+      final chestPath = Path()
+        ..moveTo(cx - 46, chestTop)
+        ..lineTo(cx + 46, chestTop)
+        ..lineTo(cx + 37, chestTop + 83)
+        ..lineTo(cx - 37, chestTop + 83)
+        ..close();
+      canvas.drawPath(chestPath, Paint()
+        ..color = _kNeonGreen.withOpacity(0.22 * cFrac * (1.0 - cFrac * 0.5))
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10));
+    }
+
+    // Eye snap-on flash (after 80%)
+    if (p3 > 0.80) {
+      final eFrac = ((p3 - 0.80) / 0.15).clamp(0.0, 1.0);
+      final eyeY  = ht + 27.0;
+      // Bright flash
+      canvas.drawCircle(Offset(cx, eyeY), 16 * (1.0 - eFrac),
+        Paint()
+          ..color = _kRed.withOpacity(0.85 * (1.0 - eFrac))
+          ..maskFilter = MaskFilter.blur(
+              BlurStyle.normal, 18 * (1.0 - eFrac)));
+    }
+  }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── Win Blast Painter ─────────────────────────────────────────────────────────
