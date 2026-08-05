@@ -23,19 +23,24 @@ import 'package:flutter/material.dart';
 import '../controllers/terra_lich_controller.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
+// Body  : Heavy Matte Black / Dark Metal
+// Pipes : Toxic Neon Green  (Terraforming / Hacking vibe)
+// Eye + Thruster + Attacks : Bright Red / Orange  (danger contrast)
 
-const _kMetal    = Color(0xFF252535);   // dark metal body
-const _kMetalHi  = Color(0xFF3E3E55);   // metal highlight / edge
-const _kMetalEdge= Color(0xFF5A5A78);   // brightest metal edge
-const _kVisor    = Color(0xFFFF3D00);   // helmet visor — deep orange-red
-const _kOrange   = Color(0xFFFF6D00);   // energy orange — pipes lit
-const _kRed      = Color(0xFFFF1744);   // danger red — EMP beam / alerts
-const _kAmber    = Color(0xFFFFAB00);   // charge glow / reactor core
-const _kFire1    = Color(0xFFFF8F00);   // plasma fire outer
-const _kFire2    = Color(0xFFFFCC02);   // plasma fire inner core
-const _kGlow     = Color(0xFFFF6D00);   // general energy glow
-const _kScan     = Color(0xFFFF1744);   // scanner laser line
-const _kWhite    = Color(0xFFFFFFFF);   // beam core / bright flash
+const _kMetal    = Color(0xFF0D0D0D);   // heavy matte black body
+const _kMetalHi  = Color(0xFF1A1A1A);   // dark panel face
+const _kMetalEdge= Color(0xFF2E2E2E);   // subtle edge highlight
+const _kNeonGreen= Color(0xFF39FF14);   // TOXIC NEON GREEN — pipes & energy flow
+const _kGreenDim = Color(0xFF1C7A00);   // dimmer green — pipe base / unlit channel
+const _kVisor    = Color(0xFFFF4500);   // MAIN EYE — danger red-orange
+const _kOrange   = Color(0xFFFF6D00);   // THRUSTER + ATTACK — danger orange
+const _kRed      = Color(0xFFFF1744);   // ATTACK BEAM + SCANNER — bright danger red
+const _kAmber    = Color(0xFFFF8C00);   // charge-up glow — deep orange
+const _kFire1    = Color(0xFFFF3800);   // THRUSTER FIRE outer — danger red
+const _kFire2    = Color(0xFFFF7200);   // THRUSTER FIRE inner core — danger orange
+const _kGlow     = Color(0xFFFF5500);   // thruster nozzle glow
+const _kScan     = Color(0xFFFF1744);   // SCANNER LASER — danger red (keep)
+const _kWhite    = Color(0xFFFFFFFF);   // EMP beam core — bright white
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -359,7 +364,7 @@ class _TerraLichPainter extends CustomPainter {
         canvas.drawLine(
           Offset(ex + side * 2, vy),
           Offset(ex + side * 7, vy),
-          Paint()..color = _kOrange.withOpacity(0.45)..strokeWidth = 1.0,
+          Paint()..color = _kNeonGreen.withOpacity(0.55)..strokeWidth = 1.0,
         );
       }
     }
@@ -439,15 +444,15 @@ class _TerraLichPainter extends CustomPainter {
 
     // Glow
     canvas.drawRect(neckRect, Paint()
-      ..color = _kOrange.withOpacity(0.3)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5));
+      ..color = _kNeonGreen.withOpacity(0.35)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
 
     // Horizontal vertebrae grooves
     for (int i = 1; i <= 3; i++) {
       final gy = neckTop + i * 4.5;
       canvas.drawLine(
         Offset(cx - 10, gy), Offset(cx + 10, gy),
-        Paint()..color = _kOrange.withOpacity(0.55)..strokeWidth = 1.2,
+        Paint()..color = _kNeonGreen.withOpacity(0.70)..strokeWidth = 1.2,
       );
     }
 
@@ -548,7 +553,7 @@ class _TerraLichPainter extends CustomPainter {
         canvas.drawLine(
           Offset(cx + side * 22, vy),
           Offset(cx + side * 35, vy),
-          Paint()..color = _kMetalEdge..strokeWidth = 1.2,
+          Paint()..color = _kNeonGreen.withOpacity(0.30)..strokeWidth = 1.2,
         );
       }
     }
@@ -567,7 +572,7 @@ class _TerraLichPainter extends CustomPainter {
     for (int pi = 0; pi < 3; pi++) {
       final px = pipeXs[pi];
       final basePaint = Paint()
-        ..color = _kOrange.withOpacity(0.28)
+        ..color = _kNeonGreen.withOpacity(0.25)
         ..strokeWidth = 3.0
         ..strokeCap = StrokeCap.round;
 
@@ -585,9 +590,9 @@ class _TerraLichPainter extends CustomPainter {
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                _kOrange.withOpacity(0),
-                _kAmber.withOpacity(0.9),
-                _kWhite.withOpacity(0.7),
+                _kNeonGreen.withOpacity(0),
+                _kNeonGreen.withOpacity(0.85),
+                _kWhite.withOpacity(0.6),
               ],
             ).createShader(Rect.fromLTWH(px - 2, pulseY - tailLen, 4, tailLen))
             ..strokeWidth = 4.0
@@ -597,7 +602,7 @@ class _TerraLichPainter extends CustomPainter {
           // Glow at head
           canvas.drawCircle(Offset(px, pulseY), 4.0,
             Paint()
-              ..color = _kAmber.withOpacity(0.6 * (1 - localT))
+              ..color = _kNeonGreen.withOpacity(0.65 * (1 - localT))
               ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
         }
       }
@@ -663,7 +668,7 @@ class _TerraLichPainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
 
     final armGlowPaint = Paint()
-      ..color = _kOrange.withOpacity(0.25 + 0.55 * chargeFrac)
+      ..color = Color.lerp(_kNeonGreen, _kAmber, chargeFrac)!.withOpacity(0.30 + 0.50 * chargeFrac)
       ..strokeWidth = 14.0
       ..strokeCap = StrokeCap.round
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
@@ -686,7 +691,7 @@ class _TerraLichPainter extends CustomPainter {
     canvas.drawCircle(shoulder, 5,
       Paint()..color = _kMetal);
     canvas.drawCircle(shoulder, 3,
-      Paint()..color = _kOrange.withOpacity(0.8));
+      Paint()..color = _kNeonGreen.withOpacity(0.9));
 
     // ── Elbow joint ───────────────────────────────────────────────────────
     canvas.drawCircle(elbow, 7,
@@ -694,7 +699,7 @@ class _TerraLichPainter extends CustomPainter {
     canvas.drawCircle(elbow, 7,
       Paint()..color = _kOrange.withOpacity(0.5)..style = PaintingStyle.stroke..strokeWidth = 1.5);
     canvas.drawCircle(elbow, 3,
-      Paint()..color = _kOrange.withOpacity(0.7));
+      Paint()..color = _kNeonGreen.withOpacity(0.8));
 
     // ── Wrist / hand ──────────────────────────────────────────────────────
     final handPath = Path();
@@ -705,7 +710,7 @@ class _TerraLichPainter extends CustomPainter {
     ));
     canvas.drawPath(handPath, Paint()..color = _kMetalHi);
     canvas.drawPath(handPath, Paint()
-      ..color = _kOrange.withOpacity(0.45 + 0.55 * chargeFrac)
+      ..color = Color.lerp(_kNeonGreen, _kAmber, chargeFrac)!.withOpacity(0.50 + 0.50 * chargeFrac)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5);
 
