@@ -97,6 +97,8 @@ class WarpSentinelController extends ChangeNotifier {
   void Function(int col, int row)? onCellSiphoned;
   void Function(int energy)?       onPlayerPenalty;
   bool Function(int col, int row)? isCellOccupied;
+  /// Returns true if the cell is a glitchy decoy — immune to black-hole siphon.
+  bool Function(int col, int row)? isCellDecoy;
   /// Fired when the boss teleports to a new hole. Arg = new bossHoleIndex.
   void Function(int newBossHoleIndex)? onBossHoleSwitched;
 
@@ -126,6 +128,7 @@ class WarpSentinelController extends ChangeNotifier {
     required void Function(int col, int row) onSiphoned,
     required void Function(int energy)       onPenalty,
     required bool Function(int col, int row) isOccupied,
+    required bool Function(int col, int row) isDecoy,
     required int  gridCols,
     required int  gridRows,
     required int  spawnerItemId,
@@ -156,6 +159,7 @@ class WarpSentinelController extends ChangeNotifier {
     onCellSiphoned   = onSiphoned;
     onPlayerPenalty  = onPenalty;
     isCellOccupied   = isOccupied;
+    isCellDecoy      = isDecoy;
 
     notifyListeners();
 
@@ -389,6 +393,7 @@ class WarpSentinelController extends ChangeNotifier {
 
     final victims = pullZoneCells
         .where((cell) => isCellOccupied?.call(cell.$1, cell.$2) ?? false)
+        .where((cell) => !(isCellDecoy?.call(cell.$1, cell.$2) ?? false)) // decoys immune to black hole
         .toList();
 
     if (victims.isEmpty) return;
