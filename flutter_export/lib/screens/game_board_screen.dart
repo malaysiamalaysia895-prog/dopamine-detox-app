@@ -400,7 +400,6 @@ class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
                   // TERRA-LICH Boss (L42) — matte black / neon green cyborg boss
                   TerraLichOverlay(
                     controller: ref.read(gameProvider.notifier).terraLichController,
-                    isDialogActive: ref.watch(dialogProvider) != ActiveDialog.none,
                   ),
 
                 ],
