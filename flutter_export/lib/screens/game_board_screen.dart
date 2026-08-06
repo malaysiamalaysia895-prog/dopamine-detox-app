@@ -29,6 +29,7 @@ import '../widgets/snake_alien_overlay.dart';
 import '../widgets/antigravity_overlay.dart';
 import '../widgets/nexus_core_overlay.dart';
 import '../widgets/warp_sentinel_overlay.dart';
+import '../widgets/terra_lich_overlay.dart';
 import '../controllers/robot_controller.dart';
 import '../controllers/creature_controller.dart';
 import '../controllers/alien_controller.dart';
@@ -394,6 +395,12 @@ class _GameBoardScreenState extends ConsumerState<GameBoardScreen> {
                       final dy = gridLocal.dy + (box.size.height - totalH) / 2 + row * (cs + gap);
                       return Rect.fromLTWH(dx, dy, cs, cs);
                     },
+                  ),
+
+                  // TERRA-LICH Boss (L42) — matte black / neon green cyborg boss
+                  TerraLichOverlay(
+                    controller: ref.read(gameProvider.notifier).terraLichController,
+                    isDialogActive: ref.watch(dialogProvider) != ActiveDialog.none,
                   ),
 
                 ],
