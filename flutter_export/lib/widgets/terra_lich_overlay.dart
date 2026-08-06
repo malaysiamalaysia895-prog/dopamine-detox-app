@@ -680,7 +680,7 @@ class _TerraLichPainter extends CustomPainter {
 
   // ── Arms ─────────────────────────────────────────────────────────────────
 
-  void _drawArms(Canvas canvas, double cx, double ht, double flexUp, double chargeT) {
+  void _drawArms(Canvas canvas, double cx, double ht, double flexUp, double chargeT, double onlineT) {
     final shoulderY = ht + 82 - flexUp;
 
     for (final side in [-1.0, 1.0]) {
@@ -927,10 +927,10 @@ class _TerraLichPainter extends CustomPainter {
     // Neck rotate illusion: slight canvas skew on head
     canvas.save();
     final neckLean = (sweep - 0.5) * 0.08; // tiny tilt
-    canvas.transform(Matrix4.identity()
+    canvas.transform((Matrix4.identity()
       ..translate(cx, ht + 54.0)
       ..rotateZ(neckLean)
-      ..translate(-cx, -(ht + 54.0))
+      ..translate(-cx, -(ht + 54.0)))
       .storage);
 
     // Draw laser beam from eye to scan target
