@@ -23,6 +23,7 @@ import '../controllers/snake_alien_controller.dart';
 import '../controllers/antigravity_controller.dart';
 import '../controllers/nexus_core_controller.dart';
 import '../controllers/warp_sentinel_controller.dart';
+import '../controllers/terra_lich_controller.dart';
 
 // ─── Persistence Keys ─────────────────────────────────────────────────────────
 
@@ -244,6 +245,7 @@ class GameNotifier extends StateNotifier<GameState> {
   final antiGravityController   = AntiGravityController();
   final nexusCoreController     = NexusCoreController();
   final warpSentinelController  = WarpSentinelController();
+  final terraLichController     = TerraLichController();
   Timer? _creatureThrowCdTimer;
 
   /// True if the player voluntarily watched the Rewarded Ad (3× coins) on the
@@ -292,6 +294,7 @@ class GameNotifier extends StateNotifier<GameState> {
     octopusAlienController.reset();
     snakeAlienController.reset();
     antiGravityController.reset();
+    terraLichController.reset();
     final level = state.currentLevel;
     state = state.copyWith(
       screen: AppScreen.map,
@@ -330,6 +333,7 @@ class GameNotifier extends StateNotifier<GameState> {
     octopusAlienController.reset();
     snakeAlienController.reset();
     antiGravityController.reset();
+    terraLichController.reset();
 
     // CRITICAL FIX: Do NOT start the timer here. The story dialog is about to
     // be shown, and the player cannot interact with the board while it is open.
@@ -906,6 +910,20 @@ class GameNotifier extends StateNotifier<GameState> {
     } else {
       antiGravityController.reset();
     }
+
+    // ── Terra-Lich trigger (L42) ──────────────────────────────────────────────
+    if (cfg.number == 42) {
+      terraLichController.triggerForLevel(
+        cfg.number,
+        onAttack: () {
+          // TODO: attack mechanic to be defined by user
+          // Placeholder: haptic feedback on EMP strike
+          HapticFeedback.heavyImpact();
+        },
+      );
+    } else {
+      terraLichController.reset();
+    }
   }
 
   // ── Spawn Item ────────────────────────────────────────────────────────────
@@ -1445,6 +1463,7 @@ class GameNotifier extends StateNotifier<GameState> {
     antiGravityController.onLevelComplete();   // ← Anti-Gravity boss (L37)
     nexusCoreController.onLevelComplete();     // ← NEXUS CORE (L40)
     warpSentinelController.onLevelComplete();  // ← WARP SENTINEL (L41)
+    terraLichController.onLevelComplete();        // ← TERRA-LICH (L42)
     _timer?.cancel();
     AudioManager.instance.pauseBgm();
     AudioManager.instance.playVictory();
